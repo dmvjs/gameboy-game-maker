@@ -1,0 +1,30 @@
+{
+  "rom_sha256": "c4d575c229a7d15a6d128dddeb70bc73b03149b4188aff8f8d54f9c0b5bdabf9",
+  "bytes": {
+    "rom_used": 1605,
+    "code": 261,
+    "data": 1264,
+    "wram": 0,
+    "hram": 0
+  },
+  "cycles": {
+    "color": {
+      "startup_cycles": 4080,
+      "frame_cycles_max": 40,
+      "vblank_work_cycles": 0
+    },
+    "original": {
+      "startup_cycles": 8684,
+      "frame_cycles_max": 40,
+      "vblank_work_cycles": 0
+    }
+  },
+  "screens": {
+    "color": {
+      "screen": "ffb83716e079aea6a0720c40a1db96ecbfa9027fddb667ceab2d5b64f862d193"
+    },
+    "original": {
+      "screen": "aa593579bf98a4762430cbaa82113457d20da56af77fb6d54d936127bbaccb15"
+    }
+  }
+}

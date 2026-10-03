@@ -1,0 +1,23 @@
+{
+  "frames": 470,
+  "presses": [
+    {"frame": 34, "buttons": ["down"], "hold": 2},
+    {"frame": 40, "buttons": ["a"], "hold": 2},
+    {"frame": 130, "buttons": ["b"], "hold": 2},
+    {"frame": 220, "buttons": ["a"], "hold": 2},
+    {"frame": 300, "buttons": ["right"], "hold": 2},
+    {"frame": 306, "buttons": ["right"], "hold": 2},
+    {"frame": 312, "buttons": ["down"], "hold": 2},
+    {"frame": 318, "buttons": ["right"], "hold": 2},
+    {"frame": 324, "buttons": ["down"], "hold": 2},
+    {"frame": 330, "buttons": ["left"], "hold": 30},
+    {"frame": 380, "buttons": ["start"], "hold": 2}
+  ],
+  "checkpoints": {"title": 30, "howto": 125, "back": 210, "settings": 295, "changed": 375, "playfield": 469},
+  "settled": {
+    "howto": 3,
+    "back": 0,
+    "settings": 1,
+    "changed": [1, "normal", {"OPT_VIRUS_LEVEL": 7, "OPT_SPEED": 2, "OPT_MUSIC": 0}]
+  }
+}

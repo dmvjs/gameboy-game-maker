@@ -1,0 +1,42 @@
+{
+  "rom_sha256": "4be2b39590805079e16b24c1e4f667630014258c34a1abbe6ca72a2e0e574761",
+  "bytes": {
+    "rom_used": 6796,
+    "code": 1370,
+    "data": 5346,
+    "wram": 84,
+    "hram": 25
+  },
+  "cycles": {
+    "color": {
+      "startup_cycles": 10820,
+      "frame_cycles_max": 2212,
+      "vblank_work_cycles": 832,
+      "scene_load_cycles": 5028
+    },
+    "original": {
+      "startup_cycles": 23764,
+      "frame_cycles_max": 2212,
+      "vblank_work_cycles": 372,
+      "scene_load_cycles": 17972
+    }
+  },
+  "screens": {
+    "color": {
+      "back": "ca4b69484fa5f88c9b9c87e9fd251322c370a17bb1013cfd5dcab9805fdb9e42",
+      "blink": "ef4c707ff9bce1e0abc882006c5d97191b12f787b35adad4637b7e947c15e53f",
+      "fading": "9c69033184201aec5fd8b1abe41411d8c76ff3753564c1656304749ff4fe016e",
+      "moved": "9c8b528f6be54835c3c102d55fe60caf61d824b912b555ec71e0ced42f93e6d8",
+      "options": "6c6504a412c02044e6cb5e593f886915b7e043082ca2581395d37fe9a9fe6883",
+      "title": "312cf8c517dbfe9b9f066fd999bce20a636e60aa33d24edbf03866a5b6dfdc07"
+    },
+    "original": {
+      "back": "ebff993b421fcd2eccea10427007a4caac1b4bd909562a2c4321c92bdd091174",
+      "blink": "b550f231532d99fdbeb12e7a72376ab6d2a2c78cb6024a122c04643994625c88",
+      "fading": "0fdcf2844411d407f597c1cae9642d8767d3689fe37f74e1d2f54c70b03e3a79",
+      "moved": "815def0024efb9f3a9cfabc5f8fc0dd3dda1b0f2535d21cf08327a75d8363f2b",
+      "options": "4e76c294f49dd4bcb8eaa8ac8656db348f42d33f72a50f902c1ee5abf3404f4d",
+      "title": "23d959239e70f533784d2b95afe833b60bdff57ed7bc561b2b928547f030dc5a"
+    }
+  }
+}

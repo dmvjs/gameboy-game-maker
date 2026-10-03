@@ -1,0 +1,10 @@
+{
+  "frames": 190,
+  "presses": [
+    {"frame": 34, "buttons": ["down"], "hold": 2},
+    {"frame": 52, "buttons": ["a"], "hold": 2},
+    {"frame": 140, "buttons": ["b"], "hold": 2}
+  ],
+  "checkpoints": {"title": 30, "moved": 48, "blink": 58, "fading": 86, "options": 130, "back": 189},
+  "settled": {"title": 0, "options": 2, "back": 0}
+}

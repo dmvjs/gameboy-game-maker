@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>gbstage</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">gbstage <span id="appVersion" class="dim"></span></div>
+  <div class="file">
+    <input id="projectName" class="project-name" spellcheck="false" title="Project name">
+    <button id="newBtn">New</button>
+    <button id="openBtn">Open…</button>
+    <button id="saveBtn" title="Download the project file">Save</button>
+    <button id="exportBtn" title="Build and download the ROM">Export .gb</button>
+    <input type="file" id="openFile" accept=".json" hidden>
+  </div>
+  <div class="status">
+    <button class="chip" id="chipRgbds">RGBDS …</button>
+    <button class="chip" id="chipEmu">Emulator …</button>
+    <button id="checkBtn">System check</button>
+  </div>
+</header>
+
+<div id="sampleBar" class="stale-bar" hidden>
+  <span id="sampleBarText"></span> <button id="sampleUpdate" class="primary">Open the new version</button>
+  <span class="dim">Save first if you've made changes you want to keep.</span>
+</div>
+
+<div id="staleBar" class="stale-bar" hidden>
+  gbstage was updated while this page was open. <button id="reloadBtn" class="primary">Reload</button>
+  <span class="dim">Your work is saved.</span>
+</div>
+
+<div class="workspace">
+  <nav class="tools" id="tools">
+    <button data-tool="pencil" title="Pencil (B)">
+      <svg viewBox="0 0 24 24"><path d="M4 20l1-5L16 4l4 4L9 19z M14 6l4 4"/></svg></button>
+    <button data-tool="eraser" title="Eraser (E): paints slot 1 of the tile's own palette">
+      <svg viewBox="0 0 24 24"><path d="M8 20h12 M4 16l9-9 6 6-7 7H8z M9 11l6 6"/></svg></button>
+    <button data-tool="fill" title="Fill (G)">
+      <svg viewBox="0 0 24 24"><path d="M5 12l7-7 7 7-7 7z M19 15c0 2 1 3 1 4a1 1 0 0 1-2 0c0-1 1-2 1-4"/></svg></button>
+    <button data-tool="picker" title="Eyedropper (I), or right-click with any tool">
+      <svg viewBox="0 0 24 24"><path d="M4 20l2-1 9-9-2-2-9 9z M13 8l2-2a2 2 0 0 1 3 3l-2 2z"/></svg></button>
+    <button data-tool="tilepal" title="Tile palette (T): give 8×8 tiles the selected palette, keeping their pattern">
+      <svg viewBox="0 0 24 24"><path d="M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z"/></svg></button>
+  </nav>
+
+  <section class="center">
+    <div class="stagebar">
+      <div class="seg" id="viewSeg" title="What each device will show">
+        <button data-view="color">Game Boy Color</button>
+        <button data-view="screen">Color screen</button>
+        <button data-view="dmg">Original Game Boy</button>
+      </div>
+      <div class="seg" id="frameSeg" hidden title="The flash area's two frames: what it looks like before and after Start is pressed">
+        <button data-frame="normal">Normal</button>
+        <button data-frame="pressed">Pressed</button>
+      </div>
+      <label><input type="checkbox" id="gridToggle" checked> Tile grid</label>
+      <label><input type="checkbox" id="palOverlay"> Tile palettes</label>
+      <span class="spacer"></span>
+      <button id="testBtn" class="primary" title="Build and run (⌘/Ctrl+Enter)">▶ Test</button>
+    </div>
+    <div class="stage-wrap" id="stageWrap">
+      <canvas id="stage" width="160" height="144"></canvas>
+      <canvas id="overlay"></canvas>
+    </div>
+  </section>
+
+  <aside class="side">
+    <div class="panel">
+      <div class="panel-head">
+        <h3>Scenes</h3>
+        <span id="sceneMeter" class="meter"></span>
+      </div>
+      <div id="sceneList"></div>
+      <button id="addScene" class="wide">+ Add scene</button>
+      <div id="sceneSettings"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head">
+        <h3>Palettes</h3>
+        <span id="palMeter" class="meter"></span>
+      </div>
+      <div id="paletteList"></div>
+      <select id="addPalette"></select>
+    </div>
+    <div class="panel" id="spritePanel">
+      <div class="panel-head">
+        <h3>Sprites</h3>
+        <span id="objMeter" class="meter"></span>
+      </div>
+      <div id="objPaletteList"></div>
+      <div class="cursor-edit">
+        <canvas id="cursorCanvas" width="8" height="8" title="Menu cursor: paint with the selected sprite slot, right-click to erase"></canvas>
+        <div class="dim">Menu cursor, 8×8.<br>Paint with a sprite slot; slot 1 is transparent. Right-click erases.</div>
+      </div>
+    </div>
+    <div class="panel" id="pickerPanel">
+      <h3 id="pickerTitle"></h3>
+      <canvas id="svPick" width="232" height="140"></canvas>
+      <canvas id="huePick" width="232" height="14"></canvas>
+      <div class="rgb">
+        <label>R <input type="number" id="inR" min="0" max="31"></label>
+        <label>G <input type="number" id="inG" min="0" max="31"></label>
+        <label>B <input type="number" id="inB" min="0" max="31"></label>
+        <input id="inHex" spellcheck="false" title="Hex color; snapped to the nearest Game Boy Color color">
+      </div>
+      <div class="previews">
+        <div><span id="pvColor" class="pv"></span>Game Boy Color</div>
+        <div><span id="pvScreen" class="pv"></span>Color screen</div>
+        <div><span id="pvDmg" class="pv"></span>Original</div>
+      </div>
+      <p class="hint dim">Every color here is one a Game Boy Color can actually show (32 levels per channel).</p>
+    </div>
+  </aside>
+</div>
+
+<footer class="statusbar">
+  <span id="toolName"></span>
+  <span id="cursorInfo" class="dim"></span>
+  <span id="message"></span>
+  <span class="spacer"></span>
+  <span id="tileMeter" class="meter"></span>
+  <span id="romMeter" class="meter" hidden></span>
+  <span id="cpuMeter" class="meter" hidden></span>
+</footer>
+
+<dialog id="testDialog">
+  <h2>Test <span class="dim" id="testInfo"></span></h2>
+  <div class="seg" id="testSeg">
+    <button data-device="color">Game Boy Color</button>
+    <button data-device="screen">Color screen</button>
+    <button data-device="dmg">Original Game Boy</button>
+  </div>
+  <div id="testErrors" class="errors" hidden></div>
+  <p class="dim keys">Keys: arrows = d-pad · X = A · Z = B · Enter = Start · Shift = Select · <label><input type="checkbox" id="testSound"> Sound</label></p>
+  <div class="test-body">
+    <canvas id="testScreen" width="160" height="144" tabindex="0" title="Keyboard: arrows, X = A, Z = B, Enter = Start"></canvas>
+    <table id="report" class="report"></table>
+  </div>
+  <details><summary>Generated assembly</summary><pre id="asmView"></pre></details>
+  <div class="actions"><button id="testClose">Close</button></div>
+</dialog>
+
+<dialog id="newDialog">
+  <h2>New project</h2>
+  <div class="choices">
+    <button id="newPressStart" class="choice primary"><b>Press Start</b><span>Your title art and a blinking PRESS START. Pressing Start flashes an area you choose, then fades into the game.</span></button>
+    <button id="newTemplate" class="choice"><b>Title + Options</b><span>A Start / Options menu with a cursor, blink, fades and two scenes to go to.</span></button>
+    <button id="newBlank" class="choice"><b>Blank screen</b><span>One empty scene.</span></button>
+    <h4>Examples</h4>
+    <button id="newClinic" class="choice"><b>Capsule Clinic</b><span>A playable falling-capsule puzzle game: title menu, settings, playfield, how to play, win and game over.</span></button>
+  </div>
+  <p class="dim">Your current project is replaced. Save it first if you want to keep it.</p>
+  <div class="actions"><button id="newCancel">Cancel</button></div>
+</dialog>
+
+<dialog id="checkDialog">
+  <h2>System check <span id="overall" class="badge"></span></h2>
+  <ul id="checkList" class="checks"></ul>
+  <div id="emuResult" class="emu" hidden>
+    <canvas id="screen" width="160" height="144"></canvas>
+    <p class="dim">Test ROM running in the browser emulator. You should see four bands, white to black.</p>
+  </div>
+  <pre id="installLog" hidden></pre>
+  <div class="actions">
+    <button id="installBtn" class="primary" hidden>Install missing</button>
+    <button id="rerunBtn">Run again</button>
+    <button id="closeBtn">Close</button>
+  </div>
+</dialog>
+
+<script type="module" src="editor.js"></script>
+</body>
+</html>

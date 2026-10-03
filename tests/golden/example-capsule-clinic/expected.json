@@ -1,0 +1,42 @@
+{
+  "rom_sha256": "c484a03773648407d50465c8613415306582925f28ee06fe03c5ee1eb460bf30",
+  "bytes": {
+    "rom_used": 20158,
+    "code": 4890,
+    "data": 15188,
+    "wram": 1162,
+    "hram": 59
+  },
+  "cycles": {
+    "color": {
+      "startup_cycles": 13536,
+      "frame_cycles_max": 4932,
+      "vblank_work_cycles": 1336,
+      "scene_load_cycles": 141728
+    },
+    "original": {
+      "startup_cycles": 35744,
+      "frame_cycles_max": 4404,
+      "vblank_work_cycles": 1336,
+      "scene_load_cycles": 168576
+    }
+  },
+  "screens": {
+    "color": {
+      "back": "b482cc3f672a1ca6421b7b352ec4cf91cdcb85640a52c3b9f9d39dc36c744e78",
+      "changed": "fcffc5ae5d7f41627610a869ed5b3b8d3ff15e6b74e09bb607db2cb22de54d98",
+      "howto": "a98dd8c01e4bd63e2eba387a367407d4b737d09e82f32492517abce7f32f4eb8",
+      "playfield": "e4ad9d5002b6b7abdb35093f52497669e102157a6f4123c2ce589be78fcf494b",
+      "settings": "ff62e9bfc1f1a0dcb8253d9b899b569485234bb791629c31b20d1f73ebc424b7",
+      "title": "0d3ea4052bb1eb1a7da21335c10ae01f76ea151335e0bec291ebcd3dc76e2af7"
+    },
+    "original": {
+      "back": "1a943e3e835042da4a61f33e7d8a2b92b6deaa04d57a28679b074228f47a267e",
+      "changed": "eb00412cf21601e5c9ef5d88c9ae6a53776ba7661500778365ccc527dc9116cc",
+      "howto": "38534321f46f7f694f3bca81a9ac3b16823dca52c34655a9ecbb53d62bea5676",
+      "playfield": "09fd5a9922218abff2fdf59484994b2d3920091a7dd36134a2cdfdb0258c0697",
+      "settings": "9bb6cd8ff422a687fe211801ceaace2120c6cb638fe8d1bfc9cfe19ec0043f3b",
+      "title": "4173efe848d2e8e33d1d2639855ee2f3c53f9b85184302d4b952cba9e68a13a0"
+    }
+  }
+}
