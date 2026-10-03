@@ -2,3 +2,6 @@
 __pycache__/
 *.gb
 *.o
+.DS_Store
+*.sym
+*.map
