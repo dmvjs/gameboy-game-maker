@@ -47,6 +47,34 @@ SfxInit:
 
 ; Start effect A, transposed up hSfxTranspose semitones. Keeps BC, DE, HL.
 PlaySfx:
+IF DEF(FT_NES_SOUND)
+    push hl                 ; the NES game's own effect for this one, if it has one (the fight's come from
+    push af                 ; its code, so none while it runs: hNesSound 1)
+    ldh a, [hNesSound]
+    dec a
+    jr z, .none
+    pop af
+    push af
+    add LOW(SfxNes)
+    ld l, a
+    adc HIGH(SfxNes)
+    sub l
+    ld h, a
+    ld a, [hl]
+    and a
+    jr z, .theirs
+    call NesSfx
+.none:
+    pop af
+    pop hl
+    ret
+.theirs:
+    ldh a, [hNesSound]      ; none: ours, unless the NES's engine still has the hardware
+    and a
+    jr nz, .none
+    pop af
+    pop hl
+ENDC
     push hl
     push de
     push bc
@@ -121,6 +149,15 @@ PlaySfx:
     ret
 
 SfxUpdate:
+IF DEF(FT_NES_SOUND)
+    ldh a, [hNesSound]      ; 1: the fight runs the NES's sound engine; 2: it plays out after it
+    and a
+    jr z, .ours
+    dec a
+    ret z
+    jp NesSoundAfter
+.ours:
+ENDC
     ld hl, wSfx
     ld b, 0                 ; voice
 .voice:
@@ -163,9 +200,9 @@ SfxUpdate:
     and a
     jr z, .rest
     add [hl]                ; + transpose
-    cp 63 + 1
+    cp SFX_NOTE_TOP + 1
     jr c, .inRange
-    ld a, 63
+    ld a, SFX_NOTE_TOP
 .inRange:
     add a
     add LOW(SfxNotes)

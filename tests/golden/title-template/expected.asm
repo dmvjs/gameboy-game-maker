@@ -43,19 +43,12 @@ DEF PADF_UP EQU 1 << PAD_UP
 DEF PADF_DOWN EQU 1 << PAD_DOWN
 DEF PADF_LEFT EQU 1 << PAD_LEFT
 DEF PADF_RIGHT EQU 1 << PAD_RIGHT
+DEF SFX_NOTE_TOP EQU 72
 DEF SFX_MENU_MOVE EQU 0
 DEF SFX_MENU_CONFIRM EQU 1
 DEF SFX_MENU_BACK EQU 2
 DEF SFX_OPTION_CHANGE EQU 3
 DEF SFX_PRESS_START EQU 4
-DEF SFX_MOVE EQU 5
-DEF SFX_MOVE_HELD EQU 6
-DEF SFX_ROTATE EQU 7
-DEF SFX_LAND EQU 8
-DEF SFX_CLEAR EQU 9
-DEF SFX_VIRUS EQU 10
-DEF SFX_WIN EQU 11
-DEF SFX_LOSE EQU 12
 
 MACRO PZ_SFX                ; play sound effect \1
     ld a, \1
@@ -124,12 +117,7 @@ Start:
     ldh [rLCDC], a
     ldh [rSCY], a
     ldh [rSCX], a
-    ld hl, $FE00            ; clear OAM (it's random at power-on); A = 0
-    ld b, 160
-.clearOAM:
-    ld [hl+], a
-    dec b
-    jr nz, .clearOAM
+    call ResetOAM           ; OAM is random at power-on
     ld a, 0
     ld [OAM_CURSOR + 3], a  ; cursor palette (Color) / OBP0 (original); tile 0
     ld hl, CursorTile       ; sprite tile 0
@@ -286,6 +274,7 @@ JumpHL:
 
 SceneLoads:
     dw Scene0Load, Scene1Load, Scene2Load
+
 
 Scene0Load:
     ld hl, Scene0Tiles
@@ -783,6 +772,19 @@ Scene0ItemHidden:
 .hidden1:
     db $00, $00, $00, $00, $00, $00, $00
 
+SECTION "Code: OAM", ROM0
+ResetOAM:                   ; screen off or VBlank: every sprite hidden
+    ld hl, $FE00
+    ld b, 160
+    xor a
+.clear:
+    ld [hl+], a
+    dec b
+    jr nz, .clear
+    ld a, 0
+    ld [OAM_CURSOR + 3], a  ; cursor: tile 0, its palette
+    ret
+
 SECTION "Data: Sprites", ROM0
 CursorTile:
     db $20, $20, $30, $30, $38, $28, $34, $2C, $38, $28, $30, $30, $20, $20, $00, $00
@@ -954,9 +956,9 @@ SfxUpdate:
     and a
     jr z, .rest
     add [hl]                ; + transpose
-    cp 63 + 1
+    cp SFX_NOTE_TOP + 1
     jr c, .inRange
-    ld a, 63
+    ld a, SFX_NOTE_TOP
 .inRange:
     add a
     add LOW(SfxNotes)
@@ -1056,14 +1058,6 @@ SfxTable:
     dw Sfx_menu_back
     dw Sfx_option_change
     dw Sfx_press_start
-    dw Sfx_move
-    dw Sfx_move_held
-    dw Sfx_rotate
-    dw Sfx_land
-    dw Sfx_clear
-    dw Sfx_virus
-    dw Sfx_win
-    dw Sfx_lose
 Sfx_menu_move:
     db 1, 1, 128, 0   ; voice, priority, duty, sweep
     db 2, $91, $35
@@ -1096,55 +1090,8 @@ Sfx_press_start:
     db 2, $D0, $38
     db 10, $D3, $3D
     db 0
-Sfx_move:
-    db 1, 1, 0, 0   ; voice, priority, duty, sweep
-    db 1, $61, $31
-    db 1, $31, $31
-    db 0
-Sfx_move_held:
-    db 1, 1, 0, 0   ; voice, priority, duty, sweep
-    db 1, $51, $33
-    db 1, $21, $33
-    db 0
-Sfx_rotate:
-    db 1, 2, 0, 0   ; voice, priority, duty, sweep
-    db 1, $90, $2C
-    db 2, $91, $33
-    db 0
-Sfx_land:
-    db 2, 2, 0, 0   ; voice, priority, duty, sweep
-    db 4, $B1, $67
-    db 0
-Sfx_clear:
-    db 0, 5, 128, 0   ; voice, priority, duty, sweep
-    db 2, $C0, $31
-    db 2, $C0, $35
-    db 2, $C0, $38
-    db 8, $C2, $3D
-    db 0
-Sfx_virus:
-    db 2, 5, 0, 0   ; voice, priority, duty, sweep
-    db 2, $D0, $14
-    db 6, $A1, $24
-    db 0
-Sfx_win:
-    db 0, 6, 128, 0   ; voice, priority, duty, sweep
-    db 6, $C0, $25
-    db 6, $C0, $29
-    db 6, $C0, $2C
-    db 6, $C0, $31
-    db 6, $C0, $35
-    db 24, $C4, $38
-    db 0
-Sfx_lose:
-    db 0, 6, 128, 0   ; voice, priority, duty, sweep
-    db 10, $B0, $2C
-    db 10, $B0, $28
-    db 10, $B0, $25
-    db 30, $B5, $20
-    db 0
 SfxNotes:                   ; period for note index 1 (C2) upward; index 0 unused
-    dw 0, 44, 157, 263, 363, 457, 547, 631, 711, 786, 856, 923, 986, 1046, 1102, 1155, 1205, 1253, 1297, 1339, 1379, 1417, 1452, 1486, 1517, 1547, 1575, 1602, 1627, 1650, 1673, 1694, 1714, 1732, 1750, 1767, 1783, 1798, 1812, 1825, 1837, 1849, 1860, 1871, 1881, 1890, 1899, 1907, 1915, 1923, 1930, 1936, 1943, 1949, 1954, 1959, 1964, 1969, 1974, 1978, 1982, 1985, 1989, 1992
+    dw 0, 44, 157, 263, 363, 457, 547, 631, 711, 786, 856, 923, 986, 1046, 1102, 1155, 1205, 1253, 1297, 1339, 1379, 1417, 1452, 1486, 1517, 1547, 1575, 1602, 1627, 1650, 1673, 1694, 1714, 1732, 1750, 1767, 1783, 1798, 1812, 1825, 1837, 1849, 1860, 1871, 1881, 1890, 1899, 1907, 1915, 1923, 1930, 1936, 1943, 1949, 1954, 1959, 1964, 1969, 1974, 1978, 1982, 1985, 1989, 1992, 1995, 1998, 2001, 2004, 2006, 2009, 2011, 2013, 2015
 
 SECTION "Data: Scene 0 tiles", ROM0, ALIGN[4]   ; DMA needs 16-byte alignment
 Scene0Tiles:              ; "Title": 31 unique tiles

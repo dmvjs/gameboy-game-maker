@@ -1,0 +1,38 @@
+{
+  "rom_sha256": "d548f44b3a1735970f5a4077e131c9c0102a8d2aea7b7b89b12b1b8d8c35c1bb",
+  "bytes": {
+    "rom_used": 6038,
+    "code": 1337,
+    "data": 4621,
+    "wram": 84,
+    "hram": 22
+  },
+  "cycles": {
+    "color": {
+      "startup_cycles": 7916,
+      "frame_cycles_max": 2400,
+      "vblank_work_cycles": 1184,
+      "scene_load_cycles": 40460
+    },
+    "original": {
+      "startup_cycles": 38596,
+      "frame_cycles_max": 2400,
+      "vblank_work_cycles": 1184,
+      "scene_load_cycles": 37360
+    }
+  },
+  "screens": {
+    "color": {
+      "back": "2dfc2bb35beab748ec04f68463a1e4ebf014805599471c89d9ae4c2e0d597c90",
+      "game": "d58b3b5a6558f474c0636406fc498233d611d348e31c0b9f6b6d8a2f96cd4d00",
+      "sliding": "db4dbd63d6f2817442f551c6b8bdd6511732c1c6236b38363ecafa48726ea7d3",
+      "title": "2dfc2bb35beab748ec04f68463a1e4ebf014805599471c89d9ae4c2e0d597c90"
+    },
+    "original": {
+      "back": "789f209ad9ae045f40185dc4d53e8e51b50aa0cec1c39cdab805ac9f3979d405",
+      "game": "5c2ad9e9edb7994b6814da42f818705294f12d46a954340cf55a0e4aebdcbc92",
+      "sliding": "2cbf80cdc413e6a4152811687faeed0adeccd549f8e1df580e6c42d8bdb32d6e",
+      "title": "789f209ad9ae045f40185dc4d53e8e51b50aa0cec1c39cdab805ac9f3979d405"
+    }
+  }
+}

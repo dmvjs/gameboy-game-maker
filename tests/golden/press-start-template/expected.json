@@ -1,9 +1,9 @@
 {
-  "rom_sha256": "e1b082fded3083ee860ca06dbf11a18d4b60b8011fe3c78483e7afbfe71c0a32",
+  "rom_sha256": "50894a8346ba5d604fdeb0e7999d1a7661579b28fcd6c097c36b7c42da7c7f3b",
   "bytes": {
-    "rom_used": 6076,
+    "rom_used": 5969,
     "code": 1268,
-    "data": 4728,
+    "data": 4621,
     "wram": 84,
     "hram": 21
   },

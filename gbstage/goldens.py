@@ -41,7 +41,7 @@ def expected_variants(project, scene, frame="normal", values=None):
     s = project["scenes"][scene]
     shown = list(s["composed"])
     if values and s.get("options"):
-        from .project import draw_option_value, option_value_cells
+        from .project import draw_option_value, option_value_cells, using_font
         for r in s["options"]["rows"]:
             if r["symbol"] not in values:
                 continue
@@ -52,7 +52,8 @@ def expected_variants(project, scene, frame="normal", values=None):
                 for y in range(8):
                     for x in range(8):
                         base[(y0 + y) * W + x0 + x] = s["pixels"][(y0 + y) * W + x0 + x]
-            draw_option_value(shown, base, r, v, s["options"]["text_slot"])
+            with using_font(project.get("font", "classic")):
+                draw_option_value(shown, base, r, v, s["options"]["text_slot"])
     press = s.get("press")
     if frame == "pressed":
         for row in s["area_cells"]:

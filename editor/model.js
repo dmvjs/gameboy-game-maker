@@ -9,7 +9,8 @@
 import { luminance, sameColor } from './color.js';
 
 export const W = 160, H = 144, CELL = 8, CW = W / CELL, CH = H / CELL;
-export const MAX_BG_PALETTES = 8;
+export const MAX_BG_PALETTES = 24;                 // in a project (same as gbstage/project.py)
+export const SCENE_BG_PALETTES = 8;                // in one scene: what the hardware holds
 export const MAX_OBJ_PALETTES = 8;
 export const MAX_TILES = 256;
 export const MAX_MENU_ITEMS = 6;
@@ -46,9 +47,12 @@ export function parseFont(text) {
   let ch = null, rows = [];
   const flush = () => {
     if (ch === null) return;
-    if (rows.length !== 7 || rows.some(r => !/^[#.]{5}$/.test(r))) throw new Error(`font: glyph "${ch}" must be 7 rows of 5`);
+    const w = rows[0]?.length;                    // 5-wide glyphs sit one column in; 7-wide ones at the left edge
+    if (rows.length !== 7 || ![5, 7].includes(w) || rows.some(r => !new RegExp(`^[#.]{${w}}$`).test(r))) {
+      throw new Error(`font: glyph "${ch}" must be 7 rows of 5 or 7`);
+    }
     const g = Array.from({ length: 8 }, () => new Array(8).fill(0));
-    rows.forEach((row, y) => [...row].forEach((c, x) => { g[y][x + 1] = c === '#' ? 1 : 0; }));
+    rows.forEach((row, y) => [...row].forEach((c, x) => { g[y][x + (w === 5 ? 1 : 0)] = c === '#' ? 1 : 0; }));
     glyphs[ch] = g;
   };
   for (const line of text.split('\n')) {
@@ -59,7 +63,11 @@ export function parseFont(text) {
   return glyphs;
 }
 
-export function setFont(text) { FONT = parseFont(text); }
+const FONTS = {};
+export function setFont(text, name = 'classic') { FONTS[name] = parseFont(text); FONT = FONTS.classic; }
+export const FONT_NAMES = ['classic', 'bold'];
+// Text draws in this font until the next call: each project picks one.
+export function useFont(name) { FONT = FONTS[name] || FONTS.classic; }
 export const fontHas = ch => !!FONT && ch in FONT;
 export const cleanLabel = text => [...text.toUpperCase()].filter(fontHas).join('');
 
@@ -85,6 +93,7 @@ function blankScene(name, pal = 0) {
 }
 
 export function newProject() {
+  useFont('classic');
   return {
     name: 'Untitled',
     palettes: PRESETS.slice(0, 3).map(clonePalette),
@@ -126,6 +135,7 @@ export const CURSOR_ARROW = [
 
 // A night sky, a moon, a logo that flashes when you press Start, and a blinking prompt.
 export function newPressStartTemplate() {
+  useFont('classic');
   const starry = { name: 'Starry', colors: [[31, 31, 24], [18, 20, 31], [6, 7, 18], [1, 1, 6]] };
   const p = {
     name: 'My Game',
@@ -183,6 +193,7 @@ export function newPressStartTemplate() {
 
 // The first experience: a title screen with a menu that leads to two scenes and back.
 export function newTitleTemplate() {
+  useFont('classic');
   const p = {
     name: 'My Game',
     palettes: ['Sky', 'Grass', 'Sand'].map(n => clonePalette(PRESETS.find(pr => pr.name === n))),
@@ -266,8 +277,12 @@ export function sceneReferences(p, s) {
     sc.menu?.items.forEach(it => { if (it.target === s) refs.push(`"${it.label}" on "${sc.name}" goes here`); });
     if (sc.pressStart?.target === s) refs.push(`Start on "${sc.name}" goes here`);
     if (sc.options?.target === s) refs.push(`Start on "${sc.name}" goes here`);
+    if (sc.passKey?.target === s) refs.push(`Start on "${sc.name}" goes here`);
     if (sc.puzzle?.win === s) refs.push(`winning on "${sc.name}" goes here`);
     if (sc.puzzle?.lose === s) refs.push(`game over on "${sc.name}" goes here`);
+    if (sc.fight?.win === s) refs.push(`winning the fight on "${sc.name}" goes here`);
+    if (sc.fight?.lose === s) refs.push(`losing the fight on "${sc.name}" goes here`);
+    if (sc.fight?.corner === s) refs.push(`between rounds on "${sc.name}" goes here`);
   });
   return refs;
 }
@@ -284,7 +299,9 @@ export function reachableScenes(p) {
     sc.menu?.items.forEach(it => todo.push(it.target));
     if (sc.pressStart) todo.push(sc.pressStart.target);
     if (sc.options) todo.push(sc.options.target);
+    if (sc.passKey) todo.push(sc.passKey.target);
     if (sc.puzzle) todo.push(sc.puzzle.win, sc.puzzle.lose);
+    if (sc.fight) todo.push(sc.fight.win, sc.fight.lose, ...(sc.fight.corner != null ? [sc.fight.corner] : []));
   }
   return seen;
 }
@@ -299,7 +316,9 @@ export function removeScene(p, s) {
     sc.menu?.items.forEach(it => { it.target = fix(it.target); });
     if (sc.pressStart) sc.pressStart.target = fix(sc.pressStart.target);
     if (sc.options) sc.options.target = fix(sc.options.target);
+    if (sc.passKey) sc.passKey.target = fix(sc.passKey.target);
     if (sc.puzzle) { sc.puzzle.win = fix(sc.puzzle.win); sc.puzzle.lose = fix(sc.puzzle.lose); }
+    if (sc.fight) { sc.fight.win = fix(sc.fight.win); sc.fight.lose = fix(sc.fight.lose); if (sc.fight.corner != null) sc.fight.corner = fix(sc.fight.corner); }
   }
   return true;
 }
@@ -340,6 +359,71 @@ export function textInk(label, x, y) {
     }
   });
   return ink;
+}
+
+// ---- fight ------------------------------------------------------------------------
+// Same layout as gbstage/fight.py: the rival is an 8x10-tile area; each pose is a full picture of it.
+export const FIGHT_W = 8, FIGHT_H = 10;
+export const FIGHT_POSES = ['idle', 'idle2', 'guard', 'hit_l', 'hit_r', 'hit_body', 'dazed',
+                            'jab_tell', 'jab_mid', 'jab', 'hook_tell', 'hook_mid', 'hook', 'slip', 'idle3', 'hit_back',
+                            'kd_stagger', 'kd_fall', 'kd_down', 'kd_kneel', 'taunt', 'arm_pop', 'guard_low'];
+const FIGHT_HUD = { stars: 1, hearts: 2, points: 6, clock: 4, round: 1, playerBar: 6, rivalBar: 6 };
+
+// Pixel index -> slot for one rival pose, placed in the scene.
+export function rivalPosePixels(ft, pose) {
+  const out = [], pw = FIGHT_W * CELL, px = ft.rival.poses[pose].pixels;
+  for (let i = 0; i < px.length; i++) out.push([(ft.rival.y * CELL + (i / pw | 0)) * W + ft.rival.x * CELL + i % pw, px.charCodeAt(i) - 48]);
+  return out;
+}
+
+// The palette each tile of a pose uses, as [cell, palette] pairs.
+export function rivalPoseCells(ft, pose) {
+  return [...ft.rival.poses[pose].cells].map((kind, k) =>
+    [(ft.rival.y + (k / FIGHT_W | 0)) * CW + ft.rival.x + k % FIGHT_W, ft.rival.palettes[kind]]);
+}
+
+function fightInto(out, scene, pose = 'idle') {
+  const ft = scene.fight;
+  for (const [i, v] of rivalPosePixels(ft, pose)) out[i] = v;
+  const c = ft.hud.clock;
+  for (const i of textInk(':', c.x + 1, c.y)) out[i] = ft.textSlot;
+}
+
+function fightTiles(scene, add) {
+  const ft = scene.fight;
+  for (const pose of FIGHT_POSES) {
+    const img = scene.pixels.slice();
+    fightInto(img, scene, pose);
+    for (const [c] of rivalPoseCells(ft, pose)) add(img, c);
+  }
+  const digits = (spot, offsets) => {
+    for (const k of offsets) for (let d = 0; d < 10; d++) {
+      const img = scene.pixels.slice();
+      for (const i of textInk(String(d), spot.x + k, spot.y)) img[i] = ft.textSlot;
+      add(img, spot.y * CW + spot.x + k);
+    }
+  };
+  digits(ft.hud.stars, [0]); digits(ft.hud.hearts, [0, 1]); digits(ft.hud.points, [0, 1, 2, 3, 4, 5]);
+  digits(ft.hud.clock, [0, 2, 3]); digits(ft.hud.round, [0]);
+  for (const bar of [ft.hud.playerBar, ft.hud.rivalBar]) for (let k = 0; k < 6; k++) for (let lv = 0; lv <= 8; lv++) {
+    const img = scene.pixels.slice(), c = bar.y * CW + bar.x + k;
+    for (let y = 2; y < 6; y++) for (let x = 0; x < lv; x++) img[(bar.y * CELL + y) * W + (bar.x + k) * CELL + x] = ft.barSlot;
+    add(img, c);
+  }
+  const burst = ['...#....', '.#.#.#..', '..###...', '#######.', '..###...', '.#.#.#..', '...#....', '........'];
+  const img = scene.pixels.slice(), row = ft.crowdRow || 0;     // a camera flash in the crowd
+  burst.forEach((r, y) => [...r].forEach((ch, x) => { img[(row * CELL + y) * W + x] = ch === '#' ? 0 : 3; }));
+  add(img, row * CW);
+}
+
+export function fightProblems(p, s) {
+  const ft = p.scenes[s].fight, out = [];
+  if (!ft) return out;
+  for (const [key, w] of Object.entries(FIGHT_HUD)) {
+    const spot = ft.hud[key];
+    if (!spot || spot.x < 0 || spot.x + w > CW || spot.y < 0 || spot.y >= CH) out.push(`The HUD's ${key} is off screen.`);
+  }
+  return out;
 }
 
 // ---- puzzle grid ----------------------------------------------------------------
@@ -482,12 +566,18 @@ export function optionsProblems(p, s) {
   return out;
 }
 
+// A pass key's digit cells, as gbstage/project.py lays them out: groups of 3, 4 and 3.
+export const PASS_OFFSETS = [0, 1, 2, 4, 5, 6, 7, 9, 10, 11];
+const clonePass = pk => pk && { x: pk.x, y: pk.y, textSlot: pk.textSlot ?? 0, target: pk.target };
+
 // The scene's pixels with menu and prompt text baked in, exactly as the ROM shows them.
 // frame 'pressed' shows the flash area's pressed frame.
 export function composed(scene, frame = 'normal') {
   const pr = scene.pressStart?.prompt;
-  if (!scene.menu && !pr && !scene.options && !scene.puzzle && frame === 'normal') return scene.pixels;
+  if (!scene.menu && !pr && !scene.options && !scene.puzzle && !scene.fight && !scene.passKey && !scene.texts?.length && frame === 'normal') return scene.pixels;
   const out = scene.pixels.slice();
+  if (scene.fight) fightInto(out, scene, typeof frame === 'string' && frame.startsWith('pose:') ? frame.slice(5) : 'idle');
+  for (const t of scene.texts || []) for (const i of textInk(t.label, t.x, t.y)) out[i] = t.textSlot;
   if (scene.puzzle) {
     const pz = scene.puzzle, hud = puzzleHud(pz);
     for (const c of [...puzzleCells(pz), ...hud.next]) for (const i of cellPixels(c)) out[i] = 3;
@@ -503,6 +593,7 @@ export function composed(scene, frame = 'normal') {
     }
   }
   if (scene.menu) for (const ink of menuInk(scene.menu)) for (const i of ink) out[i] = scene.menu.textSlot;
+  if (scene.passKey) for (const off of PASS_OFFSETS) for (const i of textInk('0', scene.passKey.x + off, scene.passKey.y)) out[i] = scene.passKey.textSlot;
   if (pr) for (const i of textInk(pr.label, pr.x, pr.y)) out[i] = pr.textSlot;
   if (frame === 'pressed' && scene.pressed) for (const i of areaPixels(scene.pressStart.area)) out[i] = scene.pressed[i];
   return out;
@@ -747,6 +838,7 @@ export function uniqueTileCount(scene) {
       }
     }
   }
+  if (scene.fight) fightTiles(scene, add);
   const ps = scene.pressStart;
   if (ps?.prompt) for (let k = 0; k < ps.prompt.label.length; k++) add(scene.pixels, ps.prompt.y * CW + ps.prompt.x + k);
   if (ps?.area && scene.pressed) for (const c of areaCells(ps.area)) add(scene.pressed, c);
@@ -757,18 +849,30 @@ export function uniqueTileCount(scene) {
 
 const cloneMenu = m => m && { ...m, items: m.items.map(it => ({ ...it })) };
 const clonePress = ps => ps && { ...ps, area: ps.area && { ...ps.area }, prompt: ps.prompt && { ...ps.prompt } };
+const cloneTexts = t => (Array.isArray(t) ? t : []).map(x => ({ label: String(x.label), x: x.x, y: x.y, textSlot: x.textSlot }));
 const clonePuzzle = pz => pz && JSON.parse(JSON.stringify(pz));
+const POSE_FALLBACK = { idle2: 'idle', idle3: 'idle', hit_back: 'hit_l', slip: 'idle', jab_mid: 'jab_tell', hook_mid: 'hook_tell', kd_stagger: 'hit_body', kd_fall: 'fall',
+                        kd_down: 'down', kd_kneel: 'fall', arm_pop: 'hit_body', guard_low: 'guard' };   // as in gbstage/fight.py: older projects borrow a pose
+const cloneFight = ft => {
+  if (!ft) return ft;
+  const out = JSON.parse(JSON.stringify(ft));
+  for (const [name, standIn] of Object.entries(POSE_FALLBACK)) {
+    if (out.rival?.poses && !out.rival.poses[name] && out.rival.poses[standIn]) out.rival.poses[name] = { ...out.rival.poses[standIn] };
+  }
+  return out;
+};
 const cloneOptions = o => o && { ...o, rows: o.rows.map(r => ({ ...r, choices: r.choices && [...r.choices], slider: r.slider && { ...r.slider } })) };
 const cloneScene = s => ({ name: s.name, pixels: s.pixels.slice(), cellPal: s.cellPal.slice(), menu: cloneMenu(s.menu),
                            pressStart: clonePress(s.pressStart), pressed: s.pressed && s.pressed.slice(), back: s.back,
                            options: cloneOptions(s.options), puzzle: clonePuzzle(s.puzzle),
-                           notes: s.notes || '' });
+                           fight: cloneFight(s.fight), passKey: clonePass(s.passKey || null), texts: cloneTexts(s.texts),
+                           slideIn: !!s.slideIn, nesDmc: s.nesDmc || 0, notes: s.notes || '' });
 
 export const snapshot = p => ({
   name: p.name, palettes: p.palettes.map(clonePalette), objPalettes: p.objPalettes.map(clonePalette),
   cursor: p.cursor && { palette: p.cursor.palette, pixels: p.cursor.pixels.slice() },
   scenes: p.scenes.map(cloneScene), start: p.start, transition: p.transition && { ...p.transition },
-  sample: p.sample && { ...p.sample },
+  sample: p.sample && { ...p.sample }, sound: p.sound || 'arcade', font: p.font || 'classic',
 });
 export const restore = (p, s) => Object.assign(p, snapshot(s));
 
@@ -785,12 +889,19 @@ export function serialize(p) {
       pressed: s.pressStart?.area && s.pressed ? s.pressed.join('') : null,
       options: cloneOptions(s.options),
       puzzle: clonePuzzle(s.puzzle),
+      ...(s.fight ? { fight: cloneFight(s.fight) } : {}),
+      ...(s.passKey ? { passKey: clonePass(s.passKey) } : {}),
       back: s.back,
+      ...(s.texts?.length ? { texts: cloneTexts(s.texts) } : {}),
+      ...(s.slideIn ? { slideIn: true } : {}),
+      ...(s.nesDmc ? { nesDmc: s.nesDmc } : {}),
       ...(s.notes ? { notes: s.notes } : {}),
     })),
     start: p.start,
     transition: p.transition && { ...p.transition },
     ...(p.sample ? { sample: { ...p.sample } } : {}),
+    ...(p.sound && p.sound !== 'arcade' ? { sound: p.sound } : {}),
+    ...(p.font && p.font !== 'classic' ? { font: p.font } : {}),
   };
 }
 
@@ -814,7 +925,7 @@ export function deserialize(raw) {
   const goodColors = pal => Array.isArray(pal.colors) && pal.colors.length === 4 &&
     pal.colors.every(c => c.length === 3 && c.every(v => Number.isInteger(v) && v >= 0 && v <= 31));
   const bg = data.palettes?.bg, obj = data.palettes?.obj || [];
-  if (!Array.isArray(bg) || bg.length < 1 || bg.length > MAX_BG_PALETTES) fail('needs 1-8 background palettes');
+  if (!Array.isArray(bg) || bg.length < 1 || bg.length > MAX_BG_PALETTES) fail(`needs 1-${MAX_BG_PALETTES} background palettes`);
   if (obj.length > MAX_OBJ_PALETTES) fail('too many sprite palettes');
   for (const pal of [...bg, ...obj]) if (!goodColors(pal)) fail(`palette "${pal.name}" must have 4 colors with channels 0-31`);
   if (!Array.isArray(data.scenes) || !data.scenes.length) fail('needs at least one scene');
@@ -831,9 +942,14 @@ export function deserialize(raw) {
       pressStart: clonePress(s.pressStart || null),
       options: cloneOptions(s.options || null),
       puzzle: clonePuzzle(s.puzzle || null),
+      fight: cloneFight(s.fight || null),
+      passKey: clonePass(s.passKey || null),
       pressed: typeof s.pressed === 'string' && s.pressed.length === W * H && /^[0-3]*$/.test(s.pressed)
         ? Uint8Array.from(s.pressed, ch => ch.charCodeAt(0) - 48) : null,
       back: Number.isInteger(s.back) ? s.back : null,
+      texts: cloneTexts(s.texts),
+      slideIn: s.slideIn === true && !s.fight,
+      nesDmc: Number.isInteger(s.nesDmc) ? s.nesDmc : 0,
       notes: typeof s.notes === 'string' ? s.notes.slice(0, 2000) : '',
     };
   });
@@ -849,5 +965,7 @@ export function deserialize(raw) {
     transition: data.transition ? { color: data.transition.color === 'black' ? 'black' : 'white',
                                     frames: Math.min(30, Math.max(1, data.transition.frames | 0)) } : null,
     sample: data.sample && typeof data.sample.id === 'string' ? { id: data.sample.id, version: data.sample.version | 0 } : null,
+    sound: ['arcade', 'boxing'].includes(data.sound) ? data.sound : 'arcade',
+    font: FONT_NAMES.includes(data.font) ? data.font : 'classic',
   };
 }

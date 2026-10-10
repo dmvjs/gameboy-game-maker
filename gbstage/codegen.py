@@ -24,6 +24,61 @@ STACK_SIZE = 64
 # Read once with the rest of the engine, so a running server never pairs new kit code with old Python.
 KIT_PUZZLE = __import__("pathlib").Path(__file__).with_name("kit_puzzle.asm").read_text()
 KIT_SFX = __import__("pathlib").Path(__file__).with_name("kit_sfx.asm").read_text()
+KIT_FIGHT = __import__("pathlib").Path(__file__).with_name("kit_fight.asm").read_text()
+KIT_NES = __import__("pathlib").Path(__file__).with_name("kit_nes.asm").read_text()
+KIT_NES_SOUND = __import__("pathlib").Path(__file__).with_name("kit_nes_sound.asm").read_text()
+
+
+# The template's effects as Punch-Out!!'s (its SQ1 effect numbers): what plays when a project has its engine.
+NES_SFX = {"menu_move": 0x14, "menu_back": 0x14, "option_change": 0x12, "menu_confirm": 0x01, "press_start": 0x01,
+           "bell": 0x0C, "count": 0x10, "knockdown": 0x02, "ko": 0x0E, "punch": 0x06, "hit": 0x03, "block": 0x04,
+           "dodge": 0x11, "star_wind": 0x16}
+
+
+def _dmc_tables(nes):
+    """The NES's DMC samples (crowd, laughs, grunt) for the GB noise channel: per sample its address byte
+    ($4012), a noise clock from how often it crosses its average, and its loudness each frame (RMS of the
+    decoded 1-bit delta stream at the rate the game plays it, 33144 Hz)."""
+    import math
+    fixed, data = nes["sound_fixed"], nes["samples"]
+    rate, per = 1789773 / 54, int(1789773 / 54 / 60)
+    addrs, clocks, envs = [], [], []
+    for k in range(7):
+        a, n = fixed[0x368 + 2 * k], fixed[0x369 + 2 * k] * 16 + 1
+        start = 0xC000 + a * 64 - 0xE000
+        level, seq = 64, []
+        for b in data[start:start + n]:
+            for i in range(8):
+                level = min(level + 2, 126) if b >> i & 1 and level <= 125 else (level - 2 if not b >> i & 1 and level >= 2 else level)
+                seq.append(level)
+        vols, crossings = [], 0
+        for f in range(0, len(seq), per):
+            c = seq[f:f + per]
+            m = sum(c) / len(c)
+            vols.append(max(1, min(15, round(math.sqrt(sum((x - m) ** 2 for x in c) / len(c)) / 2))))
+            crossings += sum(1 for i in range(1, len(c)) if (c[i] - m) * (c[i - 1] - m) < 0)
+        target = 2 * crossings / (len(seq) / rate)             # white noise crosses at about half its clock
+        best = min(((s, r) for s in range(14) for r in range(8)),
+                   key=lambda sr: abs(math.log(524288 / (0.5 if sr[1] == 0 else sr[1]) / 2 ** (sr[0] + 1) / target)))
+        addrs.append(a); clocks.append(best[0] << 4 | best[1]); envs.append(vols)
+    lines = ["DmcAddr:                    ; each sample's $4012, as the engine starts it",
+             _db(addrs), "DmcClock:                   ; its noise clock (NR43)", _db(clocks),
+             "DmcEnvelope:                ; its loudness by frame: the count first", "    dw " + ", ".join(f"DmcEnv{k}" for k in range(7))]
+    for k, v in enumerate(envs):
+        lines += [f"DmcEnv{k}:", _db([len(v)] + v)]
+    return "\n".join(lines)
+
+
+def _nes_parts():
+    """kit_nes.asm by where it goes: ";;PART common" (ROM0), "fighter" and "mac" (each in the ROM bank of the
+    NES data it reads, after it at $6000, so it never has to switch banks)."""
+    parts, cur = {"head": [], "common": [], "fighter": [], "mac": []}, "head"
+    for line in KIT_NES.splitlines():
+        if line.startswith(";;PART "):
+            cur = line.split()[1]
+            continue
+        parts[cur].append(line)
+    return {k: "\n".join(v) for k, v in parts.items()}
 BLINK_FRAMES = 4
 BOB = [0, 0, 1, 2, 2, 2, 1, 0]          # cursor x offsets, one step every 8 frames
 MARKER = [3, 3, 3, 3, 3, 3, 3, 3,       # slider marker sprite: a framed block
@@ -105,6 +160,16 @@ def cursor_x(menu):
     return menu["x"] * 8 - 11
 
 
+def sfx_groups(scenes):
+    """The sound effect groups a game's scenes need (menus always: every interactive screen beeps)."""
+    groups = ["menu"]
+    if any(s.get("puzzle") for s in scenes):
+        groups.append("puzzle")
+    if any(s.get("fight") for s in scenes):
+        groups.append("fight")
+    return groups
+
+
 def reachable_scenes(project):
     """Scene indexes the game can get to from the start scene, in project order."""
     seen, todo = set(), [project["start"]]
@@ -122,8 +187,13 @@ def reachable_scenes(project):
             todo.append(s["press"]["target"])
         if s["options"]:
             todo.append(s["options"]["target"])
-        if s.get("puzzle"):
-            todo += [s["puzzle"]["win"], s["puzzle"]["lose"]]
+        if s.get("pass_key"):
+            todo.append(s["pass_key"]["target"])
+        for kit in ("puzzle", "fight"):
+            if s.get(kit):
+                todo += [s[kit]["win"], s[kit]["lose"]]
+        if s.get("fight") and s["fight"]["corner"] is not None:
+            todo.append(s["fight"]["corner"])
     return sorted(seen)
 
 
@@ -136,38 +206,43 @@ def _rgb555(colors):
     return ", ".join(f"${r | g << 5 | b << 10:04X}" for r, g, b in colors)
 
 
-def _pad_rows(values):
-    """CW-wide rows -> 32-wide rows (the padding is off screen) so DMA can copy whole rows."""
+def _pad_rows(values, edge=False):
+    """CW-wide rows -> 32-wide rows (the padding is off screen) so DMA can copy whole rows. edge: pad with
+    each row's last tile, for rows that scroll sideways (the padding then shows at the edges)."""
     out = []
     for i in range(0, len(values), CW):
-        out += list(values[i:i + CW]) + [0] * (32 - CW)
+        row = list(values[i:i + CW])
+        out += row + [row[-1] if edge else 0] * (32 - CW)
     return out
 
 
-def _runs(indexes):
-    """[0, 1, 3] -> [(0, 2), (3, 1)]: (first, count) runs of consecutive numbers."""
+def _runs(indexes, slot=lambda i: i):
+    """[0, 1, 3] -> [(0, 2), (3, 1)]: (first, count) runs of consecutive numbers (whose slots are
+    consecutive too, so one index write covers the run)."""
     runs = []
     for i in indexes:
-        if runs and runs[-1][0] + runs[-1][1] == i:
+        if runs and runs[-1][0] + runs[-1][1] == i and slot(runs[-1][0]) + runs[-1][1] == slot(i):
             runs[-1] = (runs[-1][0], runs[-1][1] + 1)
         else:
             runs.append((i, 1))
     return runs
 
 
-def _upload_runs(indexes, spec, data_reg, at_label=None):
+def _upload_runs(indexes, spec, data_reg, at_label=None, slots=None):
     """Code uploading the given palette indexes through BCPS/BCPD or OCPS/OCPD, 16 cycles per byte.
 
     HL walks a table holding every palette in order; runs of consecutive palettes share one index
-    write and one loop, and palettes the scene doesn't use are skipped."""
+    write and one loop, and palettes the scene doesn't use are skipped. slots: palette index -> the
+    hardware palette it goes to, when that isn't the same number (see hw_palettes)."""
     lines, pos = [f"    ld c, LOW({data_reg})"], 0
     if at_label:
         lines.insert(0, f"    ld hl, {at_label}")
-    for first, count in _runs(indexes):
+    slot = (slots or {}).get
+    for first, count in _runs(indexes, lambda i: slot(i, i)):
         skip = (first - pos) * 8
         if skip:
             lines += [f"    ld de, {skip}", "    add hl, de"]
-        lines += [f"    ld a, $80 | {first * 8}", f"    ldh [{spec}], a"]
+        lines += [f"    ld a, $80 | {slot(first, first) * 8}", f"    ldh [{spec}], a"]
         body = ["        ld a, [hl+]", "        ldh [c], a"]
         if count == 1:
             lines += ["    REPT 8"] + body + ["    ENDR"]
@@ -212,25 +287,50 @@ def _gdma(src, dest, size):
     return "\n".join(lines)
 
 
-def _scene_data(i, s):
+def _scene_data(i, s, banked=False):
     tile_bytes = [b for t in s["tiles"] for b in encode_tile(t)]
-    return f"""SECTION "Data: Scene {i} tiles", ROM0, ALIGN[4]   ; DMA needs 16-byte alignment
+    if banked:      # one section per scene, so its tiles and maps share a bank
+        head = f"""SECTION "Data: Scene {i}", ROMX, ALIGN[4]   ; DMA needs 16-byte alignment
+Scene{i}Tiles:              ; "{s['name']}": {len(s['tiles'])} unique tiles
+{_db(tile_bytes)}
+Scene{i}Map:                ; rows padded to 32 tiles so DMA can copy them whole"""
+    else:
+        head = f"""SECTION "Data: Scene {i} tiles", ROM0, ALIGN[4]   ; DMA needs 16-byte alignment
 Scene{i}Tiles:              ; "{s['name']}": {len(s['tiles'])} unique tiles
 {_db(tile_bytes)}
 
 SECTION "Data: Scene {i} maps", ROM0, ALIGN[4]    ; rows padded to 32 tiles so DMA can copy them whole
-Scene{i}Map:
-{_db(_pad_rows(s['cell_tiles']), 32)}
+Scene{i}Map:"""
+    return head + f"""
+{_db(_pad_rows(s['cell_tiles'], bool(s.get('fight'))), 32)}
 Scene{i}Attr:               ; palette number per tile (Game Boy Color only)
-{_db(_pad_rows(s['cell_pal']), 32)}
+{_db(_pad_rows(s['cell_pal'], bool(s.get('fight'))), 32)}
 """
+
+
+# ---- palettes per scene ----------------------------------------------------------
+
+def hw_palettes(s):
+    """A project can have more background palettes than the 8 the hardware holds, as long as each scene
+    uses 8 at most. Returns the scene with its palette map in hardware slots and, when any palette moved,
+    "pal_slots" (palette -> slot) and "pal_used" (the project palettes it uploads). Palettes 0-7 keep their
+    own slot, so a project with 8 or fewer builds exactly as before."""
+    used = sorted(set(s["cell_pal"]))
+    if all(g < 8 for g in used):
+        return s
+    slots = {g: g for g in used if g < 8}
+    free = [k for k in range(8) if k not in slots.values()]
+    for g in used:
+        if g >= 8:
+            slots[g] = free.pop(0)
+    return dict(s, cell_pal=[slots[g] for g in s["cell_pal"]], pal_slots=slots, pal_used=used)
 
 
 # ---- one still screen: straight-line code ------------------------------------
 
 def _static_asm(project, s):
     n = len(s["tiles"])
-    used = sorted(set(s["cell_pal"]))
+    used = s.get("pal_used") or sorted(set(s["cell_pal"]))
     tiles_color = _gdma("Scene0Tiles", 0x9000, min(n, 128) * 16)
     tiles_cpu = ["    ld sp, Scene0Tiles", "    ld hl, $9000            ; tiles 0-127", f"    ld b, {min(n, 128)}",
                  ".tiles:", POP_TILES, "    dec b", "    jr nz, .tiles"]
@@ -238,7 +338,7 @@ def _static_asm(project, s):
         tiles_color += "\n" + _gdma("Scene0Tiles + 128 * 16", 0x8800, (n - 128) * 16)
         tiles_cpu += ["    ld hl, $8800            ; tiles 128-255 (SP has moved on to them)", f"    ld b, {n - 128}",
                       ".tilesHigh:", POP_TILES, "    dec b", "    jr nz, .tilesHigh"]
-    palettes = "\n".join(_upload_runs(used, "rBCPS", "rBCPD", at_label="BgPalettes"))
+    palettes = "\n".join(_upload_runs(used, "rBCPS", "rBCPD", at_label="BgPalettes", slots=s.get("pal_slots")))
     nl = "\n"
     return f"""; Generated by gbstage from "{project['name']}". Changes here are overwritten on the next build.
 
@@ -312,6 +412,46 @@ BgPalettes:                 ; RGB555
 
 # ---- menus and transitions -----------------------------------------------------
 
+# Sliding in: the scene starts scrolled down by a screen. The map's 14 spare rows, filled with the scene's
+# most common tile (its background), fill the screen above its top 32 pixels, and the scroll climbs a pixel a
+# frame until it wraps to 0. The hardware scroll does the work: no tiles move, nothing extra per frame.
+SLIDE_DEFS = f"""DEF SLIDE_START EQU {CH * 8}          ; SCY: the scene's top 32 rows at the bottom of the screen
+DEF SLIDE_STEP EQU 1            ; pixels per frame: {256 - CH * 8} frames to slide all the way up
+"""
+SLIDE_STEP_CODE = """    ldh a, [hScrollY]       ; sliding in: climb (wraps to 0, the resting place)
+    and a
+    jr z, .still
+    add SLIDE_STEP
+    ldh [hScrollY], a
+.still:
+"""
+SLIDE_FILL = """; Fill the map rows below the screen (18-31) with tile D, palette E on Game Boy Color. Screen off.
+SlideFill:
+    ld hl, $9800 + MAP_H * 32
+    ld bc, (32 - MAP_H) * 32
+    call .fill
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    ld a, 1
+    ldh [rVBK], a
+    ld d, e
+    ld hl, $9800 + MAP_H * 32
+    ld bc, (32 - MAP_H) * 32
+    call .fill
+    xor a
+    ldh [rVBK], a
+    ret
+.fill:
+    ld a, d
+    ld [hl+], a
+    dec bc
+    ld a, b
+    or c
+    jr nz, .fill
+    ret
+"""
+
 def _scene_load(i, s, sprites, opt_index=None, markers=False):
     n = len(s["tiles"])
     lines = [f"Scene{i}Load:", f"    ld hl, Scene{i}Tiles", "    ld de, $9000            ; tiles 0-127",
@@ -320,8 +460,27 @@ def _scene_load(i, s, sprites, opt_index=None, markers=False):
         lines += [f"    ld hl, Scene{i}Tiles + 128 * 16", "    ld de, $8800            ; tiles 128-255",
                   f"    ld c, {n - 128}", "    call CopyTiles"]
     lines += [f"    ld hl, Scene{i}Map", "    call CopyMap", f"    ld hl, Scene{i}Attr", "    call CopyAttr"]
+    if s.get("slide"):
+        pairs = list(zip(s["cell_tiles"], s["cell_pal"]))
+        tile, pal = max(set(pairs), key=lambda tp: (pairs.count(tp), -pairs.index(tp)))
+        lines += [f"    ld de, ${tile:02X} << 8 | {pal}       ; the scene's background: its most common tile and palette",
+                  "    call SlideFill", f"    ld a, SLIDE_START", "    ldh [hScrollY], a"]
     if s.get("puzzle"):
         lines.append("    call PuzzleLoad")
+    if s.get("fight"):
+        lines.append("    call FightLoad")
+    if s.get("pass_key"):
+        lines.append(f"    call Scene{i}PassLoad")
+    if s.get("nes_dmc"):
+        lines += ["IF DEF(FT_NES_SOUND)", f"    ld a, {s['nes_dmc']}             ; its NES sample (the crowd), as the game starts it",
+                  "    call NesDmc", "ENDC"]
+    if (s["menu"] or {}).get("confirm"):
+        n = len(s["menu"]["confirm"]["tiles"]) * 16
+        lines += [f"    ld hl, Scene{i}ConfirmTiles  ; the confirm sprite's tiles, from sprite tile 2",
+                  "    ld de, $8020", f"    ld bc, {n}", ".confirmTiles:", "    ld a, [hl+]", "    ld [de], a", "    inc de",
+                  "    dec bc", "    ld a, b", "    or c", "    jr nz, .confirmTiles",
+                  "    ld hl, $FE08             ; sprites 2-39 hidden", "    ld b, 38 * 4", "    xor a", ".confirmOam:",
+                  "    ld [hl+], a", "    dec b", "    jr nz, .confirmOam"]
     if sprites:
         if s["menu"]:
             m = s["menu"]
@@ -341,14 +500,23 @@ def _scene_palettes(i, s, project, sprites):
     """Upload this scene's palettes from the fade row in DE: only the background palettes its tiles
     use, plus the cursor's sprite palette if it has a menu."""
     lines = [f"Scene{i}Palettes:", "    ld h, d", "    ld l, e"]
-    lines += _upload_runs(sorted(set(s["cell_pal"])), "rBCPS", "rBCPD")
+    used = s.get("pal_used") or sorted(set(s["cell_pal"]))
+    lines += _upload_runs(used, "rBCPS", "rBCPD", slots=s.get("pal_slots"))
+    pal = None
     if sprites and (s["menu"] or s["options"]):
         pal = project["cursor"]["palette"]
-        skip = (len(project["palettes"]) - (max(s["cell_pal"]) + 1) + pal) * 8
+    obj_pals = [pal] if pal is not None else []
+    if s.get("fight"):
+        f = s["fight"]
+        obj_pals = sorted({f["player"]["palette"], f["player"]["tired_palette"], f["referee"]["palette"]})
+    at = (max(used) + 1) * 8                            # HL's offset into the fade row so far
+    for pal in obj_pals:
+        skip = (len(project["palettes"]) + pal) * 8 - at
         if skip:
             lines += [f"    ld de, {skip}", "    add hl, de"]
         lines += [f"    ld a, $80 | {pal * 8}", "    ldh [rOCPS], a", "    ld c, LOW(rOCPD)",
                   "    REPT 8", "        ld a, [hl+]", "        ldh [c], a", "    ENDR"]
+        at = (len(project["palettes"]) + pal + 1) * 8
     lines.append("    ret")
     return "\n".join(lines)
 
@@ -364,7 +532,7 @@ def _patch_routine(name, rows, comment):
     return "\n".join(lines)
 
 
-def _press_code(i, s, index_of):
+def _press_code(i, s, index_of, corner=False):
     p = s["press"]
     pr = p["prompt"]
     blink = pr and pr["blink"]
@@ -395,8 +563,12 @@ def _press_code(i, s, index_of):
 .queue:
     QUEUE_PATCH Scene{i}AreaPatch
     ret""" if p["area"] else "    ret"
+    select = """    ldh a, [hPadNew]        ; the corner: Select gets the trainer working faster
+    and PADF_SELECT
+    call nz, FtCornerSelect
+""" if corner else ""
     return f"""Scene{i}Update:              ; press-start screen: wait for Start or A
-    ldh a, [hPadNew]
+{select}    ldh a, [hPadNew]
     and PADF_A | PADF_START
     jr nz, .press
 {idle}
@@ -591,6 +763,216 @@ Scene{i}Row{r_i}Source:       ; HL = the value area's tiles for value A
     ret
 """)
     return "\n".join(out)
+
+
+def _pass_code(i, s, index_of):
+    """A pass key: left/right picks a digit, up/down changes it (both repeat), Start or A goes on. The chosen
+    digit blinks; one map patch a frame (the digit left behind first)."""
+    pk = s["pass_key"]
+    back = f"""    ldh a, [hPadNew]
+    and PADF_B
+    jr z, .show
+    ld a, SFX_MENU_BACK
+    call PlaySfx
+    ld a, {index_of[s['back']]}
+    jp StartTransition
+""" if s["back"] is not None else ""
+    return f"""Scene{i}Update:              ; pass key: left/right pick a digit, up/down change it, Start goes on
+    ldh a, [hPadRepeat]
+    ld b, a
+    ld c, 0                 ; C: a digit changed (show it now)
+    bit PAD_RIGHT, b
+    jr z, .notRight
+    call .leave
+    inc a
+    cp {len(pk['cells'])}
+    jr c, .right
+    xor a
+.right:
+    ldh [hPassPos], a
+.notRight:
+    bit PAD_LEFT, b
+    jr z, .notLeft
+    call .leave
+    sub 1
+    jr nc, .left
+    ld a, {len(pk['cells']) - 1}
+.left:
+    ldh [hPassPos], a
+.notLeft:
+    ld a, b
+    and PADF_UP | PADF_DOWN
+    jr z, .notChange
+    ld a, SFX_OPTION_CHANGE
+    call PlaySfx
+    ld c, 1
+    call .digit
+    bit PAD_UP, b
+    jr z, .notUp
+    inc a
+    cp 10
+    jr c, .up
+    xor a
+.up:
+    ld [hl], a
+.notUp:
+    bit PAD_DOWN, b
+    jr z, .notChange
+    ld a, [hl]
+    sub 1
+    jr nc, .down
+    ld a, 9
+.down:
+    ld [hl], a
+.notChange:
+    ldh a, [hPadNew]
+    and PADF_A | PADF_START
+    jr z, .notStart
+    ld a, SFX_MENU_CONFIRM
+    call PlaySfx
+    ld a, {index_of[pk['target']]}
+    jp StartTransition
+.notStart:
+{back}.show:                      ; the digit left behind, else the chosen one: shown, or every 16 frames not
+    ldh a, [hPassOld]
+    cp $FF
+    jr z, .chosen
+    ld d, a
+    ld a, $FF
+    ldh [hPassOld], a
+    ld a, d
+    ld e, 0
+    jr .patch
+.chosen:
+    ldh a, [hPassPos]
+    ld d, a
+    ld e, c
+    dec e                   ; changed: E = 0, shown
+    jr z, .patch
+    ldh a, [hFrame]
+    and $10
+    ld e, a
+.patch:                     ; D = digit position, E nonzero: hide it
+    ld a, d
+    add a
+    add d
+    add a
+    add a
+    sub d                   ; 11 tiles per digit: 0-9 and blank
+    ld c, a
+    ld a, e
+    and a
+    ld a, 10
+    jr nz, .tile
+    push bc
+    ld a, d
+    call .digitAt
+    pop bc
+.tile:
+    add c
+    add LOW(Scene{i}PassTiles)
+    ld l, a
+    adc HIGH(Scene{i}PassTiles)
+    sub l
+    ld h, a
+    ld a, [hl]
+    ld [wPassPatch], a
+    ld a, d
+    add a
+    add LOW(Scene{i}PassCells)
+    ld l, a
+    adc HIGH(Scene{i}PassCells)
+    sub l
+    ld h, a
+    ld a, [hl+]
+    ld [wPassPatch + 1], a
+    ld a, [hl]
+    ld [wPassPatch + 2], a
+    ld hl, wPassPatch
+    QUEUE_PATCH PassPatch
+    ret
+.leave:                     ; moving: the digit left behind is shown again; A = position
+    ld a, SFX_MENU_MOVE
+    call PlaySfx
+    ldh a, [hPassPos]
+    ldh [hPassOld], a
+    ret
+.digit:                     ; HL -> the chosen digit, A = it
+    ldh a, [hPassPos]
+.digitAt:                   ; (A = position)
+    add LOW(wPassKey)
+    ld l, a
+    adc HIGH(wPassKey)
+    sub l
+    ld h, a
+    ld a, [hl]
+    ret
+
+Scene{i}PassLoad:            ; (screen off) every digit shown, the first chosen
+    ld a, [wPassSet]        ; the first visit since power on: all zeros
+    cp $A5
+    jr z, .set
+    ld a, $A5
+    ld [wPassSet], a
+    ld hl, wPassKey
+    ld b, {len(pk['cells'])}
+    xor a
+.zero:
+    ld [hl+], a
+    dec b
+    jr nz, .zero
+.set:
+    xor a
+    ldh [hPassPos], a
+    ld a, $FF
+    ldh [hPassOld], a
+    ld a, {len(pk['cells'])}
+    ld [wPassPatch], a      ; (the count, here)
+    ld hl, wPassKey
+    ld de, Scene{i}PassCells
+    ld bc, Scene{i}PassTiles
+.digit:
+    ld a, [hl]              ; (anything but 0-9 is 0)
+    cp 10
+    jr c, .ok
+    xor a
+    ld [hl], a
+.ok:
+    inc hl
+    push hl
+    add c
+    ld l, a
+    adc b
+    sub l
+    ld h, a
+    ld a, [hl]              ; its tile
+    push af
+    ld a, [de]
+    ld l, a
+    inc de
+    ld a, [de]
+    ld h, a
+    inc de
+    pop af
+    ld [hl], a
+    ld a, c
+    add 11
+    ld c, a
+    adc b
+    sub c
+    ld b, a
+    pop hl
+    ld a, [wPassPatch]
+    dec a
+    ld [wPassPatch], a
+    jr nz, .digit
+    ret
+
+Scene{i}PassTiles:           ; per digit: its tile showing 0-9, then without it
+{_db([t for cell in s['pass_tiles'] for t in cell], 11)}
+Scene{i}PassCells:           ; their map addresses
+    dw {", ".join(f"$9800 + {(c // CW) * 32 + c % CW}" for c in pk["cells"])}
+"""
 
 
 def _options_load(i, s, opt_index, markers):
@@ -822,9 +1204,396 @@ LevelDigits:
 """
 
 
-def _menu_code(i, s):
+MAP_BYTES = 2 * 18 * 32              # a scene's map and palette map
+FIGHT_BYTES = 12 * 1024             # a fight's poses, sprite tiles and tables (about)
+BANK_THRESHOLD = 20 * 1024          # scene data beyond this leaves too little of 32 KB for code
+
+
+def _bank_switch():
+    """Map the scene's data bank (MBC5) before its load routine runs; it stays mapped while the scene runs."""
+    return """    push hl
+    ldh a, [hScene]
+    add LOW(SceneBanks)
+    ld l, a
+    adc HIGH(SceneBanks)
+    sub l
+    ld h, a
+    ld a, [hl]
+    ld [$2000], a
+    pop hl
+"""
+
+
+def _fight_asm(i, s, index_of, project, banked=False):
+    """Constants, tables and generated HUD code for the fight scene, plus the hand-written kit."""
+    from . import fight as kit
+    ft = s["fight"]
+    nl = "\n"
+    tiles = s["cell_tiles"]
+    pose_ids = "\n".join(f"DEF RP_{p.upper()} EQU {k}" for k, p in enumerate(kit.RIVAL_POSES))
+    pp_ids = "\n".join(f"DEF PP_{p.upper()} EQU {k}" for k, p in enumerate(kit.PLAYER_POSES))
+    tuning = "\n".join(f"DEF FT_{k} EQU {v}" for k, v in kit.TUNING.items())
+
+    def rows(values_for_pose, static):
+        """The rival's map rows in full (32 wide, as DMA writes them), with the pose in his area."""
+        padded = _pad_rows(static, True)
+        out = []
+        for r in range(kit.REGION_H):
+            row = list(padded[(ft["y"] + r) * 32:(ft["y"] + r + 1) * 32])
+            row[ft["x"]:ft["x"] + kit.REGION_W] = values_for_pose[r * kit.REGION_W:(r + 1) * kit.REGION_W]
+            out += row
+        return out
+    poses = [f"RivalMap_{p}:\n" + _db(rows(s["fight_maps"][p], tiles), 32) + "\n"
+             + _db(rows(s["fight_attrs"][p], s["cell_pal"]), 32) for p in kit.RIVAL_POSES]
+    sprites = []
+    for p in kit.PLAYER_POSES:
+        sp = s["fight_sprites"][p]
+        sprites.append(f"Player_{p}:                 ; {len(sp)} sprites: dy, dx, tile, attributes\n    db {len(sp)}\n"
+                       + "\n".join(f"    db {dy}, {dx}, {t}, ${a:02X}" for dy, dx, t, a in sp))
+    ref_sprites = []
+    for p in kit.REF_POSES:
+        sp = s["fight_ref_sprites"][p]
+        ref_sprites.append(f"Ref_{p}:\n    db {len(sp)}\n" + "\n".join(f"    db {dy}, {dx}, {t}, ${a:02X}" for dy, dx, t, a in sp))
+    hud_draw = nl.join(f"    ld a, [wFtHud + {k}]\n    ld [$9800 + {(c // CW) * 32 + c % CW}], a"
+                       for k, c in enumerate(s["fight_hud_cells"]))
+    script = lambda items: nl.join(f"    db OP_{op.upper()}, {arg}" for op, arg in items)
+    timed = nl.join(f"    db {r}, {m}, ${sec // 10}{sec % 10}, OP_{op.upper()}, {arg}" for r, m, sec, op, arg in ft["timed"])
+    obj_bytes = [b for t in s["fight_obj"] for b in encode_tile(list(t))]
+    rival_pals = sorted(set(ft["palettes"].values()))
+    sw = s["fight_swap"]
+    swap_a = max(0, min(sw["count"], 128 - sw["first"]))
+    vram_a = 0x9000 + 16 * sw["first"] if swap_a else 0
+    vram_b = 0x8800 + 16 * (max(sw["first"], 128) - 128)
+    swap_sets = [[b for t in tiles_ for b in encode_tile(list(t))] for tiles_ in sw["sets"]]
+    crowd_y = ft["crowd_row"]
+    flash_upload = nl.join(f"    ld a, $80 | {k * 8}\n    ldh [rBCPS], a\n    ld c, LOW(rBCPD)\n    REPT 8\n        ld a, [hl+]\n        ldh [c], a\n    ENDR"
+                           for k in rival_pals)
+    nes = ft.get("nes")
+    nes_defs, nes_data = "", ""
+    if nes:
+        parts = _nes_parts()
+        hx, hy = nes["home"]
+        off = lambda v, home: max(-127, min(127, round((((v - home + 128) & 0xFF) - 128) * nes["scale"])))
+        sound_head, _, sound_code = KIT_NES_SOUND.partition(";;PART sound")
+        nes_defs = (f"DEF FT_NES EQU 1\nDEF FT_NES_OFFSET EQU {nes['offset']}   ; the fighter's entry in its bank\n"
+                    "DEF FT_NES_DOWN_MAX EQU 8       ; pixels he may move down (his band moves over the floor)\n"
+                    "DEF FT_NES_UP_MAX EQU 48        ; and up (his band rises to the HUD; inside it, over the tail rows)\n"
+                    )
+        set_of = {p: k for k, (name, ps) in enumerate(kit.POSE_SETS.items()) for p in ps}
+        nes_data = f"""
+SECTION "NES fighter", ROMX[$4000]
+NesFighter::                ; Punch-Out!!'s fighter bank, as it was at $8000 (see kit_nes.asm)
+{_db(list(nes["bank"]))}
+NesPoseMap:                 ; NES frame number -> our pose; then the same drawn mirrored
+{_db(nes["frames"])}
+NesOffsetX:                 ; NES X -> pixels right of his place
+{_db([off(v, hx) & 0xFF for v in range(256)])}
+NesOffsetY:                 ; NES Y -> pixels down
+{_db([off(v, hy) & 0xFF for v in range(256)])}
+RivalPoseSet:               ; per pose: the set whose tiles it needs ($FF: always in video memory)
+{_db([set_of.get(p, 0xFF) for p in kit.RIVAL_POSES])}
+{parts["fighter"]}
+
+SECTION "NES Mac", ROMX[$4000]
+NesMac::                    ; Little Mac: Punch-Out!!'s PRG bank B, as it was at $8000
+{_db(list(nes["mac"]))}
+MacPoseMap:                 ; NES Mac frame number -> our player pose
+{_db(nes["mac_frames"])}
+MacOffsetX:                 ; NES $15 -> pixels right of his place ($15 scrolls the NES background, Mac in it: up is left)
+{_db([max(-127, min(127, round((((nes["mac_home"] - v + 128) & 0xFF) - 128) * nes["mac_scale"]))) & 0xFF for v in range(256)])}
+{parts["mac"]}
+
+{parts["head"]}
+SECTION "NES engine: shared", ROM0
+{parts["common"]}
+"""
+        if nes.get("sound"):
+            nes_data += f"""
+{sound_head}
+SECTION "NES sound", ROMX[$4000]
+NesSnd::                    ; Punch-Out!!'s sound bank (PRG bank 8), as it was at $8000 (see kit_nes_sound.asm)
+{_db(list(nes["sound"]))}
+NesSndFix:                  ; and its tables in the fixed bank, NES $F400-$F8FF
+{_db(list(nes["sound_fixed"]))}
+{_dmc_tables(nes)}
+{sound_code}
+"""
+    # his band's last two rows without him: the scene's own tiles, his columns filled from the one beside them
+    tail_t, tail_p = [], []
+    for row in range(ft["y"] + kit.REGION_H - 6, ft["y"] + kit.REGION_H):
+        side = ft["x"] - 1 if ft["x"] > 0 else ft["x"] + kit.REGION_W
+        cols = [side if ft["x"] <= c < ft["x"] + kit.REGION_W else c for c in range(CW)]
+        tail_t += [s["cell_tiles"][row * CW + c] for c in cols]
+        tail_p += [s["cell_pal"][row * CW + c] for c in cols]
+    nes_data += f"""
+SECTION "Fight: band tail", ROM0
+FtTailTiles:
+{_db(_pad_rows(tail_t, True), 32)}
+FtTailAttr:
+{_db(_pad_rows(tail_p, True), 32)}
+"""
+    return f"""; ---- Fight: "{s['name']}" ----
+{nes_defs}
+DEF FT_WIN_SCENE EQU {index_of[ft['win']]}
+DEF FT_LOSE_SCENE EQU {index_of[ft['lose']]}
+DEF FT_CORNER_SCENE EQU {index_of[ft['corner']] if ft['corner'] is not None else '$FF'}   ; between rounds
+DEF FT_REGION_X EQU {ft['x']}
+DEF FT_REGION_W EQU {kit.REGION_W}
+DEF FT_REGION_H EQU {kit.REGION_H}
+DEF FT_REGION_ROW EQU $9800 + {ft['y'] * 32}     ; the rival's first map row
+DEF FT_CROWD_ROW EQU $9800 + {crowd_y * 32}
+DEF FT_CROWD_W EQU {CW}
+DEF FT_FLASH_TILE EQU {s['fight_flash_tile']}
+DEF FT_BAND_TOP EQU {ft['y'] * 8 - 1}               ; LY where his band's scroll starts (a line early: the change lands in time)
+DEF FT_BAND_BOTTOM EQU {(ft['y'] + kit.REGION_H) * 8 - 1}
+DEF FT_TAIL_ROWS EQU 6                              ; off-screen map rows: the background of his band's last rows,
+DEF FT_TAIL_ROW EQU 24                              ; without him, for when he's shown higher in it
+DEF FT_TAIL_SCY EQU (FT_TAIL_ROW - {ft['y'] + kit.REGION_H} + FT_TAIL_ROWS) * 8 & $FF
+DEF FT_HEADROOM EQU 0                               ; his band never rises over the crowd and ropes
+DEF FT_STAND_UP EQU 6                               ; standing, he shifts up into his frame's empty top only
+DEF FT_POSE_BYTES EQU {kit.REGION_H * 32}          ; map rows per pose; the same again for palettes
+DEF FT_HUD_CELLS EQU {len(s['fight_hud_cells'])}
+DEF FT_SWAP_COUNT EQU {sw['count']}                 ; tiles in the shared area (one pose set at a time)
+DEF SET_ATTACK EQU 0
+DEF SET_KNOCKDOWN EQU 1
+DEF SET_SPECIAL EQU 2
+DEF FT_SWAP_A_COUNT EQU {swap_a}
+DEF FT_SWAP_VRAM_A EQU ${vram_a:04X}
+DEF FT_SWAP_VRAM_B EQU ${vram_b:04X}
+DEF FT_SWAP_PER_FRAME EQU 6                         ; original: by CPU (unrolled), a few tiles per VBlank
+DEF FT_SWAP_PER_FRAME_CGB EQU 32                    ; Color: by GDMA
+DEF FT_BAR_CELLS EQU {kit.BAR_CELLS}
+DEF FT_HEALTH EQU {kit.HEALTH}
+DEF FT_OBJ_FIRST EQU {kit.OBJ_FIRST_TILE}
+DEF FT_OBJ_TILES EQU {len(s['fight_obj'])}
+DEF FT_COUNT_TILE EQU {s['fight_count_tile']}
+DEF FT_PLAYER_W EQU {kit.PLAYER_W}
+DEF FT_PLAYER_X EQU {kit.PLAYER_X + 8}       ; OAM coordinates of the player's top-left
+DEF FT_PLAYER_Y EQU {144 - kit.PLAYER_H + 16}
+DEF FT_PLAYER_PAL EQU {ft['player']['palette']}
+DEF FT_TIRED_PAL EQU {ft['player']['tired_palette']}
+DEF FT_REF_ATTR EQU {ft['referee']['palette'] | 0x10}
+DEF FT_STAR_TILE EQU {s['fight_star_tile']}
+DEF FT_DROP_TILE EQU {s['fight_drop_tile']}
+DEF FT_SPARK_TILE EQU {s['fight_spark_tile']}
+DEF FT_FX_STARS EQU {int(ft['effects']['stars'])}             ; sprite effects over the art: 1 on, 0 off
+DEF FT_FX_SWEAT EQU {int(ft['effects']['sweat'])}
+DEF FT_FX_SPARK EQU {int(ft['effects']['spark'])}
+DEF FT_BUBBLE_LEFT EQU {s['fight_bubble'][0]}
+DEF FT_BUBBLE_RIGHT EQU {s['fight_bubble'][1]}
+DEF FT_STAR_X EQU {ft['x'] * 8 + 32 + 8 - 4}       ; OAM x/y of the circle around his head (standing)
+DEF FT_STAR_Y EQU {ft['y'] * 8 + 16 + 2}
+DEF FT_REF_Y EQU {kit.REF_Y}
+DEF FT_SAY_Y EQU {kit.REF_Y - 4}
+DEF FT_PLAYER_GETUP_1 EQU {kit.PLAYER_GETUP_HEALTH[0]}
+DEF FT_PLAYER_GETUP_2 EQU {kit.PLAYER_GETUP_HEALTH[1]}
+{pose_ids}
+{pp_ids}
+{tuning}
+
+{KIT_FIGHT}
+Scene{i}Update:
+    jp FightUpdate
+
+FtHudDraw:                  ; during VBlank: every HUD tile
+{hud_draw}
+    ret
+
+FtFlashPalettes:            ; during VBlank, Color only: the rival's palettes, white-flashed or normal
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    ldh a, [hFtFlashShown]
+    and a
+    ld hl, RivalPalNormal
+    jr z, .upload
+    ld hl, RivalPalFlash
+.upload:
+{flash_upload}
+    ret
+
+SECTION "Data: Rival poses", {"ROMX" if banked else "ROM0"}, ALIGN[4]   ; per pose: 10 full map rows, then their palettes
+{nl.join(poses)}
+
+SECTION "Data: Rival swap", {"ROMX" if banked else "ROM0"}, ALIGN[4]
+FtSwapSet0:                 ; attack poses (loaded with the scene, and put back)
+{_db(swap_sets[0])}
+FtSwapSet1:                 ; knockdown
+{_db(swap_sets[1])}
+FtSwapSet2:                 ; special: the taunt, the arm pop
+{_db(swap_sets[2])}
+
+SECTION "Data: Fight", {"ROMX" if banked else "ROM0"}   ; mapped while the fight runs
+RivalMaps:
+    dw {", ".join(f"RivalMap_{p}" for p in kit.RIVAL_POSES)}
+CrowdMap:                   ; the crowd row's tiles, put back after each camera flash
+    db {", ".join(f"${t:02X}" for t in s['cell_tiles'][crowd_y * CW:(crowd_y + 1) * CW])}
+RivalPalNormal:
+    dw {", ".join(_rgb555(project["palettes"][k]).split(", ")[j] for k in rival_pals for j in range(4))}
+RivalPalFlash:              ; a hit flushes him red; the background and outline stay
+    dw {", ".join(_rgb555([c if j in (0, 3) else ([31, 16, 12] if j == 1 else [26, 4, 4]) for j, c in enumerate(project["palettes"][k])]).split(", ")[j] for k in rival_pals for j in range(4))}
+GetupPlan:                  ; per knockdown: count he gets up at, health then
+    db {", ".join(f"{c}, {h}" for c, h in kit.GETUP_PLAN)}
+RivalScript:                ; op, argument
+{script(ft['opening'])}
+RivalLoop:
+{script(ft['loop'])}
+    db $FF
+RivalTimed:                 ; round, minute, second (BCD), op, argument
+{timed}
+    db $FF
+FtHudLUT:                   ; per HUD cell: its tile for each value (digits 0-9, bars 0-8)
+{_db(s['fight_lut'], 10)}
+PlayerPoses:
+    dw {", ".join(f"Player_{p}" for p in kit.PLAYER_POSES)}
+{nl.join(sprites)}
+RefPoses:
+    dw {", ".join(f"Ref_{p}" for p in kit.REF_POSES)}
+{nl.join(ref_sprites)}
+FtObjTiles:                 ; the player's {len(s['fight_obj']) - len(kit.COUNT_GLYPHS)} tiles, then the count's glyphs
+{_db(obj_bytes)}
+{nes_data}
+SECTION "Code: Scenes after the fight", ROM0   ; the next scenes' code must not land in the data bank
+
+"""
+
+
+def _confirm_asm(i, s, project):
+    """A menu choice played out (menu["confirm"]): the steps as data, and the sprite's OAM template."""
+    nl = "\n"
+    c = s["menu"]["confirm"]
+    slots = s.get("pal_slots") or {p: p for p in range(8)}
+    lum = lambda col: 0.299 * col[0] + 0.587 * col[1] + 0.114 * col[2]
+    shade = lambda col: 3 - min(3, int(lum(col) / 31 * 4))
+    used = set(s.get("pal_used") or s["cell_pal"])
+    rows = []
+    for st in c["steps"]:
+        flags = (1 if st["colors"] else 0) | (2 if st["front"] else 0)
+        cols = st["colors"] or [[0, 0, 0]] * 3
+        rgb = [b for col in cols for b in (col[0] | col[1] << 5 & 0xFF, (col[1] >> 3) | col[2] << 2)]
+        obp = sum(shade(col) << (2 * (k + 1)) for k, col in enumerate(cols))
+        # the original Game Boy: one palette for all, so a shade lighter for the flash, all dark when they go black
+        black = st["bg"] and all(max(max(col) for col in cs) == 0 for cs in st["bg"].values())
+        lighter = any(lum(cs[0]) > 4 for cs in st["bg"].values())
+        bgp = 0xFF if black else 0b10010000 if lighter else 0b11100100
+        recolor = []
+        for pal, cs in sorted(st["bg"].items()):
+            if pal not in used:
+                raise ProjectError([f'Scene "{s["name"]}": the confirm animation recolors a palette the scene doesn\'t use.'])
+            recolor += [slots[pal]] + [b for col in cs for b in (col[0] | col[1] << 5 & 0xFF, (col[1] >> 3) | col[2] << 2)]
+        rows.append(_db([st["frames"], st["sfx"], flags] + rgb + [obp, bgp, len(st["bg"])] + recolor))
+    oam = [b for y, x, t in c["oam"] for b in (y + 16, x + 8, 2 + t)]
+    return f"""Scene{i}ConfirmSteps:        ; per step: frames, NES effect, shown/in front, 3 colors, original's OBP1 and BGP, palettes
+{nl.join(rows)}
+    db 0
+Scene{i}ConfirmOAM:          ; y, x, tile per sprite
+{_db(oam, 24)}
+    db 0
+Scene{i}ConfirmTiles:
+{_db([b for t in c["tiles"] for b in encode_tile(t)])}
+"""
+
+
+def _menu_code(i, s, fade=False):
+    nl = "\n"
     m = s["menu"]
     n = len(m["items"])
+    confirm_start = f"""    ld hl, Scene{i}ConfirmSteps  ; the choice plays out first
+    ld a, l
+    ld [wConfirmPtr], a
+    ld a, h
+    ld [wConfirmPtr + 1], a
+    ld hl, Scene{i}ConfirmOAM
+    ld a, l
+    ld [wConfirmOAM], a
+    ld a, h
+    ld [wConfirmOAM + 1], a
+    ld a, 1
+    ldh [hTimer], a
+    SET_UPDATE Scene{i}Confirm
+    ret""" if m.get("confirm") else f"""    ld a, {m['blinks'] * 2 + 1}
+    ldh [hCounter], a
+    ld a, 1
+    ldh [hTimer], a
+    SET_UPDATE Scene{i}Blink"""
+    confirm = f"""
+Scene{i}Confirm:            ; a step at a time (VBlank shows it), then the chosen item's scene
+    ld hl, hTimer
+    dec [hl]
+    ret nz
+    ld a, [wConfirmPtr]
+    ld l, a
+    ld a, [wConfirmPtr + 1]
+    ld h, a
+    ld a, [hl+]
+    and a
+    jr z, .done
+    ldh [hTimer], a
+    ld a, [hl+]             ; its sound: the NES game's effect, with its engine
+IF DEF(FT_NES_SOUND)
+    and a
+    jr z, .quiet
+    push hl
+    call NesSfx
+    pop hl
+.quiet:
+ENDC
+    ld de, wConfirmStep     ; the step, for VBlank
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    ld b, 9                 ; colors, OBP1, BGP, count
+.copy:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .copy
+    dec de
+    ld a, [de]              ; and its palettes: 9 bytes each
+    inc de
+    ld c, a
+    and a
+    jr z, .copied
+.palette:
+    ld b, 9
+.palByte:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .palByte
+    dec c
+    jr nz, .palette
+.copied:
+    ld a, l
+    ld [wConfirmPtr], a
+    ld a, h
+    ld [wConfirmPtr + 1], a
+    ld a, 1
+    ldh [hConfirmDirty], a
+    ret
+.done:
+    ld a, [wConfirmStep]
+    and a
+    jr z, .go
+    xor a                   ; the sprite away first (next VBlank), then go
+    ld [wConfirmStep], a
+    ld [wConfirmStep + 9], a
+    inc a
+    ldh [hConfirmDirty], a
+    ldh [hTimer], a
+    ret
+.go:
+{"    ld a, FADE_STEPS        ; the steps left the screen faded: on with the fade from there" + nl + "    ldh [hFadeStep], a" + nl if fade and m["confirm"]["faded"] else ""}    ldh a, [hSel]
+    add LOW(Scene{i}ItemTarget)
+    ld l, a
+    adc HIGH(Scene{i}ItemTarget)
+    sub l
+    ld h, a
+    ld a, [hl]
+    jp StartTransition
+""" if m.get("confirm") else ""
     bob = f"""    ldh a, [hFrame]         ; the bob only changes every 8 frames
     ld b, a
     and 7
@@ -843,11 +1612,16 @@ def _menu_code(i, s):
     add {cursor_x(m) + 8}
     ldh [hCursorX], a
 """ if m["cursor_bob"] else ""
-    return f"""Scene{i}Update:              ; menu: up/down to move, A or Start to choose
+    select = """    bit 2, a                ; Select moves down too
+    jr z, .noSelect
+    or PADF_DOWN
+.noSelect:
+""" if m.get("select_moves") else ""
+    return f"""Scene{i}Update:              ; menu: up/down{"/Select" if select else ""} to move, A or Start to choose
     ldh a, [hPadRepeat]
     and a
     jr z, .cursor           ; nothing pressed: just animate
-    ld b, a
+{select}    ld b, a
     and PADF_UP | PADF_DOWN
     jr z, .notMove
     ld a, SFX_MENU_MOVE
@@ -877,11 +1651,7 @@ def _menu_code(i, s):
     jr z, .cursor
     ld a, SFX_MENU_CONFIRM
     call PlaySfx
-    ld a, {m['blinks'] * 2 + 1}
-    ldh [hCounter], a
-    ld a, 1
-    ldh [hTimer], a
-    SET_UPDATE Scene{i}Blink
+{confirm_start}
 .cursor:                    ; ease toward the chosen item: half the distance each frame
     ldh a, [hSel]
     add LOW(Scene{i}CursorY)
@@ -945,7 +1715,7 @@ Scene{i}Blink:              ; flash the chosen item, then go to its scene
     ld h, a
     ld a, [hl]
     jp StartTransition
-"""
+{confirm}"""
 
 
 def _menu_data(i, s, index_of):
@@ -964,15 +1734,21 @@ def _menu_data(i, s, index_of):
 def generate_asm(project):
     keep = reachable_scenes(project)
     index_of = {orig: new for new, orig in enumerate(keep)}
-    scenes = [project["scenes"][i] for i in keep]
+    scenes = [hw_palettes(project["scenes"][i]) for i in keep]
     menus = any(s["menu"] for s in scenes)
     presses = any(s["press"] for s in scenes)
     options = any(s["options"] for s in scenes)
+    passes = any(s.get("pass_key") for s in scenes)
+    confirms = any((s["menu"] or {}).get("confirm") for s in scenes)
     markers = any(r.get("slider") for s in scenes if s["options"] for r in s["options"]["rows"])
     puzzles = [i for i, sc in enumerate(scenes) if sc.get("puzzle")]
     if len(puzzles) > 1:
         raise ProjectError(["A project can have one puzzle grid scene for now."])
-    repeat = menus or options or bool(puzzles)
+    fights = [i for i, sc in enumerate(scenes) if sc.get("fight")]
+    if len(fights) > 1:
+        raise ProjectError(["A project can have one fight scene for now."])
+    slides = any(s.get("slide") for s in scenes)
+    repeat = menus or options or bool(puzzles) or passes
     opt_index, opt_rows = {}, []
     for i, sc in enumerate(scenes):
         for r_i, r in enumerate((sc["options"] or {}).get("rows", [])):
@@ -982,15 +1758,23 @@ def generate_asm(project):
     if len(set(names)) != len(names):
         dup = sorted({n for n in names if names.count(n) > 1})
         raise ProjectError([f"Two options screens use the same option name ({', '.join(dup)}); rename one."])
-    patches = options or menus or any(s["press"] and (s["press"]["area"] or (s["press"]["prompt"] and s["press"]["prompt"]["blink"]))
+    patches = options or menus or passes or any(s["press"] and (s["press"]["area"] or (s["press"]["prompt"] and s["press"]["prompt"]["blink"]))
                            for s in scenes)
     prompt_blink = any(s["press"] and s["press"]["prompt"] and s["press"]["prompt"]["blink"] for s in scenes)
-    interactive = menus or presses or options or bool(puzzles) or any(s["back"] is not None for s in scenes)
+    interactive = menus or presses or options or passes or bool(puzzles) or bool(fights) or slides or \
+        any(s["back"] is not None for s in scenes)
     if len(scenes) == 1 and not interactive:
         return _static_asm(project, scenes[0])
 
-    sprites = (menus or options) and project["cursor"] is not None
+    cursor_on = (menus or options) and project["cursor"] is not None
+    sprites = cursor_on or bool(fights)
+    # Past what a plain 32 KB cartridge holds, scene data moves to switchable banks (MBC5).
+    data_bytes = sum(len(s["tiles"]) * 16 + MAP_BYTES for s in scenes) + sum(FIGHT_BYTES for s in scenes if s.get("fight")) \
+        + sum(0x4800 + (0x4000 if s["fight"]["nes"].get("sound") else 0)
+              for s in scenes if (s.get("fight") or {}).get("nes"))
+    banked = data_bytes > BANK_THRESHOLD
     fade = project["transition"]
+    nes_sound_any = any((s.get("fight") or {}).get("nes", {}).get("sound") for s in scenes)
     n_bg, n_obj = len(project["palettes"]), len(project["obj_palettes"]) if sprites else 0
     lcdc = LCDC_BG | (LCDC_OBJ if sprites else 0)
     steps = FADE_STEPS if fade else 0
@@ -1016,6 +1800,10 @@ def generate_asm(project):
         hram += ["hSel: db"]
     if options:
         hram += ["hOptRow: db"]
+    if passes:
+        hram += ["hPassPos: db", "hPassOld: db"]
+    if confirms:
+        hram += ["hConfirmDirty: db        ; a menu choice's animation step for VBlank"]
     if repeat:
         hram += ["hPadRepeat: db          ; pressed this frame, or held long enough to repeat", "hRepeatTimer: db"]
     if markers:
@@ -1030,12 +1818,26 @@ def generate_asm(project):
         hram += ["hPatchJump: ds 3         ; JP to the pending map patch", "hPatchSrc: dw", "hPatchPending: db"]
     if prompt_blink:
         hram += ["hPromptHidden: db"]
-    if sprites:
+    if slides:
+        hram += ["hScrollY: db            ; SCY: nonzero while a scene slides up into view"]
+    if cursor_on:
         hram += ["hCursorY: db", "hCursorX: db"]
+    if fights:
+        hram += ["hFtActive: db", "hFtHudReady: db", "hFtScx: db", "hFtBandX: db", "hFtBandY: db", "hFtBandTop: db", "hFtBandBottom: db", "hFtBandOn: db", "hFtFlash: db",
+                 "hFtFlashShown: db", "hOAMDMA: ds 8           ; OAM DMA routine (runs from HRAM)"]
+        if any((scenes[i]["fight"].get("nes") or {}).get("sound") for i in fights):
+            hram += ["hNesSound: db           ; nonzero: the NES's sound engine has the sound hardware"]
     hram.append("hVarsEnd:")
 
     vblank_work = []
-    if sprites:
+    if slides:
+        vblank_work.append("""    ldh a, [hScrollY]       ; a scene sliding in: this frame's scroll
+    ldh [rSCY], a""")
+    if fights:
+        vblank_work.append("""    ldh a, [hFtActive]      ; fight: sprites, the rival's pose, the HUD
+    and a
+    call nz, FtVBlank""")
+    if cursor_on:
         vblank_work.append("""    ldh a, [hCursorY]       ; a few sprites: write them straight to OAM (cheaper than DMA)
     ld [OAM_CURSOR], a
     ldh a, [hCursorX]
@@ -1045,6 +1847,10 @@ def generate_asm(project):
     ld [OAM_CURSOR + 4], a
     ldh a, [hMarkerX]
     ld [OAM_CURSOR + 5], a""")
+    if confirms:
+        vblank_work.append("""    ldh a, [hConfirmDirty]  ; a menu choice's animation: its sprite and colors
+    and a
+    call nz, ConfirmApply""")
     if fade:
         vblank_work.append("    ldh a, [hPalDirty]\n    and a\n    call nz, UploadPalettes")
     if puzzles:
@@ -1072,13 +1878,12 @@ def generate_asm(project):
 
     boot = []
     if sprites:
-        boot.append(f"""    ld hl, $FE00            ; clear OAM (it's random at power-on); A = 0
-    ld b, 160
-.clearOAM:
-    ld [hl+], a
-    dec b
-    jr nz, .clearOAM
-    ld a, {project['cursor']['palette']}
+        boot.append("""    call ResetOAM           ; OAM is random at power-on""")
+    if fights:
+        boot.append("""    xor a                   ; RAM is random at power-on: the first fight is a new one
+    ld [wFtResume], a""")
+    if cursor_on:
+        boot.append(f"""    ld a, {project['cursor']['palette']}
     ld [OAM_CURSOR + 3], a  ; cursor palette (Color) / OBP0 (original); tile 0
     ld hl, CursorTile       ; sprite tile 0
     ld de, $8000
@@ -1139,24 +1944,30 @@ def generate_asm(project):
     SET_UPDATE FadeIn""")
     elif interactive:
         finish.append("    call SetSceneUpdate")
-    if sprites:
+    if cursor_on:
         finish.append("""    ldh a, [hCursorY]       ; OAM is writable while the screen is off
     ld [OAM_CURSOR], a
     ldh a, [hCursorX]
     ld [OAM_CURSOR + 1], a""")
 
-    updates = [f"Scene{i}Update" if s["menu"] or s["press"] or s["options"] or s.get("puzzle") or s["back"] is not None else "NoUpdate"
+    updates = [f"Scene{i}Update" if s["menu"] or s["press"] or s["options"] or s.get("puzzle") or s.get("fight") or s.get("pass_key")
+               or s["back"] is not None else "NoUpdate"
                for i, s in enumerate(scenes)]
     scene_code = []
     for i, s in enumerate(scenes):
         if s["menu"]:
-            scene_code.append(_menu_code(i, s))
+            scene_code.append(_menu_code(i, s, bool(fade)))
         elif s["press"]:
-            scene_code.append(_press_code(i, s, index_of))
+            scene_code.append(_press_code(i, s, index_of, corner=any(
+                f.get("fight") and f["fight"]["corner"] is not None and index_of[f["fight"]["corner"]] == i for f in scenes)))
         elif s["options"]:
             scene_code.append(_options_code(i, s, index_of, opt_index))
+        elif s.get("pass_key"):
+            scene_code.append(_pass_code(i, s, index_of))
         elif s.get("puzzle"):
             scene_code.append(_puzzle_asm(i, s, index_of, opt_rows))
+        elif s.get("fight"):
+            scene_code.append(_fight_asm(i, s, index_of, project, banked))
         elif s["back"] is not None:
             scene_code.append(f"""Scene{i}Update:              ; B goes back
     ldh a, [hPadNew]
@@ -1168,7 +1979,7 @@ def generate_asm(project):
     jp StartTransition
 """)
 
-    sfx_defs, sfx_data = sfx.asm_data()
+    sfx_defs, sfx_data = sfx.asm_data(project.get("sound", "arcade"), sfx_groups(scenes))
     option_defs = "\n".join([f"DEF OPTION_COUNT EQU {len(opt_rows)}"] + [f"DEF {r['symbol']} EQU {k}   ; {r['label']}" for k, r in enumerate(opt_rows)]) if options else ""
     out = [f"""; Generated by gbstage from "{project['name']}". Changes here are overwritten on the next build.
 
@@ -1179,8 +1990,8 @@ DEF FADE_STEPS EQU {steps}
 DEF FADE_FRAMES EQU {fade['frames'] if fade else 1}
 DEF BLINK_FRAMES EQU {BLINK_FRAMES}
 DEF LCDC_ON EQU %{lcdc:08b}
-
-; joypad bits in hPad / hPadNew (d-pad in the high nibble)
+{SLIDE_DEFS if slides else ""}
+{"DEF FT_NES_SOUND EQU 1         ; the fight's NES sound engine plays the game's sounds" + nl if nes_sound_any else ""}; joypad bits in hPad / hPadNew (d-pad in the high nibble)
 DEF PAD_A EQU 0
 DEF PAD_B EQU 1
 DEF PAD_START EQU 3
@@ -1196,7 +2007,7 @@ DEF PADF_DOWN EQU 1 << PAD_DOWN
 DEF PADF_LEFT EQU 1 << PAD_LEFT
 DEF PADF_RIGHT EQU 1 << PAD_RIGHT
 {sfx_defs}
-
+{'DEF rOBP1 EQU $FF49' + nl + 'DEF PADF_SELECT EQU 1 << 2' + nl if fights else ('DEF rOBP1 EQU $FF49' + nl if confirms else '')}
 MACRO PZ_SFX                ; play sound effect \\1
     ld a, \\1
     call PlaySfx
@@ -1235,7 +2046,7 @@ MACRO SET_UPDATE            ; run \\1 every frame from now on
     ldh [hUpdateJump + 2], a
 ENDM
 
-SECTION "Header", ROM0[$100]
+{"SECTION " + chr(34) + "Interrupt: VBlank" + chr(34) + ", ROM0[$40]" + nl + "    reti                    ; VBlank only wakes HALT; the work runs in the main loop" + nl + nl + "SECTION " + chr(34) + "Interrupt: STAT" + chr(34) + ", ROM0[$48]" + nl + "    jp FtStat               ; the fight's mid-frame scroll for the rival's band" + nl + nl if fights else ""}SECTION "Header", ROM0[$100]
     nop
     jp Start
     ds $150 - @, 0
@@ -1274,7 +2085,7 @@ MainLoop:
     ldh [rIF], a
     halt                    ; sleep until VBlank
     nop                     ; HALT may run the next byte twice if VBlank arrives just before it
-{nl.join(vblank_work)}
+{"    ldh a, [rLY]            ; a fight's mid-frame scroll interrupt also wakes HALT: sleep on until VBlank" + nl + "    cp 144" + nl + "    jr c, MainLoop" + nl if fights else ""}{nl.join(vblank_work)}
 VBlankDone:                 ; everything that must happen during VBlank is done
     ld hl, hFrame
     inc [hl]
@@ -1306,7 +2117,7 @@ VBlankDone:                 ; everything that must happen during VBlank is done
     ldh [hPadNew], a        ; pressed this frame
     ld a, b
     ldh [hPad], a           ; held
-{REPEAT_CODE if repeat else ""}    call hUpdateJump
+{REPEAT_CODE if repeat else ""}{SLIDE_STEP_CODE if slides else ""}    call hUpdateJump
     call SfxUpdate
     jp MainLoop
 
@@ -1325,7 +2136,7 @@ LoadScene:
     xor a
     ldh [rLCDC], a
 .screenOff:
-    ldh a, [hScene]
+{"    call ResetOAM           ; no sprites left over from the last scene" + nl if fights else ""}    ldh a, [hScene]
     add a
     add LOW(SceneLoads)
     ld l, a
@@ -1335,10 +2146,10 @@ LoadScene:
     ld a, [hl+]
     ld h, [hl]
     ld l, a
-    call JumpHL
+{"    xor a                   ; not sliding unless this scene starts one" + nl + "    ldh [hScrollY], a" + nl if slides else ""}{_bank_switch() if banked else ""}    call JumpHL
 {nl.join(finish)}
     call UploadPalettes
-    ld a, LCDC_ON
+{"    ldh a, [hScrollY]" + nl + "    ldh [rSCY], a" + nl if slides else ""}    ld a, LCDC_ON
     ldh [rLCDC], a
     ret
 
@@ -1347,8 +2158,9 @@ JumpHL:
 
 SceneLoads:
     dw {", ".join(f"Scene{i}Load" for i in range(len(scenes)))}
+{"SceneBanks:" + nl + "    db " + ", ".join(f"BANK(Scene{i}Tiles)" for i in range(len(scenes))) if banked else ""}
 
-{nl.join(_scene_load(i, s, sprites, opt_index, markers) for i, s in enumerate(scenes))}
+{nl.join(_scene_load(i, s, cursor_on, opt_index, markers) for i, s in enumerate(scenes))}{nl + nl + SLIDE_FILL.rstrip() if slides else ""}
 
 ; Copy C tiles (1-128) from HL to DE.
 CopyTiles:
@@ -1460,12 +2272,12 @@ UploadPalettes:
     ld h, a
     ld a, [hl]
     ldh [rBGP], a
-{'    ldh [rOBP0], a' + nl if sprites else ''}    ret
+{'    ldh [rOBP0], a' + nl if sprites else ''}{'    ldh [rOBP1], a' + nl if fights else ''}    ret
 
 ScenePalettes:
     dw {", ".join(f"Scene{i}Palettes" for i in range(len(scenes)))}
 
-{nl.join(_scene_palettes(i, s, project, sprites) for i, s in enumerate(scenes))}
+{nl.join(_scene_palettes(i, s, project, cursor_on) for i, s in enumerate(scenes))}
 
 SECTION "Data: Palettes", ROM0
 FadeColor:                  ; RGB555: {n_bg} background{f" + {n_obj} sprite" if n_obj else ""} palettes per fade step
@@ -1546,6 +2358,8 @@ FadeIn:
                 patch_code.append(_patch_routine(f"Scene{i}Item{n}Patch", [(row * 32 + m["x"], len(it["label"]))],
                                                  f'menu item "{it["label"]}"'))
             patch_data.append(_menu_data(i, s, index_of))
+            if s["menu"].get("confirm"):
+                patch_data.append(_confirm_asm(i, s, project))
         elif s["options"]:
             for r_i, r in enumerate(s["options"]["rows"]):
                 cells = len(s["option_strips"][r_i][0])
@@ -1564,6 +2378,14 @@ FadeIn:
     if patch_data:
         out.append('SECTION "Data: Menus and screens", ROM0\n' + nl.join(patch_data) + "\n")
     if sprites:
+        reset = ["    ld hl, $FE00", "    ld b, 160", "    xor a", ".clear:", "    ld [hl+], a", "    dec b", "    jr nz, .clear"]
+        if cursor_on:
+            reset += [f"    ld a, {project['cursor']['palette']}", "    ld [OAM_CURSOR + 3], a  ; cursor: tile 0, its palette"]
+        if markers:
+            reset += ["    ld a, 1", "    ld [OAM_CURSOR + 6], a  ; slider marker: tile 1", f"    ld a, {project['cursor']['palette']}",
+                      "    ld [OAM_CURSOR + 7], a"]
+        out.append('SECTION "Code: OAM", ROM0\nResetOAM:                   ; screen off or VBlank: every sprite hidden\n' + nl.join(reset) + "\n    ret\n")
+    if cursor_on:
         out.append(f"""SECTION "Data: Sprites", ROM0
 CursorTile:
     db {", ".join(f"${b:02X}" for b in encode_tile(project['cursor']['pixels']))}
@@ -1575,6 +2397,102 @@ BobTable:
 MarkerTile:
     db {", ".join(f"${b:02X}" for b in encode_tile(MARKER))}
 """)
+    if confirms:
+        out.append("""SECTION "Menu confirm", WRAM0
+wConfirmPtr: dw             ; the next step
+wConfirmOAM: dw             ; the sprite's OAM template
+wConfirmStep: ds 1 + 9 + 9 * 8  ; the step VBlank shows: flags, colors, OBP1, BGP, count, palettes
+
+SECTION "Code: Menu confirm", ROM0
+ConfirmApply:               ; (VBlank) the step: its sprites (shown or not, in front or behind), their colors, the palettes
+    xor a
+    ldh [hConfirmDirty], a
+    ld a, [wConfirmStep]
+    ld b, a                 ; bit 0 shown, bit 1 in front
+    ld c, $17               ; attributes: Color palette 7, OBP1, behind the background...
+    bit 1, a
+    jr nz, .front
+    set 7, c
+.front:
+    ld a, [wConfirmOAM]
+    ld l, a
+    ld a, [wConfirmOAM + 1]
+    ld h, a
+    ld de, $FE08
+.sprite:
+    ld a, [hl+]
+    and a
+    jr z, .colors
+    bit 0, b
+    jr nz, .y
+    xor a                   ; hidden
+.y:
+    ld [de], a
+    inc e
+    ld a, [hl+]
+    ld [de], a
+    inc e
+    ld a, [hl+]
+    ld [de], a
+    inc e
+    ld a, c
+    ld [de], a
+    inc e
+    jr .sprite
+.colors:
+    ldh a, [hIsCGB]
+    and a
+    jr z, .original
+    ld a, $80 | 7 * 8 + 2   ; Color: sprite palette 7, colors 1-3
+    ldh [rOCPS], a
+    ld hl, wConfirmStep + 1
+    ld c, LOW(rOCPD)
+    REPT 6
+        ld a, [hl+]
+        ldh [c], a
+    ENDR
+    ld a, [wConfirmStep + 9]
+    and a
+    ret z
+    ld b, a
+    ld hl, wConfirmStep + 10
+.palette:
+    ld a, [hl+]             ; its slot
+    add a
+    add a
+    add a
+    or $80
+    ldh [rBCPS], a
+    ld c, LOW(rBCPD)
+    REPT 8
+        ld a, [hl+]
+        ldh [c], a
+    ENDR
+    dec b
+    jr nz, .palette
+    ret
+.original:
+    ld a, [wConfirmStep + 7]
+    ldh [rOBP1], a
+    ld a, [wConfirmStep + 8]
+    ldh [rBGP], a
+    ret
+""")
+    if passes:
+        out.append("""SECTION "Pass key", WRAM0
+wPassKey: ds 10             ; the digits entered (kept between visits)
+wPassPatch: ds 3            ; the digit tile being drawn, and where
+wPassSet: db                ; $A5 once the digits are set up
+
+SECTION "Code: Pass key patch", ROM0
+PassPatch:                  ; (VBlank) HL -> tile, map address
+    ld a, [hl+]
+    ld e, [hl]
+    inc hl
+    ld d, [hl]
+    ld [de], a
+    ret
+""")
     if options:
         out.append(f"""SECTION "Options", WRAM0
 wOptions: ds OPTION_COUNT   ; current value of each option (0 = first choice / minimum)
@@ -1583,9 +2501,12 @@ SECTION "Data: Option defaults", ROM0
 OptionDefaults:
     db {", ".join(str(r["default"]) for r in opt_rows)}
 """)
-    out.append(KIT_SFX)
+    nes_sound = any((s.get("fight") or {}).get("nes", {}).get("sound") for s in scenes)
+    out.append(KIT_SFX if nes_sound else re.sub(r"IF DEF\(FT_NES_SOUND\)\n.*?ENDC\n", "", KIT_SFX, flags=re.S))
     out.append('SECTION "Data: Sound effects", ROM0\n' + sfx_data + "\n")
-    out += [_scene_data(i, s) for i, s in enumerate(scenes)]
+    if nes_sound:                   # each effect's counterpart in the NES game (an SQ1 effect; 0: none)
+        out.append("SfxNes:\n" + _db([NES_SFX.get(n, 0) for n in sfx.effects(project.get("sound", "arcade"), sfx_groups(scenes))]) + "\n")
+    out += [_scene_data(i, s, banked) for i, s in enumerate(scenes)]
     out.append('SECTION "Variables", HRAM\n' + nl.join(hram) + "\n")
     return nl.join(out)
 

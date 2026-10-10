@@ -70,7 +70,10 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass                    # the editor moved on (a newer build replaced this one)
 
     def _file(self, root, rel):
         root = root.resolve()
@@ -108,8 +111,8 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(rom)
             return
-        if path == "/api/font.txt":
-            return self._file(FONT_FILE.parent, FONT_FILE.name)
+        if path in ("/api/font.txt", "/api/font-bold.txt"):
+            return self._file(FONT_FILE.parent, path[len("/api/"):])
         if path.startswith("/emulator/"):
             return self._file(deps.emulator_dir(), path[len("/emulator/"):])
         if path == "/":

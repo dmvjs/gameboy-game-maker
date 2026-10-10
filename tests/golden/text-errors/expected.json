@@ -1,0 +1,8 @@
+{
+  "errors": [
+    "Scene \"Credits\": the text \"TOO LONG FOR THE ROW!\" runs off screen.",
+    "Scene \"Credits\": the text \"OK\" runs off screen.",
+    "Scene \"Credits\": a text label needs characters from the font.",
+    "Scene \"Credits\": the text \"SLOT\" needs a color slot 1-4."
+  ]
+}

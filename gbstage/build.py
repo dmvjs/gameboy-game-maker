@@ -35,8 +35,10 @@ def build_rom(asm_source, title, cgb=False, info=None):
         map_file, sym_file = Path(tmp) / "game.map", Path(tmp) / "game.sym"
         src.write_text(asm_source)
         _run("rgbasm", [deps.rgbds_tool(info, "rgbasm"), "-o", str(obj), str(src)])
-        _run("rgblink", [deps.rgbds_tool(info, "rgblink"), "-t", "-m", str(map_file), "-n", str(sym_file), "-o", str(rom), str(obj)])   # -t: a plain 32 KB cartridge, all of it fixed
-        fix = [deps.rgbds_tool(info, "rgbfix"), "-v", "-p", "0xFF", "-t", title]
+        banked = "ROMX" in asm_source       # data in switchable banks: an MBC5 cartridge; otherwise a plain 32 KB one
+        link = [deps.rgbds_tool(info, "rgblink")] + ([] if banked else ["-t"])
+        _run("rgblink", link + ["-m", str(map_file), "-n", str(sym_file), "-o", str(rom), str(obj)])
+        fix = [deps.rgbds_tool(info, "rgbfix"), "-v", "-p", "0xFF", "-t", title] + (["-m", "0x19"] if banked else [])
         if cgb:
             fix.append("-c")
         _run("rgbfix", fix + [str(rom)])

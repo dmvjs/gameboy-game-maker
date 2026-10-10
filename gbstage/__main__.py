@@ -142,6 +142,9 @@ def cmd_test(args):
         from . import kittests
         print()
         ok = kittests.run() and ok
+        from . import nestests
+        print("\nNES opponent engine (the Game Boy port against the original code)\n")
+        ok = nestests.run() and ok
     if args.cpu_roms:
         from . import cputests
         print()

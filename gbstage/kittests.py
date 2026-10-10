@@ -39,7 +39,8 @@ class Game:
         self._vb_start = None
         self.m.vblank_hook = self._on_vblank
         self.sounds = []          # (frame, effect name, transpose) for every PlaySfx call
-        self._sfx_names = list(sfx.SFX)
+        self._sfx_names = list(sfx.effects(project.get("sound", "arcade"), codegen.sfx_groups(
+            [project["scenes"][i] for i in codegen.reachable_scenes(project)])))
         while self.m.cpu.pc != self.L["MainLoop"]:
             self.m.step()
 

@@ -3,6 +3,8 @@ import { DMG_SHADES, to8, from8, hex, parseHex, gbcScreen, rgbToHsv, hsvToRgb, s
 import { initSystemCheck, loadBinjgb } from './syscheck.js';
 import { Player, asOriginalGameBoy, audioContext } from './player.js';
 import { capsuleClinic, CLINIC_VERSION } from './examples.js';
+import { macVsJoe, MAC_VS_JOE_VERSION } from './mac-vs-joe.js';
+import { readImage, importRival, importPlayer, rivalSheet, playerSheet, PLAYER_POSES, PW, PH, PLAYER_X } from './importer.js';
 
 const $ = id => document.getElementById(id);
 const STORAGE_KEY = 'gbstage.project';
@@ -11,6 +13,7 @@ const TOOL_NAMES = { pencil: 'Pencil', eraser: 'Eraser', fill: 'Fill', picker: '
 // The font is shared with the code generator, so menu text here matches the ROM exactly.
 try {
   M.setFont(await fetch('/api/font.txt').then(r => r.text()));
+  M.setFont(await fetch('/api/font-bold.txt').then(r => r.text()), 'bold');
 } catch {
   M.setFont('');
 }
@@ -52,6 +55,7 @@ const state = {
   project: saved || M.newPressStartTemplate(),
   scene: 0,
   frame: 'normal',      // 'pressed' paints the flash area's second frame
+  pose: 'idle',         // the fight rival's pose shown on the stage
   areaDraw: false,      // dragging on the stage sets the flash area
   areaDrag: null,       // {x0, y0, x1, y1} in tiles while dragging
   tool: 'pencil',
@@ -173,10 +177,13 @@ function displayColor(c, slot) {
 function renderStage() {
   const p = state.project, sc = scene();
   const lut = p.palettes.map(pal => pal.colors.map((c, s) => displayColor(c, s)));
-  const px = M.composed(sc, shownFrame());
+  const pose = sc.fight && sc.fight.rival.poses[state.pose] ? state.pose : 'idle';
+  const px = M.composed(sc, sc.fight ? `pose:${pose}` : shownFrame());
+  const cellPal = sc.fight ? sc.cellPal.slice() : sc.cellPal;
+  if (sc.fight) for (const [c, palette] of M.rivalPoseCells(sc.fight, pose)) cellPal[c] = palette;
   const d = stageImage.data;
   for (let i = 0; i < M.W * M.H; i++) {
-    const c = lut[sc.cellPal[M.cellOf(i % M.W, (i / M.W) | 0)]][px[i]];
+    const c = lut[cellPal[M.cellOf(i % M.W, (i / M.W) | 0)]][px[i]];
     d[i * 4] = c[0]; d[i * 4 + 1] = c[1]; d[i * 4 + 2] = c[2]; d[i * 4 + 3] = 255;
   }
   // Sprites, where the ROM puts them when the scene opens: the cursor and a slider marker.
@@ -190,6 +197,15 @@ function renderStage() {
       d[i] = c[0]; d[i + 1] = c[1]; d[i + 2] = c[2];
     }
   };
+  if (sc.fight && p.objPalettes[sc.fight.player.palette]) {     // the player where the ROM puts him
+    const colors = p.objPalettes[sc.fight.player.palette].colors, img = sc.fight.player.poses.idle;
+    for (let y = 0; y < PH; y++) for (let x = 0; x < PW; x++) {
+      const v = img.charCodeAt(y * PW + x) - 48, X = PLAYER_X + x, Y = M.H - PH + y;
+      if (!v) continue;
+      const c = displayColor(colors[v], v), i = (Y * M.W + X) * 4;
+      d[i] = c[0]; d[i + 1] = c[1]; d[i + 2] = c[2];
+    }
+  }
   if (p.cursor && p.objPalettes[p.cursor.palette]) {
     if (sc.menu) sprite(p.cursor.pixels, sc.menu.x * 8 - 11, sc.menu.y * 8);
     if (sc.options?.rows.length) {
@@ -611,7 +627,7 @@ function renderPalettes() {
   const add = $('addPalette');
   const full = p.palettes.length >= M.MAX_BG_PALETTES;
   add.disabled = full;
-  add.innerHTML = `<option value="">${full ? 'All 8 palettes in use' : '+ Add palette…'}</option>` +
+  add.innerHTML = `<option value="">${full ? `All ${M.MAX_BG_PALETTES} palettes in use` : '+ Add palette…'}</option>` +
     M.PRESETS.map((pr, k) => `<option value="${k}">${pr.name}</option>`).join('');
   renderMeters();
 }
@@ -820,12 +836,21 @@ function renderSceneSettings() {
   };
   box.append(el('label', { className: 'field' }, el('span', { textContent: 'B button goes to' }), back));
 
+  if (!sc.fight) {
+    const slide = el('input', { type: 'checkbox', checked: !!sc.slideIn });
+    slide.onchange = () => { pushUndo(); sc.slideIn = slide.checked; changed({ scenes: true }); };
+    box.append(el('label', { className: 'field', title: 'The scene scrolls up from the bottom of the screen when it opens, ' +
+      'over its background (about 2 seconds).' }, el('span', { textContent: 'Slides in' }), slide));
+  }
+
   if (sc.menu) {
     renderMenuEditor(box, sc, i);
   } else if (sc.pressStart) {
     renderPressEditor(box, sc, i);
   } else if (sc.options) {
     renderOptionsEditor(box, sc, i);
+  } else if (sc.fight) {
+    renderFightEditor(box, sc, i);
   } else {
     const needOther = p.scenes.length < 2;
     const add = el('button', { className: 'wide', textContent: '+ Add a menu to this scene' });
@@ -856,6 +881,8 @@ function renderSceneSettings() {
     box.append(add, press, opts);
   }
 
+  renderTextsEditor(box, sc);
+
   if (p.transition) {
     box.append(el('h4', { textContent: 'Transitions (all scenes)' }));
     const color = el('select');
@@ -869,6 +896,36 @@ function renderSceneSettings() {
       box.append(el('p', { className: 'warn-text', textContent: 'The screen shows white for a moment while a scene loads, so fading to white looks smoother.' }));
     }
   }
+}
+
+// Free text labels in the built-in font, baked into the scene's tiles at build time.
+function renderTextsEditor(box, sc) {
+  const p = state.project;
+  sc.texts = sc.texts || [];
+  box.append(el('h4', { textContent: 'Text' }));
+  sc.texts.forEach((t, n) => {
+    const label = el('input', { value: t.label, maxLength: M.CW - t.x, spellcheck: false });
+    let pushed = false;
+    label.oninput = () => {
+      if (!pushed) { pushUndo(); pushed = true; }
+      const clean = M.cleanLabel(label.value).slice(0, M.CW - t.x);
+      if (clean !== label.value) label.value = clean;
+      t.label = clean || ' ';
+      renderStage(); renderMeters(); autosave(); scheduleMeasure();
+    };
+    label.onchange = () => renderSceneSettings();
+    const remove = el('button', { textContent: '×', title: 'Remove this text' });
+    remove.onclick = () => { pushUndo(); sc.texts.splice(n, 1); changed({ scenes: true }); };
+    box.append(el('div', { className: 'menu-items' }, el('div', { className: 'item' }, label, remove)));
+    box.append(numberField('Column', t.x, 0, M.CW - t.label.length, v => { t.x = v; changed({ scenes: true }); }));
+    box.append(numberField('Row', t.y, 0, M.CH - 1, v => { t.y = v; changed({ scenes: true }); }));
+    const pal = p.palettes[sc.cellPal[t.y * M.CW + t.x]];
+    box.append(el('div', { className: 'field' }, el('span', { textContent: 'Text color (slot)' }),
+                  slotButtons(pal, t.textSlot, k => { pushUndo(); t.textSlot = k; changed({ scenes: true }); })));
+  });
+  const add = el('button', { className: 'wide', textContent: '+ Add text' });
+  add.onclick = () => { pushUndo(); sc.texts.push({ label: 'TEXT', x: 1, y: 16, textSlot: 3 }); changed({ scenes: true }); };
+  box.append(add);
 }
 
 function slotButtons(pal, current, onPick) {
@@ -945,6 +1002,65 @@ function renderPressEditor(box, sc, i) {
   const remove = el('button', { className: 'wide', textContent: 'Remove press-start' });
   remove.onclick = () => { pushUndo(); sc.pressStart = null; setFrame('normal'); changed({ scenes: true }); };
   box.append(remove);
+}
+
+function renderFightEditor(box, sc, i) {
+  const p = state.project, ft = sc.fight;
+  box.append(el('h4', { textContent: 'Fight' }));
+  for (const [key, label] of [['win', 'Winning goes to'], ['lose', 'Losing goes to']]) {
+    const sel = el('select');
+    sceneOptions(sel, ft[key], { exclude: i });
+    sel.onchange = () => { pushUndo(); ft[key] = +sel.value; changed({ scenes: true }); };
+    box.append(el('label', { className: 'field' }, el('span', { textContent: label }), sel));
+  }
+  const pose = el('select');
+  for (const name of M.FIGHT_POSES) pose.append(el('option', { value: name, textContent: name.replace('_', ' ') }));
+  pose.value = ft.rival.poses[state.pose] ? state.pose : 'idle';
+  pose.onchange = () => { state.pose = pose.value; renderStage(); };
+  box.append(el('label', { className: 'field' }, el('span', { textContent: 'Show rival pose' }), pose));
+
+  box.append(el('p', { className: 'area-info', textContent:
+    'Art: download a sheet, draw over it in any pixel editor (keep the frame size), and import it back. ' +
+    `Rival frames are ${M.FIGHT_W * 8}x${M.FIGHT_H * 8} in this order: ${M.FIGHT_POSES.join(', ')}. ` +
+    `Player frames are ${PW}x${PH} on a transparent background: ${PLAYER_POSES.join(', ')}.` }));
+  const file = el('input', { type: 'file', accept: 'image/png,image/gif,image/bmp', hidden: true });
+  let target = null;
+  file.onchange = async () => {
+    const f = file.files[0];
+    file.value = '';
+    if (!f) return;
+    try {
+      const img = await readImage(f);
+      pushUndo();
+      if (target === 'rival') {
+        const mat = p.palettes[ft.rival.palettes.s].colors[0];
+        const r = importRival(img, mat);
+        ft.rival.poses = r.poses;
+        ['s', 'g', 'h'].forEach((kind, k) => { p.palettes[ft.rival.palettes[kind]].colors = r.palettes[k].map(c => c.slice()); });
+        say(`Imported ${M.FIGHT_POSES.length} rival poses with 3 palettes picked from the art` +
+            (r.changed ? `; ${r.changed} tiles had a color moved to fit one palette per tile.` : '.'));
+      } else {
+        const r = importPlayer(img);
+        ft.player.poses = r.poses;
+        const pal = p.objPalettes[ft.player.palette];
+        pal.colors = [pal.colors[0], ...r.colors.map(c => c.slice())];
+        say(`Imported ${PLAYER_POSES.length} player poses` + (r.changed ? `; ${r.changed} pixels moved to the 3 sprite colors.` : '.'));
+      }
+      changed({ scenes: true, palettes: true });
+    } catch (err) {
+      say(err.message);
+    }
+  };
+  const btn = (text, onclick) => { const b = el('button', { textContent: text }); b.onclick = onclick; return b; };
+  const save = async (blob, name) => download(`${fileBase()}-${name}.png`, blob, 'image/png');
+  box.append(el('div', { className: 'row-buttons' },
+    btn('Download rival sheet', async () => save(await rivalSheet(ft, p.palettes), 'rival')),
+    btn('Import rival sheet…', () => { target = 'rival'; file.click(); })));
+  box.append(el('div', { className: 'row-buttons' },
+    btn('Download player sheet', async () => save(await playerSheet(ft, p.objPalettes[ft.player.palette].colors), 'player')),
+    btn('Import player sheet…', () => { target = 'player'; file.click(); })));
+  box.append(file);
+  for (const problem of M.fightProblems(p, i)) box.append(el('p', { className: 'warn-text', textContent: '⚠ ' + problem }));
 }
 
 function renderOptionsEditor(box, sc, i) {
@@ -1128,7 +1244,9 @@ function meter(el, label, n, max) {
 
 function renderMeters() {
   const p = state.project;
-  meter($('palMeter'), 'BG palettes', p.palettes.length, M.MAX_BG_PALETTES);
+  meter($('palMeter'), `"${scene().name}" BG palettes`, new Set(scene().cellPal).size, M.SCENE_BG_PALETTES);
+  $('palMeter').title = `Background palettes this scene uses: the hardware holds ${M.SCENE_BG_PALETTES} at once. ` +
+    `The project has ${p.palettes.length} of ${M.MAX_BG_PALETTES}. A fight or puzzle scene uses palettes 1-8 only.`;
   meter($('objMeter'), 'Sprite palettes', p.objPalettes.length, M.MAX_OBJ_PALETTES);
   meter($('sceneMeter'), 'Scenes', p.scenes.length, M.MAX_SCENES);
   const tiles = M.uniqueTileCount(scene());
@@ -1344,6 +1462,7 @@ $('projectName').addEventListener('input', e => {
 });
 
 function loadProject(p) {
+  M.useFont(p.font || 'classic');
   state.project = p;
   state.scene = p.start;
   state.palKind = 'bg';
@@ -1377,6 +1496,11 @@ $('newClinic').onclick = () => {
   $('newDialog').close();
   loadProject(capsuleClinic());
   say('Capsule Clinic loaded. Each scene has notes on how it was built: click through the scenes on the right.');
+};
+$('newMacJoe').onclick = () => {
+  $('newDialog').close();
+  loadProject(macVsJoe());
+  say('Joe vs Mac loaded. Press ▶ Test to fight. The Fight scene\'s notes explain how Joe works.');
 };
 $('saveBtn').onclick = () => {
   download(`${fileBase()}.gbstage.json`, JSON.stringify(M.serialize(state.project)), 'application/json');
@@ -1596,9 +1720,9 @@ $('testDialog').addEventListener('close', stopPlayer);
 
 // ---- samples -----------------------------------------------------------------
 
-const SAMPLES = { 'capsule-clinic': capsuleClinic };
-const SAMPLE_VERSIONS = { 'capsule-clinic': CLINIC_VERSION };
-const SAMPLE_NAMES = { 'capsule-clinic': 'Capsule Clinic' };
+const SAMPLES = { 'capsule-clinic': capsuleClinic, 'mac-vs-joe': macVsJoe };
+const SAMPLE_VERSIONS = { 'capsule-clinic': CLINIC_VERSION, 'mac-vs-joe': MAC_VS_JOE_VERSION };
+const SAMPLE_NAMES = { 'capsule-clinic': 'Capsule Clinic', 'mac-vs-joe': 'Joe vs Mac' };
 
 // An older copy of a sample can't do what the notes describe: offer the current one.
 function checkSampleVersion() {

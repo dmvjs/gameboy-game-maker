@@ -71,11 +71,12 @@ const NOTES = {
 };
 
 // Bump when the sample changes, so editors holding an older copy offer the new one.
-export const CLINIC_VERSION = 3;
+export const CLINIC_VERSION = 4;
 
 // Capsule Clinic: the screens of a falling-pill puzzle game. Title with a menu, a settings screen
 // where Start begins, the playfield, and a how-to-play page.
 export function capsuleClinic() {
+  M.useFont('classic');
   const p = {
     name: 'Capsule Clinic',
     palettes: [
@@ -87,7 +88,7 @@ export function capsuleClinic() {
     objPalettes: [], cursor: null,
     scenes: ['Title', 'Settings', 'Playfield', 'How to play', 'Stage clear', 'Game over'].map(name => ({
       name, pixels: new Uint8Array(M.W * M.H), cellPal: new Uint8Array(M.CW * M.CH),
-      menu: null, pressStart: null, pressed: null, options: null, puzzle: null, back: null, notes: NOTES[name],
+      menu: null, pressStart: null, pressed: null, options: null, puzzle: null, back: null, texts: [], notes: NOTES[name],
     })),
     start: 0,
     transition: { color: 'white', frames: 3 },
@@ -105,7 +106,7 @@ export function capsuleClinic() {
   cellPalettes(p.scenes[0], 4, 5, 13, 2, 3);          // "CLINIC" in red: the Logo palette (its shadow included)
   box(title, 24, 76, 128, 44, 0, 3);
   fillRect(title, 0, 128, 160, 8, 0);
-  M.drawText(title, '(C) 2026 YOU', 32, 128, 3);
+  p.scenes[0].texts = [{ label: '(C) 2026 YOU', x: 4, y: 16, textSlot: 3 }];
   p.scenes[0].menu = {
     x: 5, y: 11, spacing: 2, textSlot: 3, cursorAnimation: 'bob', blinks: 3,
     items: [{ label: '1 PLAYER GAME', target: 1 }, { label: 'HOW TO PLAY', target: 3 }],

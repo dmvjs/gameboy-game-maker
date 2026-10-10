@@ -8,6 +8,7 @@ const EVENT_AUDIO_BUFFER_FULL = 2;
 const EVENT_UNTIL_TICKS = 4;
 const AUDIO_FRAMES = 1024;        // ~21 ms per chunk: short, so sounds follow the buttons closely
 const AUDIO_LEAD = 0.05;          // seconds of sound scheduled ahead of the speakers
+const VOLUME = 2;                 // one channel peaks near 0.28: clear, not loud
 
 // One audio context for the page. Browsers only start it after a click or key press.
 let audioCtx = null;
@@ -54,9 +55,15 @@ export class Player {
     this.raf = 0;
     this.last = 0;
     if (this.audio) {
+      // The emulator's output is unsigned and quiet (one channel peaks near 0.14): boost it and
+      // filter out the DC offset so sounds start and stop without clicks.
       this.out = this.audio.createGain();
-      this.out.gain.value = Player.muted ? 0 : 0.5;
-      this.out.connect(this.audio.destination);
+      this.out.gain.value = Player.muted ? 0 : VOLUME;
+      this.dc = this.audio.createBiquadFilter();
+      this.dc.type = 'highpass';
+      this.dc.frequency.value = 20;
+      this.out.connect(this.dc);
+      this.dc.connect(this.audio.destination);
       this.playAt = 0;
     }
   }
@@ -84,7 +91,7 @@ export class Player {
 
   setMuted(muted) {
     Player.muted = muted;
-    if (this.out) this.out.gain.value = muted ? 0 : 0.5;
+    if (this.out) this.out.gain.value = muted ? 0 : VOLUME;
   }
 
   // Run the emulator for `seconds` of Game Boy time and show the last complete frame. (The frame
@@ -121,7 +128,7 @@ export class Player {
 
   destroy() {
     cancelAnimationFrame(this.raf);
-    if (this.out) { this.out.disconnect(); this.out = null; }
+    if (this.out) { this.out.disconnect(); this.dc.disconnect(); this.out = null; }
     if (this.e) {
       for (const b of ['up', 'down', 'left', 'right', 'A', 'B', 'start', 'select']) this.setButton(b, false);
       this.Module._emulator_delete(this.e);

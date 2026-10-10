@@ -1,0 +1,30 @@
+{
+ "frames": 320,
+ "presses": [
+  {
+   "frame": 50,
+   "buttons": [
+    "start"
+   ],
+   "hold": 2
+  },
+  {
+   "frame": 240,
+   "buttons": [
+    "b"
+   ],
+   "hold": 2
+  }
+ ],
+ "checkpoints": {
+  "title": 40,
+  "sliding": 130,
+  "game": 235,
+  "back": 319
+ },
+ "settled": {
+  "title": 0,
+  "game": 1,
+  "back": 0
+ }
+}

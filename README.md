@@ -31,6 +31,17 @@ installed from there.
 Under **Examples**, **Capsule Clinic** is a complete, playable falling-capsule puzzle game: title menu, settings
 (virus level, speed), playfield, how to play, and win / game over screens.
 
+**Joe vs Mac** is a boxing game against one scripted rival, seen from behind the player: guard switching,
+counters, star punches, a timed taunt and charge, knockdowns with a referee's count, three rounds with a corner
+scene between them (Select there for a once-per-match refill), and a decision on points. It's built from the boxing
+template (`editor/boxing.js`) and a fighter pack: swap the pack's names, text, poses and portraits for a new game on
+the same engine. Its art is Little Mac and Glass Joe from Punch-Out!! (NES), so it stays on this machine
+(`tools/punchout_art/build.py` makes it; `.git/info/exclude` keeps it out of git). The rival's poses swap in and
+out of video memory in sets (attack, knockdown, special) so he can have more of them than fit at once. Its fight
+scene's art comes in and out as sprite sheets: **Download rival sheet** / **Import rival sheet…** (64x80 frames)
+and the same for the player (24x48 frames, transparent background). Importing snaps colors to the hardware and picks
+the rival's three palettes from the art. Games larger than 32 KB are built as MBC5 cartridges automatically.
+
 Scenes are listed in the side panel. ★ marks where the game starts. A scene can have a menu, an options screen
 (choices, numbers, sliders), a press-start prompt or a puzzle grid, and can send B back to another scene. Scenes nothing leads to are tagged "not reachable" and left out
 of the ROM. Text (menu labels, prompts) uses the built-in font (`gbstage/font.txt`) in one palette slot, so it
@@ -96,7 +107,7 @@ The CPU passes all of Blargg's `cpu_instrs` and `instr_timing` tests, and its cy
 screen images. Every case's screen must also match the project pixel for pixel on both devices.
 
 ```sh
-python3 -m gbstage test                      # run all golden cases and the puzzle kit checks
+python3 -m gbstage test                      # run all golden cases and the puzzle and fight kit checks
 python3 -m gbstage test --update             # accept new output after reviewing it (check the git diff and PNGs)
 python3 -m gbstage test --cpu-roms DIR       # also run Blargg's test ROMs (from github.com/retrio/gb-test-roms)
 ```

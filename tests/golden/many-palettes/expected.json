@@ -1,0 +1,34 @@
+{
+  "rom_sha256": "b4a30643f06ff06abda4699380619b45f1012ab5fc698a583874b832a86baff2",
+  "bytes": {
+    "rom_used": 6333,
+    "code": 1312,
+    "data": 4941,
+    "wram": 84,
+    "hram": 21
+  },
+  "cycles": {
+    "color": {
+      "startup_cycles": 7852,
+      "frame_cycles_max": 2348,
+      "vblank_work_cycles": 1160,
+      "scene_load_cycles": 4640
+    },
+    "original": {
+      "startup_cycles": 38532,
+      "frame_cycles_max": 2348,
+      "vblank_work_cycles": 1160,
+      "scene_load_cycles": 15128
+    }
+  },
+  "screens": {
+    "color": {
+      "game": "1147cd82c0df3f0994270572dc32032e4a35080f13e3b4c934104a8d6bd327fc",
+      "title": "2dfc2bb35beab748ec04f68463a1e4ebf014805599471c89d9ae4c2e0d597c90"
+    },
+    "original": {
+      "game": "5c2ad9e9edb7994b6814da42f818705294f12d46a954340cf55a0e4aebdcbc92",
+      "title": "789f209ad9ae045f40185dc4d53e8e51b50aa0cec1c39cdab805ac9f3979d405"
+    }
+  }
+}
