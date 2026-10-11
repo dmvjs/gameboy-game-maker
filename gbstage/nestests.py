@@ -18,7 +18,10 @@ from .machine import Machine
 
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE = ROOT / "examples" / "joe-vs-mac.gbstage.json"
-DISASM = Path.home() / "code" / "mike-tysons-punch-out-disassembly"
+DISASM = next((d for d in (Path(__import__("os").environ.get("PUNCHOUT_FILES") or "/nonexistent"),
+                            ROOT / "tools" / "punchout_art" / "rom",
+                            Path.home() / "code" / "mike-tysons-punch-out-disassembly")
+               if (d / "original_files" / "PRG_BankDEF.bin").exists()), Path("/nonexistent"))
 SENTINEL = 0x0000
 POINTER_HI = (0x32, 0x34, 0x3C, 0x95, 0x9F, 0x55, 0x7F)   # pointers into the NES banks: GB = NES - $4000
 SKIP = set(range(0x00, 0x20)) | set(range(0xE0, 0xF0)) | set(range(0x100, 0x300)) | {0x4C9} \

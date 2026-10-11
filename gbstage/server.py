@@ -160,12 +160,12 @@ class Handler(SimpleHTTPRequestHandler):
                            "report": profiler.profile(build, codegen.auto_session(normalized))})
 
 
-def serve(port=8765, open_browser=True):
+def serve(port=8765, open_browser=True, page=""):
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://localhost:{port}/"
     print(f"gbstage {__version__} running at {url}  (Ctrl+C to stop)")
     if open_browser:
-        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.5, lambda: webbrowser.open(url + page)).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -3,7 +3,14 @@ import { DMG_SHADES, to8, from8, hex, parseHex, gbcScreen, rgbToHsv, hsvToRgb, s
 import { initSystemCheck, loadBinjgb } from './syscheck.js';
 import { Player, asOriginalGameBoy, audioContext } from './player.js';
 import { capsuleClinic, CLINIC_VERSION } from './examples.js';
-import { macVsJoe, MAC_VS_JOE_VERSION } from './mac-vs-joe.js';
+import { BOXING_VERSION as MAC_VS_JOE_VERSION } from './boxing.js';
+// Joe vs Mac's art is built on your machine from your own copy of Punch-Out!! (tools/punchout_art/demo.py), so
+// its pack may not be there: it loads when it is, and the editor works without it.
+let macPack = null;
+const macReady = import('./mac-vs-joe.js').then(m => { macPack = m; }).catch(() => {});
+const MAC_NEEDS = 'Joe vs Mac needs its art pack, built from your own copy of Punch-Out!!: ' +
+                  'python3 tools/punchout_art/demo.py --rom <your .nes> --joe-sheet … --mac-sheet … (see the top of that file).';
+const macVsJoe = () => (macPack ? macPack.macVsJoe() : null);
 import { readImage, importRival, importPlayer, rivalSheet, playerSheet, PLAYER_POSES, PW, PH, PLAYER_X } from './importer.js';
 
 const $ = id => document.getElementById(id);
@@ -1499,6 +1506,7 @@ $('newClinic').onclick = () => {
 };
 $('newMacJoe').onclick = () => {
   $('newDialog').close();
+  if (!macPack) { say(MAC_NEEDS, 'warn'); return; }
   loadProject(macVsJoe());
   say('Joe vs Mac loaded. Press ▶ Test to fight. The Fight scene\'s notes explain how Joe works.');
 };
@@ -1736,7 +1744,9 @@ function checkSampleVersion() {
 $('sampleUpdate').onclick = () => {
   const s = state.project.sample;
   if (!s || !SAMPLES[s.id]) { $('sampleBar').hidden = true; return; }
-  loadProject(SAMPLES[s.id]());
+  const p = SAMPLES[s.id]();
+  if (!p) { say(MAC_NEEDS, 'warn'); return; }
+  loadProject(p);
   say('Sample updated. Each scene has notes on how it was built.');
 };
 
@@ -1751,7 +1761,9 @@ function openSampleFromUrl() {
   if (!make) { say(`There's no sample called "${name}".`, 'warn'); return false; }
   if (saved && !confirm(`Open the "${name}" sample? It replaces your current project in the editor. ` +
                         'Save your project first (Save button) if you want to keep it.')) return false;
-  loadProject(make());
+  const p = make();
+  if (!p) { say(MAC_NEEDS, 'warn'); return false; }
+  loadProject(p);
   say('Sample loaded. Each scene has notes on how it was built: click through the scenes on the right.');
   return true;
 }
@@ -1770,6 +1782,9 @@ setView('color');
 changed({ palettes: true, scenes: true });
 initSystemCheck();
 checkSampleVersion();
-if (!openSampleFromUrl() && !saved) {
-  say('Welcome! This is the Press Start template. Press ▶ Test to play it, then make it yours. New has more templates.');
-}
+// (a link to Joe vs Mac waits for its pack to load)
+(new URL(location.href).searchParams.get('sample') === 'mac-vs-joe' ? macReady : Promise.resolve()).then(() => {
+  if (!openSampleFromUrl() && !saved) {
+    say('Welcome! This is the Press Start template. Press ▶ Test to play it, then make it yours. New has more templates.');
+  }
+});
