@@ -21,7 +21,7 @@ Those files and what's built from them are git-ignored, so they never get commit
 ## Quick start
 
 ```
-git clone -b joe-vs-mac https://github.com/dmvjs/gameboy-game-maker.git
+git clone https://github.com/dmvjs/gameboy-game-maker.git
 cd gameboy-game-maker
 npm i
 npm start

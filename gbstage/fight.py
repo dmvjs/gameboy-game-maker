@@ -36,7 +36,7 @@ DROP_TILE = ["...3....", "..323...", ".32223..", ".32223..", "..333...", "......
 STAR_TILE = ["...1....", "...1....", ".11311..", "1133311.", ".11311..", "...1....", "...1....", "........"]             # sprite text: the referee's count, "KO!", "FIGHT!"
 REF_POSES = ["stand", "count", "wave"]
 REF_W, REF_H = 24, 32
-REF_Y = 72                                      # the referee's top, in screen pixels
+REF_Y = 84                                      # the referee's top, in screen pixels: his feet below the rival's (in front)
 
 # HUD items: (key, cells, what)
 HUD_DIGITS = [("stars", 1, "stars"), ("hearts", 2, "hearts"), ("points", 6, "points"), ("clock", 3, "clock"),

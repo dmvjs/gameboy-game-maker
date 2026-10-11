@@ -416,9 +416,12 @@ def _press_start(press, pressed, where, index, scene_count, errors):
             errors.append(f"{where}: the prompt and the flash area overlap; move one of them."); ok = False
         if ok:
             prompt = {"label": label, "x": px, "y": py, "text_slot": slot, "blink": bool(prompt.get("blink", True))}
+    dmc = press.get("nesDmc", 0)           # an NES sample (1 the crowd) on the press, in place of its sound
+    if not (isinstance(dmc, int) and 0 <= dmc <= 7):
+        errors.append(f"{where}: the press's nesDmc is an NES sample number, 0-7."); ok = False
     if not ok:
         return None
-    return {"target": target, "flashes": flashes, "prompt": prompt,
+    return {"target": target, "flashes": flashes, "prompt": prompt, "nes_dmc": dmc,
             "area": dict(area) if area else None,
             "pressed": [ord(c) - 48 for c in pressed] if area else None}
 
@@ -549,6 +552,8 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
         rposes_ref[name] = [ord(c) - 48 for c in px]
     if not (isinstance(pl.get("tiredPalette", pl.get("palette")), int) and 0 <= pl.get("tiredPalette", pl.get("palette")) < n_obj):
         errors.append(f"{where}: the player's tired palette doesn't exist.")
+    if not (isinstance(pl.get("downPalette", pl.get("palette")), int) and 0 <= pl.get("downPalette", pl.get("palette")) < n_obj):
+        errors.append(f"{where}: the player's knocked-down palette doesn't exist.")
     if not (isinstance(ref.get("palette"), int) and 0 <= ref["palette"] < n_obj):
         errors.append(f"{where}: the referee uses a sprite palette that doesn't exist.")
     hud_in = ft.get("hud") or {}
@@ -599,6 +604,9 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
     corner = ft.get("corner")
     if corner is not None and not (isinstance(corner, int) and 0 <= corner < scene_count and corner != index):
         errors.append(f"{where}: the between-rounds scene doesn't exist."); corner = None
+    win_tko = ft.get("winTko")                  # (optional) the win scene when he's out on a TKO
+    if win_tko is not None and not (isinstance(win_tko, int) and 0 <= win_tko < scene_count and win_tko != index):
+        errors.append(f"{where}: the TKO win scene doesn't exist."); win_tko = None
     nes = _nes_fighter(ft.get("nes"), where, errors)
     fx = ft.get("effects") or {}
     if not (isinstance(fx, dict) and set(fx) <= set(kit.EFFECTS) and all(isinstance(v, bool) for v in fx.values())):
@@ -607,10 +615,11 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
         return None
     return {"x": region["x"], "y": region["y"], "palettes": {k: pals[k] for k in kit.CELL_KINDS}, "poses": poses,
             "player": {"palette": pl.get("palette"), "tired_palette": pl.get("tiredPalette", pl.get("palette")),
+                       "down_palette": pl.get("downPalette", pl.get("palette")),
                        "poses": pposes}, "hud": hud,
             "referee": {"palette": ref.get("palette"), "poses": rposes_ref},
             "text_slot": slots[0], "bar_slot": slots[1], "crowd_row": crowd, "opening": opening, "loop": loop, "timed": timed,
-            "win": ft["win"], "lose": ft["lose"], "corner": corner,
+            "win": ft["win"], "lose": ft["lose"], "corner": corner, "win_tko": win_tko,
             "effects": {k: fx.get(k, True) for k in kit.EFFECTS}, "nes": nes}
 
 
@@ -666,6 +675,24 @@ def _nes_fighter(nes, where, errors):
                 frames[n] = frames[256 + n] = kit.RIVAL_POSES.index(pose)    # mirrored: the same, unless given
             else:
                 frames[256 + n] = kit.RIVAL_POSES.index(pose)
+    places = [(0, 0)] * 512                             # per frame (then mirrored): pixels right, down
+    for mirrored in (False, True):
+        for k, v in (nes.get("places") or {}).items():
+            k = str(k)
+            if k.endswith("|") != mirrored:
+                continue
+            try:
+                n = int(k.rstrip("|"), 16)
+            except (TypeError, ValueError):
+                n = -1
+            if not (0 <= n < 256 and isinstance(v, list) and len(v) == 2
+                    and all(isinstance(d, int) and -32 <= d <= 32 for d in v)):
+                errors.append(f"{where}: NES frame {k!r}'s place: a frame number (hex, | for mirrored) and [right, down], -32 to 32.")
+                return None
+            if not mirrored:
+                places[n] = places[256 + n] = tuple(v)
+            else:
+                places[256 + n] = tuple(v)
     home = nes.get("home", [135, 182])
     scale = nes.get("scale", 0.7)
     if not (isinstance(home, list) and len(home) == 2 and all(isinstance(v, int) for v in home)
@@ -688,8 +715,19 @@ def _nes_fighter(nes, where, errors):
             errors.append(f"{where}: NES Mac frame {k!r} -> {pose!r}: a frame number (hex) and one of the player's poses.")
             return None
         mac_frames[n] = kit.PLAYER_POSES.index(pose) | (0x80 if mirrored else 0)
-    return {"bank": bank, "offset": offset, "frames": frames, "home": home, "scale": float(scale),
-            "mac": mac, "mac_frames": mac_frames, "mac_home": nes.get("macHome", 176),
+    mac_places = [0] * 256              # per Mac frame: pixels down (0-63), bit 7: in his knocked-down colors
+    for k, v in (nes.get("macPlaces") or {}).items():
+        try:
+            n = int(k, 16)
+        except (TypeError, ValueError):
+            n = -1
+        if not (0 <= n < 256 and isinstance(v, list) and len(v) == 2 and isinstance(v[0], int) and 0 <= v[0] < 64
+                and v[1] in (0, 1)):
+            errors.append(f"{where}: NES Mac frame {k!r}'s place: a frame number (hex) and [pixels down 0-63, knocked-down colors 0/1].")
+            return None
+        mac_places[n] = v[0] | (0x80 if v[1] else 0)
+    return {"bank": bank, "offset": offset, "frames": frames, "places": places, "home": home, "scale": float(scale),
+            "mac": mac, "mac_frames": mac_frames, "mac_places": mac_places, "mac_home": nes.get("macHome", 176),
             "mac_scale": float(nes.get("macScale", scale)), "sound": sound, "sound_fixed": sound_fixed,
             "samples": samples}
 

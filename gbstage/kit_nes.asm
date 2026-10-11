@@ -2379,8 +2379,24 @@ MacSetZp:                   ; $8596
     ld [de], a
     jp MacIndexZero
 
-MacPal:                     ; $85A4: palette effects (the NES's; not needed here)
-MacPal2:
+MacPal:                     ; $85A4: his colors back to normal ($048E: his skin; $048D)
+    ld a, $30
+    ld b, $8F
+    jr MacPalSet
+MacPal2:                    ; $85A8: back to normal, or worn out (purple, $14) if he can't punch
+    ld a, [wNes + nMacCanPunch]
+    and a
+    ld b, $14
+    jr z, .worn
+    ld b, $8F
+.worn:
+    ld a, [wNes + $04A1]
+MacPalSet:                  ; $85B3
+    ld [wNes + $048D], a
+    ld a, b
+    ld [wNes + $048E], a
+    ld a, $81
+    ld [wNes + $04A0], a
     jp MacStep
 
 MacHitSide:                 ; $85C1

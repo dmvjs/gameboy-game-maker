@@ -15,7 +15,7 @@
 //   portraitPalettes?      palettes of the portraits' own (up to 10; a scene shows 8 palettes at once)
 //   rival                  { short, hud, name, rank, lines (up to 5, 11 wide), palettes (skin, gloves, hair:
 //                            4 colors each, slot 0 becomes the mat), poses (64x80), portrait, hurtPortrait? }
-//   player                 { name, hud, rank, lines (up to 5, 12 wide; name and rank too), colors (sprite slots 1-3), tiredColors,
+//   player                 { name, hud, rank, lines (up to 5, 12 wide; name and rank too), colors (sprite slots 1-3), tiredColors, downColors?,
 //                            poses (24x48), portrait }
 //   win, lose              lines under the ending screens' headlines
 //   corner                 { rival: his lines, coach: up to 4 lines of advice }
@@ -28,7 +28,7 @@
 import * as M from './model.js';
 import { REF_POSES } from './art/referee.js';
 
-export const BOXING_VERSION = 20;
+export const BOXING_VERSION = 27;
 
 const pal = (name, colors) => ({ name, colors });
 export const MAT = [26, 28, 31];
@@ -67,8 +67,10 @@ screen, CONTINUE to the pass key.
 • A star punch that doesn't drop him pops his arm out of its socket. He snaps it back in with a click.
 • ${rival} is an 8x10-tile area of the map. His tiles stay in video memory, and a pose change rewrites that area during VBlank. While he's down, the tiles only his attack poses use are swapped for the knockdown set.
 • The player is sprites. The HUD's digits and bars are tiles picked from per-cell tables.`,
-  'You win': `A press-start screen. Start goes back to the title.`,
-  [`${rival} wins`]: `A press-start screen. Start goes back to the title.`,
+  'You win': `A press-start screen: Punch-Out!!'s "GREAT FIGHTING" with its glove (when the pack has one). Start goes back to the title.`,
+  'You win (TKO)': `The same, after a TKO ("YOU WON BY TKO!").`,
+  [`${rival} wins`]: `A press-start screen: Punch-Out!!'s "DON'T CRY, MAC!" with its glove (when the pack has one). Start goes on to the rematch.`,
+  'Rematch': `The challenger screen again after a loss, as Punch-Out!!'s: REMATCH under the circuit, the player's record with the loss.`,
   'Corner': `Between rounds the fight fades to this corner screen, then Start goes back to the ring and the fight carries on where it was.
 • Select, once per match, gets the coach working faster: a random chunk of health comes back.`,
 });
@@ -93,10 +95,12 @@ export function boxingGame(pack) {
     ],
     objPalettes: [pal('Player', [[0, 0, 0], ...P.colors]),
                   pal('Referee', [[0, 0, 0], [31, 24, 18], [26, 29, 31], [3, 3, 6]]),
-                  pal('Player tired', [[0, 0, 0], ...P.tiredColors])],
+                  pal('Player tired', [[0, 0, 0], ...P.tiredColors]),
+                  ...(P.downColors ? [pal('Player down', [[0, 0, 0], ...P.downColors])] : [])],
     cursor: { palette: 0, pixels: Uint8Array.from(
       '00333000' + '03313300' + '33133330' + '33333330' + '33333330' + '03333300' + '00222000' + '00000000', ch => +ch) },
-    scenes: ['Title', 'Challenger', 'Fight', 'You win', `${R.short} wins`, 'Pass key', 'Corner'].map(name => ({
+    scenes: ['Title', 'Challenger', 'Fight', 'You win', `${R.short} wins`, 'Pass key', 'Corner', 'Rematch',
+             'You win (TKO)'].map(name => ({
       name, pixels: new Uint8Array(M.W * M.H), cellPal: new Uint8Array(M.CW * M.CH),
       menu: null, pressStart: null, pressed: null, options: null, puzzle: null, fight: null, passKey: null, back: null, texts: [],
       notes: notes(R.short)[name],
@@ -107,7 +111,7 @@ export function boxingGame(pack) {
     font: 'bold',
     sample: { id: pack.id, version: BOXING_VERSION },
   };
-  const [title, tape, ring, win, lose, passKey, corner] = p.scenes.map((_, i) => M.layerOf(p, i));
+  const [title, tape, ring, win, lose, passKey, corner, retape, winTko] = p.scenes.map((_, i) => M.layerOf(p, i));
   const LOGO = p.palettes.length - 1;                    // the title logo's palette (when there is one)
   const S = p.scenes;
 
@@ -120,7 +124,7 @@ export function boxingGame(pack) {
   }
 
   // Text palette slots: 0 light, 1 and 2 accents, 3 the background.
-  for (const s of [0, 1, 3, 4, 5, 6]) cellPalettes(S[s], 0, 0, M.CW, M.CH, ROLE.t);
+  for (const s of [0, 1, 3, 4, 5, 6, 7, 8]) cellPalettes(S[s], 0, 0, M.CW, M.CH, ROLE.t);
 
   // ---- Title: Punch-Out!!'s, a name over the logo band, NEW and CONTINUE ----
   fillRect(title, 0, 0, M.W, M.H, 3);
@@ -155,21 +159,27 @@ export function boxingGame(pack) {
 
   // ---- Challenger: his rank, name and portrait top right with your record beside it; your name and portrait
   // bottom left with his record beside it ----
-  fillRect(tape, 0, 0, M.W, M.H, 3);
-  portrait(S[1], tape, R.portrait, M.CW - PT, 3);
-  portrait(S[1], tape, P.portrait, 0, 10);
-  const right = (label, y, textSlot) => ({ label, x: M.CW - label.length, y, textSlot });
-  S[1].texts = [
-    { label: pack.circuit, x: 0, y: 0, textSlot: 1 },
-    right(R.rank, 1, 2), right(R.name, 2, 0),
-    ...P.lines.map((label, n) => ({ label, x: 0, y: 3 + n, textSlot: 0 })),
-    { label: P.rank, x: 0, y: 8, textSlot: 2 }, { label: P.name, x: 0, y: 9, textSlot: 0 },
-    { label: 'VS.', x: PT + 1, y: 10, textSlot: 1 },
-    ...R.lines.map((label, n) => right(label, 11 + n, 0)),
-  ];
-  S[1].pressStart = { target: 2, flashes: 3, area: null, prompt: { label: 'PUSH START!', x: 9, y: 17, textSlot: 1, blink: true } };
-  S[1].slideIn = true;
-  if (R.nes?.sound) S[1].nesDmc = 1;                     // the crowd starts as the challenger scrolls in, as in Punch-Out!!
+  function challenger(scene, layer, rematch) {
+    fillRect(layer, 0, 0, M.W, M.H, 3);
+    portrait(scene, layer, R.portrait, M.CW - PT, 3);
+    portrait(scene, layer, P.portrait, 0, 10);
+    const right = (label, y, textSlot) => ({ label, x: M.CW - label.length, y, textSlot });
+    const record = rematch ? P.lines.map(l => l.replace(/^0-0 /, '0-1 ')) : P.lines;     // (one loss: his record)
+    scene.texts = [
+      { label: pack.circuit, x: 0, y: 0, textSlot: 1 },
+      ...(rematch ? [{ label: 'REMATCH', x: 0, y: 1, textSlot: 1 }] : []),
+      right(R.rank, 1, 2), right(R.name, 2, 0),
+      ...record.map((label, n) => ({ label, x: 0, y: 3 + n, textSlot: 0 })),
+      { label: P.rank, x: 0, y: 8, textSlot: 2 }, { label: P.name, x: 0, y: 9, textSlot: 0 },
+      { label: 'VS.', x: PT + 1, y: 10, textSlot: 1 },
+      ...R.lines.map((label, n) => right(label, 11 + n, 0)),
+    ];
+    scene.pressStart = { target: 2, flashes: 3, area: null, prompt: { label: 'PUSH START!', x: 9, y: 17, textSlot: 1, blink: true },
+                         ...(R.nes?.sound ? { nesDmc: 1 } : {}) };   // Start sets the crowd off, as in Punch-Out!!
+    scene.slideIn = true;
+  }
+  challenger(S[1], tape, false);
+  challenger(S[7], retape, true);                        // after a loss: Punch-Out!!'s REMATCH
 
   // ---- The ring ----
   cellPalettes(S[2], 0, 0, M.CW, 3, 0);
@@ -184,14 +194,22 @@ export function boxingGame(pack) {
     ring.pixels[(26 + (x % 8 ? 1 : 3)) * M.W + x] = 1; ring.pixels[(27 + (x % 8 ? 1 : 3)) * M.W + x + 1] = 1;
   }
   for (const y of [32, 36]) { fillRect(ring, 0, y, M.W, 1, 0); fillRect(ring, 0, y + 1, M.W, 1, 2); }
-  fillRect(ring, 0, 40, M.W, 104, 0);                     // the mat
-  fillRect(ring, 0, 40, M.W, 1, 1);
-  // The mat stays plain from here down to the apron: the rival's rows scroll on their own as he moves.
-  fillRect(ring, 0, 128, M.W, 16, 2);                     // apron
-  fillRect(ring, 0, 128, M.W, 1, 3);
+  for (const side of [0, 1]) {                            // the corner posts (a tile each), their pads on the
+    const at = (x, y, slot) => { ring.pixels[y * M.W + (side ? M.W - 1 - x : x)] = slot; };   // ropes, and the
+    for (let y = 32; y < 40; y++) for (let x = 0; x < 4; x++) at(x, y, 3);                   // side ropes off the edge
+    for (const y of [32, 36]) for (let k = 0; k < 3; k++) {
+      if (y + 1 + k < 40) at(2 - k, y + 1 + k, 0);
+      if (y + 2 + k < 40) at(2 - k, y + 2 + k, 2);
+    }
+    for (let y = 26; y < 40; y++) { at(4, y, 0); at(5, y, 2); at(6, y, 2); }    // (up in the crowd: no flashes there)
+    at(4, 26, 3); at(6, 26, 3);
+    for (const y of [32, 36]) for (let x = 3; x < 8; x++) { at(x, y, 1); at(x, y + 1, 1); }
+  }
+  fillRect(ring, 0, 40, M.W, 104, 0);                     // the mat, plain to the bottom as Punch-Out!!'s (the rival's
+                                                          // rows scroll on their own as he moves)
   S[2].fight = {
     rival: { x: 6, y: 5, palettes: { s: 3, g: 4, h: 5 }, poses: R.poses },
-    player: { palette: 0, tiredPalette: 2, poses: P.poses },
+    player: { palette: 0, tiredPalette: 2, ...(P.downColors ? { downPalette: 3 } : {}), poses: P.poses },
     referee: { palette: 1, poses: REF_POSES },
     hud: { stars: { x: 1, y: 0 }, hearts: { x: 3, y: 0 }, points: { x: 6, y: 0 }, clock: { x: 15, y: 0 },
            round: { x: 13, y: 0 }, playerBar: { x: 1, y: 1 }, rivalBar: { x: 13, y: 1 } },
@@ -201,22 +219,58 @@ export function boxingGame(pack) {
            ['idle', 70], ['guard', 60], ['jab', 0], ['idle', 30], ['jab', 0], ['idle', 50], ['hook', 0]],
     timed: [{ round: 1, time: '0:40', op: 'taunt', arg: 0 }, { round: 2, time: '0:30', op: 'taunt', arg: 0 },
             { round: 3, time: '0:30', op: 'taunt', arg: 0 }],
-    win: 3, lose: 4, corner: 6,
+    win: 3, lose: 4, corner: 6, ...(pack.loseGlove ? { winTko: 8 } : {}),
     ...(pack.effects ? { effects: { ...pack.effects } } : {}),
     ...(R.nes ? { nes: { ...R.nes } } : {}),
   };
   for (const [c, palette] of M.rivalPoseCells(S[2].fight, 'idle')) S[2].cellPal[c] = palette;
 
   // ---- Endings and help ----
-  fillRect(win, 0, 0, M.W, M.H, 3);
-  M.drawText(win, 'K.O.!', 41, 33, 2, 3); M.drawText(win, 'K.O.!', 40, 32, 1, 3);
-  S[3].texts = pack.win.map((label, n) => ({ label, x: centered(label) >> 3, y: 9 + n, textSlot: 0 }));
-  S[3].pressStart = { target: 0, flashes: 3, area: null, prompt: { label: 'PRESS START', x: 4, y: 15, textSlot: 1, blink: true } };
-  fillRect(lose, 0, 0, M.W, M.H, 3);
-  const wins = `${R.hud} WINS`;
-  M.drawText(lose, wins, centered(wins, 2) + 1, 41, 2, 2); M.drawText(lose, wins, centered(wins, 2), 40, 0, 2);
-  S[4].texts = pack.lose.map((label, n) => ({ label, x: centered(label) >> 3, y: 9 + n, textSlot: 1 }));
-  S[4].pressStart = { target: 0, flashes: 3, area: null, prompt: { label: 'PRESS START', x: 4, y: 15, textSlot: 1, blink: true } };
+  // Punch-Out!!'s screens after the fight: blue, the W.V.B.A. header, a word for Mac, the big glove, the next
+  // challenge. LOSS and its glove's palette, then each screen's lines (rows; the glove covers the one at row 10).
+  let LOSS = null;
+  function nesScreen(scene, layer, lines, gloveAt) {
+    if (LOSS === null) {
+      LOSS = p.palettes.length;
+      p.palettes.push(pal('Loss', [[1, 2, 18], [7, 22, 25], [29, 29, 29], [0, 0, 0]]),       // NES $02, $2C, $30
+                      pal('Loss glove', [[1, 2, 18], [19, 4, 4], [29, 13, 12], [0, 0, 0]]));  // $16, $26
+    }
+    cellPalettes(scene, 0, 0, M.CW, M.CH, LOSS);
+    fillRect(layer, 0, 0, M.W, M.H, 0);
+    const line = (text, y, slot) => M.drawText(layer, text, centered(text) >> 3 << 3, y, slot);   // (on whole tiles, as the NES's)
+    line('THE W.V.B.A.', 8, 1); line(pack.circuit, 16, 1);
+    for (let x = 0; x < M.W; x += 8) fillRect(layer, x + 1, 27, 5, 1, 1);
+    for (const [text, y] of lines) line(text, y, 2);
+    const g = pack.loseGlove, gx = (centered(gloveAt) >> 3 << 3) + 5 * 8, gy = 8 * 8;
+    for (let i = 0; i < g.w * g.h; i++) {               // over the line at row 10, as the NES has it (on whole tiles:
+      const v = +g.pixels[i], x = gx + i % g.w, y = gy + (i / g.w | 0);   // the letters beside it keep their color)
+      if (v) { layer.pixels[y * M.W + x] = v; scene.cellPal[(y >> 3) * M.CW + (x >> 3)] = LOSS + 1; }
+    }
+  }
+  const NEXT = [['ARE YOU READY', 104], ['FOR THE', 114], ['NEXT CHALLENGE ?', 124]];
+  if (pack.loseGlove) {                                  // Punch-Out!!'s: "GREAT FIGHTING", ranked up
+    const ranked = `RANKED UP TO #${(R.rank.match(/\d+/) || ['1'])[0]}`;
+    for (const [scene, layer, how] of [[S[3], win, 'KO'], [S[8], winTko, 'TKO']]) {
+      nesScreen(scene, layer, [['"GREAT FIGHTING"', 40], [`YOU WON BY ${how}!`, 56], [ranked, 80], ...NEXT], ranked);
+      scene.pressStart = { target: 0, flashes: 3, area: null, prompt: { label: 'PUSH START!', x: 4, y: 17, textSlot: 1, blink: true } };
+    }
+  } else {
+    fillRect(win, 0, 0, M.W, M.H, 3);
+    M.drawText(win, 'K.O.!', 41, 33, 2, 3); M.drawText(win, 'K.O.!', 40, 32, 1, 3);
+    S[3].texts = pack.win.map((label, n) => ({ label, x: centered(label) >> 3, y: 9 + n, textSlot: 0 }));
+    S[3].pressStart = { target: 0, flashes: 3, area: null, prompt: { label: 'PRESS START', x: 4, y: 15, textSlot: 1, blink: true } };
+  }
+  if (pack.loseGlove) {                                  // Punch-Out!!'s: "DON'T CRY, MAC!", then the rematch
+    const rematch = "LET'S REMATCH!";
+    nesScreen(S[4], lose, [[`"DON'T CRY,${P.hud}!"`, 40], ['YOU LOST!', 56], [rematch, 80], ...NEXT], rematch);
+    S[4].pressStart = { target: 7, flashes: 3, area: null, prompt: { label: 'PUSH START!', x: 4, y: 17, textSlot: 1, blink: true } };
+  } else {
+    fillRect(lose, 0, 0, M.W, M.H, 3);
+    const wins = `${R.hud} WINS`;
+    M.drawText(lose, wins, centered(wins, 2) + 1, 41, 2, 2); M.drawText(lose, wins, centered(wins, 2), 40, 0, 2);
+    S[4].texts = pack.lose.map((label, n) => ({ label, x: centered(label) >> 3, y: 9 + n, textSlot: 1 }));
+    S[4].pressStart = { target: 0, flashes: 3, area: null, prompt: { label: 'PRESS START', x: 4, y: 15, textSlot: 1, blink: true } };
+  }
   // ---- Pass key: Punch-Out!!'s ten digits (not checked yet) ----
   fillRect(passKey, 0, 0, M.W, M.H, 3);
   S[5].texts = [{ label: 'PASS KEY', x: 6, y: 4, textSlot: 1 },

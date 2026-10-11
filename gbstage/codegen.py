@@ -194,6 +194,8 @@ def reachable_scenes(project):
                 todo += [s[kit]["win"], s[kit]["lose"]]
         if s.get("fight") and s["fight"]["corner"] is not None:
             todo.append(s["fight"]["corner"])
+        if s.get("fight") and s["fight"].get("win_tko") is not None:
+            todo.append(s["fight"]["win_tko"])
     return sorted(seen)
 
 
@@ -508,7 +510,8 @@ def _scene_palettes(i, s, project, sprites):
     obj_pals = [pal] if pal is not None else []
     if s.get("fight"):
         f = s["fight"]
-        obj_pals = sorted({f["player"]["palette"], f["player"]["tired_palette"], f["referee"]["palette"]})
+        obj_pals = sorted({f["player"]["palette"], f["player"]["tired_palette"], f["player"]["down_palette"],
+                           f["referee"]["palette"]})
     at = (max(used) + 1) * 8                            # HL's offset into the fade row so far
     for pal in obj_pals:
         skip = (len(project["palettes"]) + pal) * 8 - at
@@ -567,15 +570,16 @@ def _press_code(i, s, index_of, corner=False):
     and PADF_SELECT
     call nz, FtCornerSelect
 """ if corner else ""
+    press_sound = "    ld a, SFX_PRESS_START\n    call PlaySfx\n"
+    if p.get("nes_dmc"):                    # the press starts an NES sample instead (the crowd, as Punch-Out!!'s)
+        press_sound = (f"IF DEF(FT_NES_SOUND)\n    ld a, {p['nes_dmc']}\n    call NesDmc\nELSE\n" + press_sound + "ENDC\n")
     return f"""Scene{i}Update:              ; press-start screen: wait for Start or A
 {select}    ldh a, [hPadNew]
     and PADF_A | PADF_START
     jr nz, .press
 {idle}
 .press:
-    ld a, SFX_PRESS_START
-    call PlaySfx
-    ld a, {p['flashes'] * 2 - 1}
+{press_sound}    ld a, {p['flashes'] * 2 - 1}
     ldh [hCounter], a
     ld a, 1
     ldh [hTimer], a
@@ -1278,6 +1282,7 @@ def _fight_asm(i, s, index_of, project, banked=False):
         nes_defs = (f"DEF FT_NES EQU 1\nDEF FT_NES_OFFSET EQU {nes['offset']}   ; the fighter's entry in its bank\n"
                     "DEF FT_NES_DOWN_MAX EQU 8       ; pixels he may move down (his band moves over the floor)\n"
                     "DEF FT_NES_UP_MAX EQU 48        ; and up (his band rises to the HUD; inside it, over the tail rows)\n"
+                    "DEF FT_NES_END EQU 72           ; frames from the winner's call to the fade (the NES's is black 90 frames on)\n"
                     )
         set_of = {p: k for k, (name, ps) in enumerate(kit.POSE_SETS.items()) for p in ps}
         nes_data = f"""
@@ -1290,6 +1295,10 @@ NesOffsetX:                 ; NES X -> pixels right of his place
 {_db([off(v, hx) & 0xFF for v in range(256)])}
 NesOffsetY:                 ; NES Y -> pixels down
 {_db([off(v, hy) & 0xFF for v in range(256)])}
+NesPlaceX:                  ; per frame (then mirrored): our pose's offset to sit where the NES draws that frame
+{_db([dx & 0xFF for dx, _ in nes["places"]])}
+NesPlaceY:
+{_db([dy & 0xFF for _, dy in nes["places"]])}
 RivalPoseSet:               ; per pose: the set whose tiles it needs ($FF: always in video memory)
 {_db([set_of.get(p, 0xFF) for p in kit.RIVAL_POSES])}
 {parts["fighter"]}
@@ -1299,6 +1308,8 @@ NesMac::                    ; Little Mac: Punch-Out!!'s PRG bank B, as it was at
 {_db(list(nes["mac"]))}
 MacPoseMap:                 ; NES Mac frame number -> our player pose
 {_db(nes["mac_frames"])}
+MacPlaceY:                  ; and where it sits: pixels down (bit 7: in his knocked-down colors)
+{_db(nes["mac_places"])}
 MacOffsetX:                 ; NES $15 -> pixels right of his place ($15 scrolls the NES background, Mac in it: up is left)
 {_db([max(-127, min(127, round((((nes["mac_home"] - v + 128) & 0xFF) - 128) * nes["mac_scale"]))) & 0xFF for v in range(256)])}
 {parts["mac"]}
@@ -1336,6 +1347,7 @@ FtTailAttr:
 {nes_defs}
 DEF FT_WIN_SCENE EQU {index_of[ft['win']]}
 DEF FT_LOSE_SCENE EQU {index_of[ft['lose']]}
+{f"DEF FT_WIN_TKO_SCENE EQU {index_of[ft['win_tko']]}" if ft.get('win_tko') is not None else ""}
 DEF FT_CORNER_SCENE EQU {index_of[ft['corner']] if ft['corner'] is not None else '$FF'}   ; between rounds
 DEF FT_REGION_X EQU {ft['x']}
 DEF FT_REGION_W EQU {kit.REGION_W}
@@ -1372,6 +1384,7 @@ DEF FT_PLAYER_X EQU {kit.PLAYER_X + 8}       ; OAM coordinates of the player's t
 DEF FT_PLAYER_Y EQU {144 - kit.PLAYER_H + 16}
 DEF FT_PLAYER_PAL EQU {ft['player']['palette']}
 DEF FT_TIRED_PAL EQU {ft['player']['tired_palette']}
+DEF FT_DOWN_PAL EQU {ft['player']['down_palette']}
 DEF FT_REF_ATTR EQU {ft['referee']['palette'] | 0x10}
 DEF FT_STAR_TILE EQU {s['fight_star_tile']}
 DEF FT_DROP_TILE EQU {s['fight_drop_tile']}

@@ -85,6 +85,7 @@ export class Player {
     const src = this.audio.createBufferSource();
     src.buffer = buf;
     src.connect(this.out);
+    if (this.rec) src.connect(this.rec.sound);
     src.start(this.playAt);
     this.playAt += frames / this.audio.sampleRate;
   }
@@ -109,6 +110,53 @@ export class Player {
       if (event & EVENT_UNTIL_TICKS) break;
     }
     this.ctx.putImageData(this.image, 0, 0);
+    if (this.rec) this.rec.ctx.drawImage(this.ctx.canvas, 0, 0, this.rec.canvas.width, this.rec.canvas.height);
+  }
+
+  // Record the session to a video: the screen at 4x (sharp pixels) and the game's sound, heard or muted.
+  // stopRecording() resolves to { blob, ext }.
+  startRecording() {
+    if (this.rec || !window.MediaRecorder) return false;
+    const canvas = document.createElement('canvas');
+    canvas.width = SCREEN_W * 4; canvas.height = SCREEN_H * 4;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    const tracks = canvas.captureStream(60).getVideoTracks();
+    let sound = null;
+    if (this.audio) {                   // the same sound as the speakers get, at full volume
+      sound = this.audio.createGain();
+      sound.gain.value = VOLUME;
+      const dc = this.audio.createBiquadFilter();
+      dc.type = 'highpass'; dc.frequency.value = 20;
+      const dest = this.audio.createMediaStreamDestination();
+      sound.connect(dc); dc.connect(dest);
+      tracks.push(...dest.stream.getAudioTracks());
+    }
+    // QuickTime's: H.264 and AAC in an MP4/QuickTime container, saved as .mov (Safari, and Chrome since 2024);
+    // a browser without it (Firefox) records WebM.
+    const type = ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4;codecs=avc1,mp4a', 'video/mp4',
+                  'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+      .find(t => MediaRecorder.isTypeSupported(t)) || '';
+    const recorder = new MediaRecorder(new MediaStream(tracks), { mimeType: type, videoBitsPerSecond: 4e6 });
+    const chunks = [];
+    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    recorder.start(1000);
+    this.rec = { canvas, ctx, sound, recorder, chunks, ext: type.startsWith('video/mp4') ? 'mov' : 'webm' };
+    ctx.drawImage(this.ctx.canvas, 0, 0, canvas.width, canvas.height);
+    return true;
+  }
+
+  stopRecording() {
+    const rec = this.rec;
+    if (!rec) return Promise.resolve(null);
+    this.rec = null;
+    return new Promise(resolve => {
+      rec.recorder.onstop = () => {
+        if (rec.sound) rec.sound.disconnect();
+        resolve({ blob: new Blob(rec.chunks, { type: rec.recorder.mimeType }), ext: rec.ext });
+      };
+      rec.recorder.stop();
+    });
   }
 
   start() {

@@ -45,13 +45,15 @@ DEF OP_HOOK EQU 3
 DEF OP_TAUNT EQU 4
 
 DEF COUNT_KO EQU $FF        ; wFtCount value that shows "KO!"
+DEF COUNT_TKO EQU $FE       ; and "TKO!"
 DEF SAY_COUNT EQU 1         ; what the referee is saying
 DEF SAY_KO EQU 2
 DEF SAY_FIGHT EQU 3
+DEF SAY_TKO EQU 4
 DEF RF_STAND EQU 0          ; referee poses
 DEF RF_COUNT EQU 1
 DEF RF_WAVE EQU 2
-DEF REF_IN EQU 118          ; his screen x when he's in the ring, beside the action
+DEF REF_IN EQU 104          ; his screen x when he's in the ring: beside the action, left of the rival's corner (as the NES)
 DEF REF_OUT EQU 172         ; off the right edge
 
 SECTION "Fight state", WRAM0
@@ -125,6 +127,9 @@ wFtRefPose: db
 wFtSay: db
 wRvNesX: db                 ; NES rival: his offset from his place (pixels right, down)
 wRvNesY: db
+wPlNesY: db                 ; NES Mac: pixels down his frame sits (bit 7: knocked-down colors)
+wRvPlaceX: db               ; and his pose's own offset from it (each NES frame sits where the NES draws it)
+wRvPlaceY: db
 wFtFreeze: db               ; hit stop: frames both fighters hold still after a clean hit
 wFtExcite: db               ; frames the crowd's cameras keep flashing
 wFtRand: db
@@ -185,7 +190,11 @@ FightLoad:
     ld a, b
     or c
     jr nz, .tiles
+IF DEF(FT_NES)
+    ld a, REF_IN            ; the referee is in the ring as the round opens, as in Punch-Out!!
+ELSE
     ld a, REF_OUT
+ENDC
     ld [wFtRefX], a
     ld a, M_BREAK           ; the referee calls the fight first
     ld [wFtMatch], a
@@ -257,6 +266,16 @@ IF DEF(FT_NES)
     xor a
     ldh [rVBK], a
 .tailDone:
+    call FtOffColumns       ; and his rows' columns off the right edge: the mat, for when he's far to one side
+    ldh a, [hIsCGB]
+    and a
+    jr z, .offDone
+    ld a, 1
+    ldh [rVBK], a
+    call FtOffColumns
+    xor a
+    ldh [rVBK], a
+.offDone:
 ENDC
 IF DEF(FT_NES_SOUND)
     ldh a, [hNesSound]      ; the NES's sound engine takes the sound hardware for the fight (already playing,
@@ -273,6 +292,9 @@ IF DEF(FT_NES)
     xor a                   ; Mac standing till his script's first pose
     ld [wPlPose], a
     ld [wPlFlip], a
+    ld [wRvPlaceX], a
+    ld [wRvPlaceY], a
+    ld [wPlNesY], a
     ld a, BANK(NesFighter)  ; the round, as the NES game starts one
     ld [$2000], a
     ld a, [wFtRound]
@@ -301,12 +323,21 @@ ENDC
     ldh [hFtBandX], a
     ldh [hFtBandY], a
     ldh [hFtBandOn], a
+    ldh [hFtFlash], a       ; (not flashing: his palettes come up with the fade)
+    ldh [hFtFlashShown], a
     ld a, FT_BAND_BOTTOM
     ldh [hFtBandBottom], a
-    ldh [hFtFlash], a
-    ldh [hFtFlashShown], a
     ld a, FT_BAND_TOP       ; the rival's band scrolls on its own: an interrupt at its top and bottom lines
     ldh [hFtBandTop], a
+IF DEF(FT_NES)
+    ld a, BANK(NesFighter)  ; where the round puts him (his corner), from the first frame shown
+    ld [$2000], a
+    call FtNesShow
+    ld a, BANK(RivalMaps)
+    ld [$2000], a
+    call FtAnimate
+    ldh a, [hFtBandTop]
+ENDC
     ldh [rLYC], a
     ld a, STATF_LYC
     ldh [rSTAT], a
@@ -317,12 +348,41 @@ ENDC
     ei
     ret
 
+IF DEF(FT_NES)
+; His map rows' 12 columns past the screen's right edge, each the row's first (the mat): his band scrolls
+; sideways with him, and far over (his corner, as the round opens) it brings them in. (Color: VBK picks tiles
+; or their attributes.)
+FtOffColumns:
+    ld hl, FT_REGION_ROW
+    ld c, FT_REGION_H
+.row:
+    ld a, [hl]
+    push hl
+    ld de, 20
+    add hl, de
+    ld b, 12
+.col:
+    ld [hl+], a
+    dec b
+    jr nz, .col
+    pop hl
+    ld de, 32
+    add hl, de
+    dec c
+    jr nz, .row
+    ret
+ENDC
+
 ; Mid-frame: at the band's top line, scroll by the rival's offset; at its bottom line, back to normal.
 ; The band moves with his height, so its scroll never brings in what's below it: shown higher, it
 ; starts higher (over the lines above it), and the lines it leaves at its old bottom show the background
 ; there without him (two map rows kept off screen, FT_TAIL_ROW).
 FtStat:
     push af
+.drawing:                   ; the line before is still being drawn: change the scroll once it's done
+    ldh a, [rSTAT]
+    and 3
+    jr nz, .drawing
     ldh a, [hFtBandOn]
     and a
     jr z, .top
@@ -344,6 +404,9 @@ FtStat:
     ldh [rLYC], a
     ld a, 2
     ldh [hFtBandOn], a
+    ldh a, [rLY]            ; that end reached while this was set up (late, behind another interrupt): its
+    cp FT_BAND_BOTTOM       ; line has gone by without a match, so end the tail now
+    jr nc, .bottom
     pop af
     reti
 .top:
@@ -684,10 +747,12 @@ FtReferee:
     cp M_END
     jr nz, .out
     ld a, [wFtCount]
-    cp COUNT_KO
-    jr nz, .out
-    ld b, RF_WAVE
+    cp COUNT_TKO
+    jr c, .out
+    ld b, RF_WAVE           ; waving it off: KO, or TKO
     ld c, SAY_KO
+    jr nz, .in
+    ld c, SAY_TKO
     jr .in
 .fightCall:
     ld a, [wFtTimer]
@@ -700,10 +765,12 @@ FtReferee:
     ld a, [wFtCount]
     and a
     jr z, .in
-    cp COUNT_KO
-    jr nz, .counting
+    cp COUNT_TKO
+    jr c, .counting
     ld b, RF_WAVE
     ld c, SAY_KO
+    jr nz, .in
+    ld c, SAY_TKO
     jr .in
 .counting:
     ld c, SAY_COUNT
@@ -733,6 +800,14 @@ FtReferee:
     ld [wFtRefX], a
     ret
 
+; How far up he's shown standing, per pixel up the NES puts him (0-63): one for one for his bobbing, then
+; easing to FT_STAND_UP over a step back (the NES walks him up to 37 pixels away; his band can't follow).
+FtStandUp:
+    db $00, $FF, $FE, $FD, $FD, $FD, $FD, $FD, $FD, $FD, $FC, $FC, $FC, $FC, $FC, $FC
+    db $FC, $FC, $FC, $FC, $FC, $FC, $FB, $FB, $FB, $FB, $FB, $FB, $FB, $FB, $FB, $FB
+    db $FB, $FB, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA
+    db $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA
+
 ; The rival's motion as a pixel offset: B = x (right), C = y (down). Small, drawn from his state.
 FtAnimate:
 IF DEF(FT_NES)
@@ -760,11 +835,19 @@ IF DEF(FT_NES)
     jr nc, .y
     ld a, -FT_NES_UP_MAX
     jr .y
-.standing:
+.standing:                  ; standing, he can rise only so far: a step back eases in (FtStandUp)
     ld a, c
-    cp -FT_STAND_UP
-    jr nc, .y
-    ld a, -FT_STAND_UP
+    cpl
+    inc a
+    cp 64
+    jr c, .eased
+    ld a, 63
+.eased:
+    ld e, a
+    ld d, 0
+    ld hl, FtStandUp
+    add hl, de
+    ld a, [hl]
 .y:
     ld c, a
     jp .done
@@ -2413,10 +2496,13 @@ FtFinish:
     ld [wFtTimer], a
     ret
 .final:
-    ld a, [wFtResult]
     ld a, M_END
     ld [wFtMatch], a
+IF DEF(FT_NES)
+    ld a, FT_NES_END        ; Punch-Out!! fades out on the call itself
+ELSE
     ld a, FT_END
+ENDC
     ld [wFtTimer], a
     ld a, [wFtResult]
     cp FT_WIN_SCENE
@@ -2454,8 +2540,22 @@ FtEndPause:
     ldh [hFtActive], a
     ldh [rSCX], a
     ldh [rSCY], a
-    ld a, [wFtResult]
+    call FtResultScene
     jp StartTransition
+
+; A = the scene the fight goes on to: its result, or the TKO win's own screen.
+FtResultScene:
+    ld a, [wFtResult]
+IF DEF(FT_WIN_TKO_SCENE)
+    cp FT_WIN_SCENE
+    ret nz
+    ld a, [wFtCount]
+    cp COUNT_TKO
+    ld a, FT_WIN_SCENE
+    ret nz
+    ld a, FT_WIN_TKO_SCENE
+ENDC
+    ret
 
 ; ---- HUD ----
 
@@ -2591,14 +2691,15 @@ FtCrowd:
     and a
     ret nz
 .free:
-    ld a, [wFtRand]         ; column = random % 20
+    ld a, [wFtRand]         ; column = 1 + random % 18 (not over the corner posts)
     swap a
 .mod:
-    cp FT_CROWD_W
+    cp FT_CROWD_W - 2
     jr c, .col
-    sub FT_CROWD_W
+    sub FT_CROWD_W - 2
     jr .mod
 .col:
+    inc a
     ld e, a
     ld d, 0
     dec hl
@@ -2798,7 +2899,8 @@ PunchRiseHigh:              ; to the face: right up to his chin
 ; The player's vertical motion: A = y offset (down). Bobbing, lunging, recoiling, crouching.
 FtPlayerMotion:
 IF DEF(FT_NES)
-    xor a                   ; Mac's scripts move him sideways only ($15)
+    ld a, [wPlNesY]         ; Mac's scripts move him sideways ($15); his knockdown frames sit lower
+    and $7F
     ret
 ENDC
     ld a, [wPlState]
@@ -2923,6 +3025,20 @@ FtBuildOAM:
     xor OAMF_XFLIP
 .attr:
     push af
+IF DEF(FT_NES)
+    ld a, [wNes + $048E]    ; hit: the NES turns his skin pink ($25), as on his knockdown frames (Color)
+    cp $25
+    jr z, .down
+    ld a, [wPlNesY]
+    rlca
+    jr nc, .up
+.down:
+    pop af
+    and ~7
+    or FT_DOWN_PAL
+    jr .write
+.up:
+ENDC
     ld a, [wPlTired]        ; worn out: the tired palette (Color)
     and a
     jr z, .rested
@@ -3009,6 +3125,9 @@ ENDC
     cp SAY_KO
     ld de, SayKO
     jr z, .bubble
+    cp SAY_TKO
+    ld de, SayTKO
+    jr z, .bubble
     ld de, SayFight
 .bubble:
     push de                 ; B = letters
@@ -3069,6 +3188,8 @@ ENDC
 
 SayKO:
     db 10, 11, 12, $FF
+SayTKO:
+    db 17, 10, 11, 12, $FF
 SayFight:
     db 13, 14, 15, 16, 17, 12, $FF
 
@@ -3153,13 +3274,15 @@ FtNesPresent:
     jr z, .counted
     dec [hl]
 .counted:
-    ld a, [wFtCount]        ; "KO!" stays up once he's said it
-    cp COUNT_KO
-    ret z
+    ld a, [wFtCount]        ; "KO!" or "TKO!" stays up once he's said it
+    cp COUNT_TKO
+    ret nc
     ld a, [wNes + $F4]      ; he says it with his voice: the KO and TKO effects ($0E, $0F), right after 10
     cp $0E
+    ld b, COUNT_KO
     jr z, .ko
     cp $0F
+    ld b, COUNT_TKO
     jr z, .ko
     ld a, [wNes + $C1]
     sub $99
@@ -3181,7 +3304,7 @@ FtNesPresent:
     ld a, SFX_COUNT
     jp PlaySfx
 .ko:
-    ld a, COUNT_KO
+    ld a, b
     ld [wFtCount], a
     ld a, FT_COUNT
     ld [wFtCountTimer], a
@@ -3201,8 +3324,17 @@ FtNesOver:
     ld a, FT_WIN_SCENE
 .ko:
     ld b, a
-    ld a, COUNT_KO          ; "KO!"
+    ld a, [wFtCount]        ; what the referee calls it, if he hasn't yet: $FE, $FD KO; $FC, $FB TKO
+    cp COUNT_TKO
+    jr nc, .said
+    ld a, [wNes + $00]
+    cp $FD
+    ld a, COUNT_KO
+    jr nc, .call
+    ld a, COUNT_TKO
+.call:
     ld [wFtCount], a
+.said:
     ld a, b
     jp FtFinish
 .time:
@@ -3254,21 +3386,21 @@ IF DEF(FT_NES_SOUND)
     ldh [hNesSound], a
     xor a
 ENDC
-    ld a, [wFtResult]
+    call FtResultScene
     jp StartTransition
 
 ; His pose and place, from his script (the fighter bank is mapped).
 FtNesShow:
+    ld a, [wNes + nOppBaseAnimIndex]
+    ld c, a
+    ld a, [wNes + nOppFlip]     ; drawn mirrored: the second half of the maps
+    and 1
+    ld b, a
     ld a, [wNesAnim]
     bit 7, a
     jr z, .place
-    ld a, [wNes + nOppBaseAnimIndex]
-    ld l, a
-    ld a, [wNes + nOppFlip]     ; drawn mirrored: the second half of the map
-    and 1
-    ld h, a
-    ld de, NesPoseMap
-    add hl, de
+    ld hl, NesPoseMap
+    add hl, bc
     ld a, [hl]
     ld e, a                 ; the pose; its tiles may have to come in first
     ld d, 0
@@ -3286,20 +3418,31 @@ FtNesShow:
     ld [wRvPose], a
     xor a
     ld [wNesAnim], a
+    ld [wNes + nOppFlip], a ; (drawn: the NES's drawing takes "mirrored" for this frame only, $CC9D)
+    ld hl, NesPlaceX        ; and where it sits
+    add hl, bc
+    ld a, [hl]
+    ld [wRvPlaceX], a
+    ld hl, NesPlaceY
+    add hl, bc
+    ld a, [hl]
+    ld [wRvPlaceY], a
 .place:
     ld a, [wNes + nOppBaseX]
     ld l, a
     ld h, 0
     ld de, NesOffsetX
     add hl, de
-    ld a, [hl]
+    ld a, [wRvPlaceX]
+    add [hl]
     ld [wRvNesX], a
     ld a, [wNes + nOppBaseY]
     ld l, a
     ld h, 0
     ld de, NesOffsetY
     add hl, de
-    ld a, [hl]
+    ld a, [wRvPlaceY]
+    add [hl]
     ld [wRvNesY], a
     ret
 
@@ -3323,7 +3466,21 @@ FtNesMacShow:
     rlca
     and 1
     ld [wPlFlip], a
+    ld a, [wNes + $61]      ; and where it sits
+    ld l, a
+    ld h, 0
+    ld de, MacPlaceY
+    add hl, de
+    ld a, [hl]
+    ld [wPlNesY], a
 .place:
+    ld a, [wNes + $048E]    ; worn out: the NES turns his skin purple ($14) till he has his breath back
+    sub $14
+    jr z, .tired
+    ld a, 1
+.tired:
+    xor 1
+    ld [wPlTired], a
     ld a, [wNes + nMacX]
     ld l, a
     ld h, 0

@@ -1660,7 +1660,22 @@ let testDevice = 'color';
 window.gbstageDebug = { get player() { return player; } };
 
 function stopPlayer() {
-  if (player) { player.destroy(); player = null; }
+  if (player) { saveRecording(); player.destroy(); player = null; }
+}
+
+// The Test window's recorder: Record starts a video of the session, Stop (or closing, or switching device)
+// downloads it.
+const recordButton = $('testRecord');
+async function saveRecording() {
+  recordButton.textContent = '⏺ Record';
+  recordButton.classList.remove('on');
+  const done = player && await player.stopRecording();
+  if (!done) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(done.blob);
+  a.download = `${(state.project.name || 'game').replace(/[^\w-]+/g, '-').toLowerCase()}-session.${done.ext}`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
 
 async function startPlayer() {
@@ -1722,6 +1737,11 @@ $('testSound').onchange = e => {
 $('testSeg').onclick = e => {
   const b = e.target.closest('button');
   if (b) { testDevice = b.dataset.device; startPlayer(); b.blur(); }
+};
+recordButton.onclick = () => {
+  if (player?.rec) saveRecording();
+  else if (player?.startRecording()) { recordButton.textContent = '⏹ Stop'; recordButton.classList.add('on'); }
+  $('testScreen').focus();
 };
 $('testClose').onclick = () => $('testDialog').close();
 $('testDialog').addEventListener('close', stopPlayer);
