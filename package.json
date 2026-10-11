@@ -1,0 +1,9 @@
+{
+  "name": "joe-vs-mac",
+  "private": true,
+  "description": "Joe vs Mac: Punch-Out!! on the Game Boy",
+  "scripts": {
+    "postinstall": "git submodule update --init",
+    "start": "python3 start.py || py -3 start.py"
+  }
+}

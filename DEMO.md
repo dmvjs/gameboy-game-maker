@@ -21,7 +21,10 @@ Those files and what's built from them are git-ignored, so they never get commit
 ## Quick start
 
 ```
-git clone --recursive git@github.com:dmvjs/gameboy-game-maker.git
+git clone -b joe-vs-mac https://github.com/dmvjs/gameboy-game-maker.git
+cd gameboy-game-maker
+npm i
+npm start
 ```
 
-Then double-click **Start.command** (Mac) or **Start.bat** (Windows) and press **▶ Test**.
+Then press **▶ Test**. (No npm? Double-click **Start.command** on a Mac or **Start.bat** on Windows instead.)
