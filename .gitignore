@@ -9,9 +9,6 @@ __pycache__/
 
 # Joe vs Mac: built on your machine from your own Punch-Out!! files (never committed)
 *.nes
-tools/punchout_art/rom/
-tools/punchout_art/sources/
-tools/punchout_art/out/
 editor/art/mac-vs-joe.js
 examples/joe-vs-mac.gbstage.json
 joe-vs-mac-kit.zip
