@@ -17,3 +17,11 @@ install Node.js (nodejs.org) to get the `.gb` file; the editor works without it.
 
 The repo has no Nintendo data in it: everything is built on your machine from the game file you add.
 Those files and what's built from them are git-ignored, so they never get committed.
+
+## Quick start
+
+```
+git clone --recursive git@github.com:dmvjs/gameboy-game-maker.git
+```
+
+Then double-click **Start.command** (Mac) or **Start.bat** (Windows) and press **▶ Test**.

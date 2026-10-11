@@ -7,13 +7,36 @@ HERE = pathlib.Path(__file__).parent
 SHA1 = "b6f6bd9d78cdd264a117d4b647aee3309993e9a9"        # Mike Tyson's Punch-Out!! (USA): PRG + CHR, no header
 
 
+DISASM = "mike-tysons-punch-out-disassembly"
+NEED = ("Joe vs Mac needs the Punch-Out!! game: put a Mike Tyson's Punch-Out!! (USA) .nes file in this folder, or "
+        f"the {DISASM} folder in ~/code, Downloads or Desktop.")
+
+
+def places():
+    """Where the game might be: here, or the disassembly checkout (cloned or unzipped: name-main) anywhere usual."""
+    home = pathlib.Path.home()
+    yield os.environ.get("PUNCHOUT_FILES")
+    yield HERE / "disassembly"
+    yield HERE / "rom"
+    for base in (home / "code", HERE.parents[2], HERE.parents[1], home / "Downloads", home / "Desktop", home):
+        if base.is_dir():
+            yield from sorted(base.glob(DISASM + "*"))
+
+
 def root():
     """The folder holding original_files/ (what cpu6502.Nes and the tools take)."""
-    for d in (os.environ.get("PUNCHOUT_FILES"), HERE / "rom",
-              pathlib.Path.home() / "code" / "mike-tysons-punch-out-disassembly"):
+    for d in places():
         if d and (pathlib.Path(d) / "original_files" / "PRG_BankDEF.bin").exists():
             return pathlib.Path(d)
-    raise SystemExit("No Punch-Out!! game data yet. Run: python3 tools/punchout_art/demo.py --rom <your Punch-Out!! .nes file>")
+    raise SystemExit(NEED)
+
+
+def have():
+    try:
+        root()
+        return True
+    except SystemExit:
+        return False
 
 
 def banks():

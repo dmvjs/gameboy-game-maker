@@ -32,16 +32,18 @@ def main():
     import gamefiles
 
     print("Joe vs Mac\n")
-    have_game = (TOOLS / "rom" / "original_files" / "PRG_BankDEF.bin").exists()
-    rom = find(["punch", ""], ".nes")
+    rom = find(["punch", ""], ".nes") or next((f for d in (Path.home() / "Downloads", Path.home() / "Desktop")
+                                                  if d.is_dir() for f in sorted(d.glob("*unch*ut*.nes"))), None)
     if rom:
-        print("Your game:", rom.name)
+        print("The game:", rom.name)
         try:
             gamefiles.split_rom(rom)
         except SystemExit as e:
             fail(str(e))
-    elif not have_game:
-        fail("Put your Mike Tyson's Punch-Out!! (USA) .nes file in this folder, then run this again.")
+    elif gamefiles.have():
+        print("The game:", gamefiles.root())
+    else:
+        fail(gamefiles.NEED)
 
     src = TOOLS / "sources"
     src.mkdir(exist_ok=True)
