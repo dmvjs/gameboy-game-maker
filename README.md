@@ -2,6 +2,17 @@
 
 A Flash-style editor for making Game Boy games. It generates assembly and builds real `.gb` ROMs with [RGBDS](https://rgbds.gbdev.io).
 
+## Play Joe vs Mac
+
+```sh
+git clone https://github.com/dmvjs/gameboy-game-maker.git
+cd gameboy-game-maker
+npm i
+npm start
+```
+
+Then press **▶ Test**. More in [DEMO.md](DEMO.md).
+
 ## Getting started
 
 You need Python 3.9 or newer. Nothing else is required up front.
