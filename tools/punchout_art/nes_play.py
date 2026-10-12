@@ -54,53 +54,77 @@ class Fight(B.Boot):
         return drawn
 
 
-def sprites_only(b):
+def sprites_only(b, colors=None):
     """The sprites alone over nothing (None): Joe is sprites (Mac is the background), every one of them (no
-    8-a-line limit: the game lays him out to show whole), MMC2's sprite latch as render() keeps it."""
+    8-a-line limit: the game lays him out to show whole), MMC2's sprite latches as render() keeps them. 8x16
+    sprites (PPUCTRL bit 5: some fighters' frames) take their pattern table from the tile's low bit."""
     img = [[None] * 256 for _ in range(240)]
-    stable = 1 if b.ctrl & 0x08 else 0
-    lat = getattr(b, "spr_latch", 0xFE)
+    tall = bool(b.ctrl & 0x20)
+    h = 16 if tall else 8
+    lat = {0: 0xFE, 1: 0xFE}
+    lat[1 if b.ctrl & 0x08 else 0] = getattr(b, "spr_latch", 0xFE)
+    banks = {0: (0xB000, 0xC000), 1: (0xD000, 0xE000)}       # per table: its $FD bank, its $FE bank
     for Y in range(240):
         rows = []
         for i in range(64):
             sy, t, a, sx = b.oam[i * 4:i * 4 + 4]
-            if not (sy < 0xEF and sy + 1 <= Y < sy + 9):
+            if not (sy < 0xEF and sy + 1 <= Y < sy + 1 + h):
                 continue
-            bank = (b.chr[0xB000] if lat == 0xFD else b.chr[0xC000]) if stable == 0 else \
-                   (b.chr[0xD000] if lat == 0xFD else b.chr[0xE000])
             yy = Y - sy - 1
-            if a & 0x80: yy = 7 - yy
-            d = B.CHR.get(bank, bytes(4096))[t * 16:t * 16 + 16]
+            if a & 0x80: yy = h - 1 - yy
+            if tall:
+                table, tile = t & 1, (t & 0xFE) + (yy >> 3)
+            else:
+                table, tile = (1 if b.ctrl & 0x08 else 0), t
+            fd, fe = banks[table]
+            bank = b.chr[fd] if lat[table] == 0xFD else b.chr[fe]
+            yy &= 7
+            d = B.CHR.get(bank, bytes(4096))[tile * 16:tile * 16 + 16]
             rows.append((sx, a, [((d[yy] >> (7 - x)) & 1) | (((d[yy + 8] >> (7 - x)) & 1) << 1) for x in range(8)]))
-            if t in (0xFD, 0xFE):
-                lat = t
+            if tile in (0xFD, 0xFE):
+                lat[table] = tile
         for sx, a, row in reversed(rows):   # lower OAM index on top
             for x in range(8):
                 v = row[7 - x if a & 0x40 else x]
                 if v and sx + x < 256:
-                    img[Y][sx + x] = B.NES_RGB[b.pal[0x10 + (a & 3) * 4 + v] & 0x3F]
+                    img[Y][sx + x] = B.NES_RGB[(colors or b.pal[0x10:0x20])[(a & 3) * 4 + v] & 0x3F]
     return img
 
 
-def _crop(b):
-    img = sprites_only(b)                   # (he's sprites: Mac is the background)
+def _crop(b, colors=None):
+    img = sprites_only(b, colors)           # (he's sprites: Mac is the background)
     x, y = b.ram[0xB0], b.ram[0xB1]
     x0, y0 = max(0, min(256 - 128, x - 64)), max(0, min(240 - 192, y - 158))
     return [row[x0:x0 + 128] for row in img[y0:y0 + 192]], (x - x0, y - y0)
 
 
-def joe_frames(wanted, budget=40000):
-    got = pickle.load(open(CACHE, "rb")) if CACHE.exists() else {}
-    if set(wanted) <= set(got):
-        return got
+def fight(opponent=0):
+    """The game booted into a fight: opponent 0 Glass Joe, 1 Von Kaiser, ... (RAM $01, the game's opponent
+    number, set as the challenger screen comes up)."""
     b = Fight()
     for _ in range(600):
         b.frame(0)
     for _ in range(40):                     # Start through the title and the challenger screen
         for _ in range(4): b.frame(START)
+        b.ram[0x01] = opponent
         for _ in range(86): b.frame(0)
         if b.ram[0x00] == 1 and b.ram[0x90] & 0x7F == 0x40:
             break
+    return b
+
+
+def joe_frames(wanted, budget=40000):
+    return fighter_frames(0, wanted, budget)
+
+
+def fighter_frames(opponent, wanted=None, budget=40000):
+    """{(frame, mirrored): (crop, place)} for this opponent: until every wanted one is in, or (wanted None)
+    the whole budget of frames played. Cached per opponent (out/nes-joe-play.pkl for Joe)."""
+    cache = CACHE if opponent == 0 else HERE / "out" / f"nes-opp{opponent}-play.pkl"
+    got = pickle.load(open(cache, "rb")) if cache.exists() else {}
+    if got and (wanted is None or set(wanted) <= set(got)):
+        return got
+    b = fight(opponent)
     import copy
     start = copy.deepcopy(b)                # his fight from the top: back to it whenever a fight ends
     colors = bytes(b.pal[0x10:0x20])        # the sprites' palettes as they are (a hit's flash whitens his)
@@ -137,11 +161,80 @@ def joe_frames(wanted, budget=40000):
             age += 1
             pending = (key, age)
             if age <= SETTLED and ages.get(key, 0) < age and b.ram[0xA1] == key[0]:
-                if bytes(b.pal[0x10:0x20]) == colors:   # the longest it's been up yet (some only stay a
-                    got[key] = _crop(b)                 # frame or two), in his own colors
+                if True:                                # the longest it's been up yet (some only stay a
+                    crop, place = _crop(b, colors)      # frame or two), in his own colors; merged with the
+                    old = got.get(key) if age > 1 else None     # frames before (a wide fighter's sprites take
+                    if old and old[1] == place:                 # turns, flickering: each frame shows part)
+                        crop = [[c if c is not None else o for c, o in zip(row, orow)] for row, orow in zip(crop, old[0])]
+                    got[key] = (crop, place)
                     ages[key] = age
-                if set(wanted) <= {k for k in got if ages.get(k, SETTLED) >= min(SETTLED, 2)}:
+                if wanted is not None and set(wanted) <= {k for k in got if ages.get(k, SETTLED) >= min(SETTLED, 2)}:
                     break
-    CACHE.parent.mkdir(exist_ok=True)
-    pickle.dump(got, open(CACHE, "wb"))
+    cache.parent.mkdir(exist_ok=True)
+    pickle.dump(got, open(cache, "wb"))
     return got
+
+
+def ring_palette(opponent=0):
+    """The fight's background palettes (16 NES colors): the ring, the ropes, the crowd, as the game sets them."""
+    b = fight(opponent)
+    for _ in range(60):
+        b.frame(0)
+    return list(b.pal[:16])
+
+
+# The referee (Mario) is drawn in the background, with Mac. His three looks, from the same played fight:
+# standing as the round opens, his arm out (the count, and "FIGHT!"), his fist up (the KO / TKO call).
+REF_CACHE = HERE / "out" / "nes-ref-play.pkl"
+REF_AT = {"stand": 8, "count": 1264, "wave": 2444}  # frames into the fight, played as ref_frames plays it
+
+
+def ref_frames():
+    """{look: (RGB crop of the ring around him, floor color)}: the referee as the game draws him."""
+    if REF_CACHE.exists():
+        return pickle.load(open(REF_CACHE, "rb"))
+    b = Fight()
+    for _ in range(600):
+        b.frame(0)
+    for _ in range(40):
+        for _ in range(4): b.frame(START)
+        for _ in range(86): b.frame(0)
+        if b.ram[0x00] == 1 and b.ram[0x90] & 0x7F == 0x40:
+            break
+    at = {n: look for look, n in REF_AT.items()}
+    got = {}
+    for i in range(max(REF_AT.values()) + 1):
+        btn = 0
+        if b.ram[0x00] != 1 and i % 60 < 3:
+            btn = START
+        if b.ram[0x05] == 0:                # Joe's health held low, Mac punching: his knockdowns, the TKO
+            for a in (0x0398, 0x0399):
+                if b.ram[a] > 8:
+                    b.ram[a] = 8
+            btn = [UP | A, 0, UP | BTN_B, 0][(i // 6) % 4]
+        b.frame(btn)
+        if i in at:
+            img = b.render(sprites=False)
+            got[at[i]] = [row[140:250] for row in img[110:215]]
+    CACHE.parent.mkdir(exist_ok=True)
+    pickle.dump(got, open(REF_CACHE, "wb"))
+    return got
+
+
+def vs_screen(opponent):
+    """The challenger ("vs.") screen as the game shows it for this opponent: RGB rows."""
+    cache = HERE / "out" / f"nes-vs{opponent}.pkl"
+    if cache.exists():
+        return pickle.load(open(cache, "rb"))
+    b = Fight()
+    for _ in range(600):
+        b.frame(0)
+    for _ in range(4):
+        b.frame(START)
+    b.ram[0x01] = opponent
+    for _ in range(250):
+        b.frame(0)
+    img = b.render()
+    cache.parent.mkdir(exist_ok=True)
+    pickle.dump(img, open(cache, "wb"))
+    return img

@@ -228,13 +228,19 @@ OppInit:
     xor a
     ld [wNes + $5A], a
     ld [wNes + $AF], a
-    ld a, [wNes + nOppCurState]    ; the state's script: from the first pointer table below $40, the second above
+    ld a, [wNes + nOppCurState]    ; the state's script: from his entry's first pointer table below $40, its
+    ld c, a                        ; second above (his entry: wFtNesOffset into his bank, as FightOffset)
+    ld a, [wFtNesOffset]
+    ld e, a
+    ld d, 0
+    ld a, c
     cp $40
     ld hl, NesFighter + 2
     jp c, .table
     sub $40
     ld hl, NesFighter + 4
 .table:
+    add hl, de
     ld c, a
     ld a, [hl+]             ; the table's address (a NES pointer)
     ld e, a
@@ -257,6 +263,12 @@ OppInit:
     ld [wNes + $BA], a
     ld hl, wNes + $04FF
     res 7, [hl]
+    ld a, [wNes + $05CC]    ; $C4D1: a fighter drawn in 8x16 sprites back to them ($C4D6)
+    and a
+    jr z, .guard
+    ld a, $10
+    ld [wNes + $80], a
+.guard:
     ld a, $0A
     jp OppGuardPose
 
@@ -988,9 +1000,9 @@ AiHigh:                     ; $B1F4
     add a
     ld [wNes + $39], a
     ret
-.either:                    ; $81: one of the next two bytes, at random
-    call NesRandom
-    bit 7, a
+.either:                    ; $81: one of the next two bytes, at random (the NES tests N after three RORs
+    call NesRandom          ; of $18 ($AEF1): the random's bit 1)
+    bit 1, a
     jp nz, .first
     inc c
     call AiByte
@@ -1447,9 +1459,17 @@ NesFightStart::
     ld a, b
     or c
     jp nz, .clear2
-    ld a, [NesFighter + FT_NES_OFFSET + $0E]
+    ld a, [wFtNesOffset]    ; FightOffset ($03) as the NES has it (scripts test it: a fighter's rematch
+    ld [wNes + $03], a      ; shares his bank)
+    add LOW(NesFighter + $0E)   ; his entry's $0E: the pointer to his AI tables
     ld l, a
-    ld a, [NesFighter + FT_NES_OFFSET + $0F]
+    adc HIGH(NesFighter + $0E)
+    sub l
+    ld h, a
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    ld a, h
     sub NES_BANK_DELTA
     ld h, a
     ld de, wNes + $05A0
@@ -2567,13 +2587,19 @@ NesStars::
     ld a, [wNes + $0344]    ; $89BE: it starts
     and a
     ret z
-    ld a, $14               ; (the count starts next frame)
+    ld a, $14               ; $89D7: the count, its first step this frame ($89AB)
     ld [wNes + $0343], a
-    ret
+    jp .flash
 .count:
     ld hl, wNes + $0343
     dec [hl]
     jp z, .earned
+    ld a, [hl]              ; $89B1: a step in, its sound
+    cp $10
+    jp nz, .flash
+    ld a, 3
+    ld [wNes + $F1], a
+.flash:
     ld a, $81               ; $89B9: the star flashes (a sprite transfer)
     ld [wNes + $17], a
     ret
@@ -2586,7 +2612,7 @@ NesStars::
     ld [wNes + $0341], a
     ld [wNes + $03E4], a
     ld [wNes + $03E0], a
-    ret
+    jp .flash               ; ($89F8)
 .wait:
     inc [hl]
     ret
@@ -2778,7 +2804,7 @@ ENDC
 ; new pose drawn: $60 = 1); where they meet; Mac getting up; the phase machine.
 NesEngineFrame::
     call NesVblank
-    ld a, BANK(NesFighter)
+    ld a, [wFtBankNes]
     ld [$2000], a
     call NesClock
     call NesPoints
@@ -2790,7 +2816,7 @@ IF DEF(FT_NES_SOUND)
     ld a, BANK(NesSnd)      ; ($A68D) bank 8: the sound engine
     ld [$2000], a
     call NesSound
-    ld a, BANK(NesFighter)
+    ld a, [wFtBankNes]
     ld [$2000], a
 ENDC
     call NesTimeline
@@ -2819,7 +2845,7 @@ ENDC
     ld [hl], 1
 .notDrawn:
     call NesCrowd
-    ld a, BANK(NesFighter)
+    ld a, [wFtBankNes]
     ld [$2000], a
     call NesExchange
     call NesMacGetup

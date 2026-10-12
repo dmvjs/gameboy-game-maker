@@ -19,7 +19,7 @@ from pathlib import Path
 
 W, H, CELL = 160, 144, 8
 CW, CH = W // CELL, H // CELL
-MAX_BG_PALETTES = 24                 # in a project; each scene uses 8 at most (the hardware holds 8)
+MAX_BG_PALETTES = 48                 # in a project; each scene uses 8 at most (the hardware holds 8)
 SCENE_BG_PALETTES = 8
 MAX_OBJ_PALETTES = 8
 MAX_TILES = 256
@@ -171,8 +171,8 @@ def validate(data):
         used = set(cell_pal)
         if len(used) > SCENE_BG_PALETTES:
             errors.append(f"{where} uses {len(used)} background palettes; a scene can use {SCENE_BG_PALETTES}.")
-        if (fight or puzzle) and max(used, default=0) >= SCENE_BG_PALETTES:
-            errors.append(f"{where}: a {'fight' if fight else 'puzzle grid'} scene uses palettes 1-{SCENE_BG_PALETTES} only.")
+        if puzzle and max(used, default=0) >= SCENE_BG_PALETTES:   # (a fight's are moved into hardware slots)
+            errors.append(f"{where}: a puzzle grid scene uses palettes 1-{SCENE_BG_PALETTES} only.")
         slide = (s or {}).get("slideIn", False)
         if not isinstance(slide, bool):
             errors.append(f"{where}: slideIn is true or false.")
@@ -261,7 +261,7 @@ def validate(data):
                                     f"{MAX_TILES}. Reuse repeated patterns to bring it down."])
             if s.get("fight"):
                 from . import fight as kit
-                n = kit.OBJ_FIRST_TILE + len(s["fight_obj"])
+                n = s["fight_slots"]["used"]
                 if n > kit.OBJ_TILE_LIMIT:
                     raise ProjectError([f'Scene "{s["name"]}": the player\'s poses need {n} sprite tiles; the limit is '
                                         f"{kit.OBJ_TILE_LIMIT}. Repeated and mirrored 8x8 pieces are free."])
@@ -419,9 +419,15 @@ def _press_start(press, pressed, where, index, scene_count, errors):
     dmc = press.get("nesDmc", 0)           # an NES sample (1 the crowd) on the press, in place of its sound
     if not (isinstance(dmc, int) and 0 <= dmc <= 7):
         errors.append(f"{where}: the press's nesDmc is an NES sample number, 0-7."); ok = False
+    hold = press.get("hold", 0)             # frames on the screen after the flashes (Punch-Out!!'s challenger, its crowd)
+    if not (isinstance(hold, int) and 0 <= hold <= 255):
+        errors.append(f"{where}: the press's hold is 0-255 frames."); ok = False
+    quiet = press.get("quiet", False)       # no sound on the press (the NES game's own music stopped, as its screens do)
+    if not isinstance(quiet, bool):
+        errors.append(f"{where}: the press's quiet is true or false."); ok = False
     if not ok:
         return None
-    return {"target": target, "flashes": flashes, "prompt": prompt, "nes_dmc": dmc,
+    return {"target": target, "flashes": flashes, "prompt": prompt, "nes_dmc": dmc, "hold": hold, "quiet": quiet,
             "area": dict(area) if area else None,
             "pressed": [ord(c) - 48 for c in pressed] if area else None}
 
@@ -521,19 +527,24 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
     pals = rv.get("palettes") or {}
     if not all(isinstance(pals.get(k), int) and 0 <= pals[k] < n_bg for k in kit.CELL_KINDS):
         errors.append(f"{where}: the rival needs a skin, gloves and hair palette that exist.")
-    poses = {}
-    given = dict(rv.get("poses") or {})
-    for name, stand_in in kit.POSE_FALLBACK.items():      # older projects: newer poses borrow an older one
-        if name not in given and stand_in in given:
-            given[name] = given[stand_in]
-    for name in kit.RIVAL_POSES:
-        pose = given.get(name)
-        px, cells = (pose or {}).get("pixels"), (pose or {}).get("cells")
-        if not (isinstance(px, str) and len(px) == kit.REGION_W * kit.REGION_H * 64 and set(px) <= set("0123")
-                and isinstance(cells, str) and len(cells) == kit.REGION_W * kit.REGION_H and set(cells) <= set(kit.CELL_KINDS)):
-            errors.append(f'{where}: the rival\'s "{name}" pose is missing or damaged.')
-            continue
-        poses[name] = {"pixels": [ord(c) - 48 for c in px], "cells": cells}
+    def rival_poses(given, which):
+        poses = {}
+        given = dict(given)
+        for name, stand_in in kit.POSE_FALLBACK.items():  # older projects: newer poses borrow an older one
+            if name not in given and stand_in in given:
+                given[name] = given[stand_in]
+        for name in kit.RIVAL_POSES:
+            pose = given.get(name)
+            px, cells = (pose or {}).get("pixels"), (pose or {}).get("cells")
+            if not (isinstance(px, str) and len(px) == kit.REGION_W * kit.REGION_H * 64 and set(px) <= set("0123")
+                    and isinstance(cells, str) and len(cells) == kit.REGION_W * kit.REGION_H and set(cells) <= set(kit.CELL_KINDS)):
+                errors.append(f'{where}: the rival\'s "{name}" {which}pose is missing or damaged.')
+                continue
+            poses[name] = {"pixels": [ord(c) - 48 for c in px], "cells": cells}
+        return poses
+    poses = rival_poses(rv.get("poses") or {}, "")
+    cgb_poses = rival_poses(rv["cgbPoses"], "Game Boy Color ") if rv.get("cgbPoses") else None   # (finer: Color has
+                                                                                                  # a second tile bank)
     pl = ft.get("player") or {}
     pposes = {}
     for name in kit.PLAYER_POSES:
@@ -544,9 +555,12 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
         pposes[name] = [ord(c) - 48 for c in px]
     ref = ft.get("referee") or {}
     rposes_ref = {}
+    shirt = ref.get("shirtPalette")             # (optional) a second palette: pixels 4 are drawn in it
+    if shirt is not None and not (isinstance(shirt, int) and 0 <= shirt < n_obj):
+        errors.append(f"{where}: the referee's shirt palette doesn't exist."); shirt = None
     for name in kit.REF_POSES:
         px = (ref.get("poses") or {}).get(name)
-        if not (isinstance(px, str) and len(px) == kit.REF_W * kit.REF_H and set(px) <= set("0123")):
+        if not (isinstance(px, str) and len(px) == kit.REF_W * kit.REF_H and set(px) <= set("01234" if shirt is not None else "0123")):
             errors.append(f'{where}: the referee\'s "{name}" pose is missing or damaged.')
             continue
         rposes_ref[name] = [ord(c) - 48 for c in px]
@@ -614,10 +628,11 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
     if len(errors) > n:
         return None
     return {"x": region["x"], "y": region["y"], "palettes": {k: pals[k] for k in kit.CELL_KINDS}, "poses": poses,
+            **({"cgb_poses": cgb_poses} if cgb_poses else {}),
             "player": {"palette": pl.get("palette"), "tired_palette": pl.get("tiredPalette", pl.get("palette")),
                        "down_palette": pl.get("downPalette", pl.get("palette")),
                        "poses": pposes}, "hud": hud,
-            "referee": {"palette": ref.get("palette"), "poses": rposes_ref},
+            "referee": {"palette": ref.get("palette"), "shirt_palette": shirt, "poses": rposes_ref},
             "text_slot": slots[0], "bar_slot": slots[1], "crowd_row": crowd, "opening": opening, "loop": loop, "timed": timed,
             "win": ft["win"], "lose": ft["lose"], "corner": corner, "win_tko": win_tko,
             "effects": {k: fx.get(k, True) for k in kit.EFFECTS}, "nes": nes}
@@ -1042,14 +1057,16 @@ def compose(scene):
     scene["tiles"] = tiles
     if ft:
         _fight_swap(scene)
+        if scene["fight"].get("cgb_poses"):
+            _fight_cgb(scene)
     return scene
 
 
-def _rival_pixels(scene, pose):
+def _rival_pixels(scene, pose, which="poses"):
     """The rival's area painted with one pose: (pixel index, slot) and (cell, palette) pairs."""
     from . import fight as kit
     ft = scene["fight"]
-    p = ft["poses"][pose]
+    p = ft[which][pose]
     pw = kit.REGION_W * CELL
     px = [((ft["y"] * CELL + i // pw) * W + ft["x"] * CELL + i % pw, v) for i, v in enumerate(p["pixels"])]
     cells = [((ft["y"] + k // kit.REGION_W) * CW + ft["x"] + k % kit.REGION_W, ft["palettes"][kind])
@@ -1134,10 +1151,45 @@ def _fight_compose_tiles(scene, tile_of):
                     out.append((by * 8, bx * 8, kit.OBJ_FIRST_TILE + t, attr | flip))
         return out
     pal = ft["player"]["palette"]
-    sprites = {pose: sprite_list(ft["player"]["poses"][pose], kit.PLAYER_W, kit.PLAYER_H, pal) for pose in kit.PLAYER_POSES}
+    sprites = {pose: sprite_list(ft["player"]["poses"][pose], kit.PLAYER_W, kit.PLAYER_H, pal)
+               for pose in kit.PLAYER_POSES if pose not in kit.PLAYER_RARE}
+    # Tiles loaded as they're needed (two areas past the rest, sized to what they hold): the player's rare poses
+    # (one at a time) and the referee's (two areas: the next pose loads into the one not shown). A tile already
+    # kept for good, or (the referee's) used by more than one of his poses, is kept for good instead.
+    def slot_list(px, w, h, attr_of, map_of, shared, area):
+        out, slot = [], {}
+        for by in range(h // 8):
+            for bx in range(w // 8):
+                key = tuple(px[(by * 8 + y) * w + bx * 8 + x] for y in range(8) for x in range(8))
+                if not any(key):
+                    continue
+                attr, key = attr_of(key), map_of(key)
+                flipped = tuple(key[y * 8 + 7 - x] for y in range(8) for x in range(8))
+                if key in index or flipped in index or key in shared:
+                    t, flip = obj_tile(key)
+                    out.append((by * 8, bx * 8, kit.OBJ_FIRST_TILE + t, attr | flip))
+                else:
+                    k = slot.setdefault(key, len(slot))
+                    out.append((by * 8, bx * 8, (area, k), attr))
+        return out, list(slot)
+    rare = {pose: slot_list(ft["player"]["poses"][pose], kit.PLAYER_W, kit.PLAYER_H, lambda k: pal, lambda k: k, (), "pl")
+            for pose in kit.PLAYER_RARE}
     ref_attr = ft["referee"]["palette"] | 0x10          # Color: its palette; original: OBP1
-    scene["fight_ref_sprites"] = {pose: sprite_list(ft["referee"]["poses"][pose], kit.REF_W, kit.REF_H, ref_attr)
-                                  for pose in kit.REF_POSES}
+    shirt = ft["referee"].get("shirt_palette")
+    in_shirt = lambda key: shirt is not None and key.count(4) > key.count(2)     # (the palette its colors need
+    ref_ink = lambda key: tuple((2 if in_shirt(key) else 1) if v == 4 else (1 if in_shirt(key) and v == 2 else v)
+                                for v in key)   # most: in the cap's, a speck of white is skin; in the shirt's, red)
+    def ref_tiles(px):
+        return [ref_ink(k) for k in (tuple(px[(by * 8 + y) * kit.REF_W + bx * 8 + x] for y in range(8) for x in range(8))
+                for by in range(kit.REF_H // 8) for bx in range(kit.REF_W // 8)) if any(k)]
+    seen_in = {}
+    for pose in kit.REF_POSES:
+        for k in set(ref_tiles(ft["referee"]["poses"][pose])):
+            seen_in[k] = seen_in.get(k, 0) + 1
+    shared = {k for k, n in seen_in.items() if n > 1}
+    refs = {pose: slot_list(ft["referee"]["poses"][pose], kit.REF_W, kit.REF_H,
+                            lambda k: shirt | 0x10 if in_shirt(k) else ref_attr, ref_ink, shared, "ref")
+            for pose in kit.REF_POSES}
     count_first = len(obj)
     for ch in kit.COUNT_GLYPHS:                 # the referee's words, each letter on a piece of speech bubble
         g = active_font()[ch]
@@ -1157,6 +1209,21 @@ def _fight_compose_tiles(scene, tile_of):
             scene[key] = kit.OBJ_FIRST_TILE + len(obj) - 1
         else:
             scene[key] = 0
+    # the loaded areas, at the top of the sprite tiles: the referee's two, the player's rare poses' below them
+    ref_n = max([len(t) for _, t in refs.values()] + [0])
+    pl_n = max([len(t) for _, t in rare.values()] + [0])
+    ref_at = kit.OBJ_TILE_LIMIT - 2 * ref_n
+    pl_at = ref_at - pl_n
+    base = {"ref": ref_at, "pl": pl_at}
+    fix = lambda sp: [(dy, dx, base[t[0]] + t[1] if isinstance(t, tuple) else t, a) for dy, dx, t, a in sp]
+    for pose, (sp, _) in rare.items():
+        sprites[pose] = fix(sp)
+    scene["fight_sprites"] = {pose: sprites[pose] for pose in kit.PLAYER_POSES}
+    scene["fight_ref_sprites"] = {pose: fix(refs[pose][0]) for pose in kit.REF_POSES}
+    scene["fight_ref_tiles"] = {pose: refs[pose][1] for pose in kit.REF_POSES}
+    scene["fight_rare_tiles"] = {pose: rare[pose][1] for pose in kit.PLAYER_RARE}
+    scene["fight_slots"] = {"ref": ref_at, "ref_tiles": ref_n, "pl": pl_at, "pl_tiles": pl_n,
+                            "used": kit.OBJ_FIRST_TILE + len(obj) + pl_n + 2 * ref_n}
     # a camera flash in the crowd: a white burst (slot 1) on the darkest slot
     burst = ["...#....", ".#.#.#..", "..###...", "#######.", "..###...", ".#.#.#..", "...#....", "........"]
     scene["fight_flash_tile"] = tile_of(tuple(0 if ch == "#" else 3 for row in burst for ch in row))
@@ -1210,6 +1277,57 @@ def _fight_swap(scene):
     scene["fight_flash_tile"] = base_index[tiles[scene["fight_flash_tile"]]]
     scene["fight_swap"] = {"first": first, "count": size, "sets": [padded[n] for n in ("attack", "knockdown", "special")],
                            "sizes": {n: len(own) for n, own in sets.items()}}
+
+
+def _fight_cgb(scene):
+    """Game Boy Color: the rival's finer poses (cgb_poses) in tiles of their own. Bank 0 keeps the scene's (the
+    original's layout, so the screen as loaded is the same); his always-there tiles take its slots past them
+    (the original's swap area: Color swaps in bank 1), then bank 1's past his swap area there."""
+    from . import fight as kit
+    sw = scene["fight_swap"]
+    in_set = {p for poses in kit.POSE_SETS.values() for p in poses}
+    keys, attrs = {}, {}
+    for pose in kit.RIVAL_POSES:
+        img = list(scene["composed"])
+        px, cells = _rival_pixels(scene, pose, "cgb_poses")
+        for i, v in px:
+            img[i] = v
+        keys[pose] = [cell_key(img, c) for c, _ in cells]
+        attrs[pose] = [pal for _, pal in cells]
+    perm = []
+    for pose in kit.RIVAL_POSES:
+        if pose not in in_set:
+            for k in keys[pose]:
+                if k not in perm:
+                    perm.append(k)
+    sets = {}
+    for name, poses in kit.POSE_SETS.items():
+        own = []
+        for pose in poses:
+            for k in keys[pose]:
+                if k not in perm and k not in own:
+                    own.append(k)
+        sets[name] = own
+    size = max(len(own) for own in sets.values())
+    room0 = 256 - sw["first"]
+    perm0, perm1 = perm[:room0], perm[room0:]
+    if size + len(perm1) > 256:
+        raise ProjectError([f'Scene "{scene["name"]}": the rival\'s Game Boy Color poses need {len(perm) + size} tiles '
+                            f"of their own; there's room for {room0 + 256}. Share more of their tiles."])
+    slot = {k: (sw["first"] + n, 0) for n, k in enumerate(perm0)}
+    slot.update({k: (size + n, 1) for n, k in enumerate(perm1)})
+    maps, battrs = {}, {}
+    set_of = {pose: name for name, poses in kit.POSE_SETS.items() for pose in poses}
+    for pose in kit.RIVAL_POSES:
+        own = {k: (n, 1) for n, k in enumerate(sets[set_of[pose]])} if pose in set_of else {}
+        at = [slot.get(k) or own[k] for k in keys[pose]]
+        maps[pose] = [t for t, _ in at]
+        battrs[pose] = [b for _, b in at]
+    empty = tuple([0] * 64)
+    scene["fight_cgb"] = {"maps": maps, "attrs": attrs, "banks": battrs, "size": size,
+                          "sets": [sets[n] + [empty] * (size - len(sets[n])) for n in ("attack", "knockdown", "special")],
+                          "perm0": perm0, "perm0_first": sw["first"], "perm1": perm1, "perm1_first": size,
+                          "sizes": {n: len(own) for n, own in sets.items()}}
 
 
 def fade_palettes(colors, step, to):

@@ -5,6 +5,7 @@
 //
 // A fighter pack:
 //   id, name, credit       sample id, project name, the title's credit line
+//   referee?               { poses (24x32: 1-3, 4 in its shirt palette), colors, shirtColors } instead of the kit's
 //   title                  [{ text, x, y, scale, slot, shadow? }] drawn on the title screen (slots of textPalette,
 //                            or of titleLogo's colors when there's a logo)
 //   titleLogo?             { w: 160, h, y, pixels (slots), colors: 4 } a full-width band across the title
@@ -28,7 +29,7 @@
 import * as M from './model.js';
 import { REF_POSES } from './art/referee.js';
 
-export const BOXING_VERSION = 27;
+export const BOXING_VERSION = 29;
 
 const pal = (name, colors) => ({ name, colors });
 export const MAT = [26, 28, 31];
@@ -80,23 +81,26 @@ const centered = (text, scale = 1) => (M.W - text.length * 8 * scale) >> 1;
 export function boxingGame(pack) {
   M.useFont('bold');
   const R = pack.rival, P = pack.player;
+  const ringOf = rv => rv.ring || pack.ring;              // his ring's colors (Punch-Out!!'s change by circuit)
+  const matOf = rv => ringOf(rv)?.mat || MAT;
   const ROLE = { s: 3, g: 4, h: 5, t: 6 };               // portrait cells: these letters, or a digit k for portraitPalettes[k]
-  const role = r => ROLE[r] ?? 7 + +r;
+  const role = r => ROLE[r] ?? 7 + (/[A-Z]/.test(r) ? r.charCodeAt(0) - 55 : +r);   // (0-9, then A-Z)
   const p = {
     name: pack.name,
     palettes: [
       pal('HUD', [[31, 31, 31], [31, 26, 6], [28, 6, 6], [3, 4, 10]]),
       pal('Crowd', [[31, 31, 31], [18, 16, 24], [26, 6, 8], [4, 4, 10]]),
-      pal('Mat', [MAT, [20, 22, 28], [8, 12, 24], [3, 3, 6]]),
-      ...['skin', 'gloves', 'hair'].map((part, k) => pal(`${R.short} ${part}`, [MAT, ...R.palettes[k].slice(1)])),
+      pal('Mat', [matOf(R), [20, 22, 28], [8, 12, 24], [3, 3, 6]]),
+      ...['skin', 'gloves', 'hair'].map((part, k) => pal(`${R.short} ${part}`, [matOf(R), ...R.palettes[k].slice(1)])),
       pal('Text', pack.textPalette),
       ...(pack.portraitPalettes || []).map((colors, k) => pal(`Portrait ${k + 1}`, colors)),
       ...(pack.titleLogo ? [pal('Title logo', pack.titleLogo.colors)] : []),
     ],
     objPalettes: [pal('Player', [[0, 0, 0], ...P.colors]),
-                  pal('Referee', [[0, 0, 0], [31, 24, 18], [26, 29, 31], [3, 3, 6]]),
+                  pal('Referee', [[0, 0, 0], ...(pack.referee?.colors || [[31, 24, 18], [26, 29, 31], [3, 3, 6]])]),
                   pal('Player tired', [[0, 0, 0], ...P.tiredColors]),
-                  ...(P.downColors ? [pal('Player down', [[0, 0, 0], ...P.downColors])] : [])],
+                  ...(P.downColors ? [pal('Player down', [[0, 0, 0], ...P.downColors])] : []),
+                  ...(pack.referee?.shirtColors ? [pal('Referee shirt', [[0, 0, 0], ...pack.referee.shirtColors])] : [])],
     cursor: { palette: 0, pixels: Uint8Array.from(
       '00333000' + '03313300' + '33133330' + '33333330' + '33333330' + '03333300' + '00222000' + '00000000', ch => +ch) },
     scenes: ['Title', 'Challenger', 'Fight', 'You win', `${R.short} wins`, 'Pass key', 'Corner', 'Rematch',
@@ -111,7 +115,7 @@ export function boxingGame(pack) {
     font: 'bold',
     sample: { id: pack.id, version: BOXING_VERSION },
   };
-  const [title, tape, ring, win, lose, passKey, corner, retape, winTko] = p.scenes.map((_, i) => M.layerOf(p, i));
+  const [title, passKey] = [M.layerOf(p, 0), M.layerOf(p, 5)];
   const LOGO = p.palettes.length - 1;                    // the title logo's palette (when there is one)
   const S = p.scenes;
 
@@ -124,7 +128,7 @@ export function boxingGame(pack) {
   }
 
   // Text palette slots: 0 light, 1 and 2 accents, 3 the background.
-  for (const s of [0, 1, 3, 4, 5, 6, 7, 8]) cellPalettes(S[s], 0, 0, M.CW, M.CH, ROLE.t);
+  cellPalettes(S[0], 0, 0, M.CW, M.CH, ROLE.t);
 
   // ---- Title: Punch-Out!!'s, a name over the logo band, NEW and CONTINUE ----
   fillRect(title, 0, 0, M.W, M.H, 3);
@@ -157,79 +161,11 @@ export function boxingGame(pack) {
   }
   S[0].texts = [{ label: pack.credit, x: centered(pack.credit) >> 3, y: 16, textSlot: 0 }];
 
-  // ---- Challenger: his rank, name and portrait top right with your record beside it; your name and portrait
-  // bottom left with his record beside it ----
-  function challenger(scene, layer, rematch) {
-    fillRect(layer, 0, 0, M.W, M.H, 3);
-    portrait(scene, layer, R.portrait, M.CW - PT, 3);
-    portrait(scene, layer, P.portrait, 0, 10);
-    const right = (label, y, textSlot) => ({ label, x: M.CW - label.length, y, textSlot });
-    const record = rematch ? P.lines.map(l => l.replace(/^0-0 /, '0-1 ')) : P.lines;     // (one loss: his record)
-    scene.texts = [
-      { label: pack.circuit, x: 0, y: 0, textSlot: 1 },
-      ...(rematch ? [{ label: 'REMATCH', x: 0, y: 1, textSlot: 1 }] : []),
-      right(R.rank, 1, 2), right(R.name, 2, 0),
-      ...record.map((label, n) => ({ label, x: 0, y: 3 + n, textSlot: 0 })),
-      { label: P.rank, x: 0, y: 8, textSlot: 2 }, { label: P.name, x: 0, y: 9, textSlot: 0 },
-      { label: 'VS.', x: PT + 1, y: 10, textSlot: 1 },
-      ...R.lines.map((label, n) => right(label, 11 + n, 0)),
-    ];
-    scene.pressStart = { target: 2, flashes: 3, area: null, prompt: { label: 'PUSH START!', x: 9, y: 17, textSlot: 1, blink: true },
-                         ...(R.nes?.sound ? { nesDmc: 1 } : {}) };   // Start sets the crowd off, as in Punch-Out!!
-    scene.slideIn = true;
-  }
-  challenger(S[1], tape, false);
-  challenger(S[7], retape, true);                        // after a loss: Punch-Out!!'s REMATCH
-
-  // ---- The ring ----
-  cellPalettes(S[2], 0, 0, M.CW, 3, 0);
-  cellPalettes(S[2], 0, 3, M.CW, 2, 1);
-  cellPalettes(S[2], 0, 5, M.CW, 13, 2);
-  fillRect(ring, 0, 0, M.W, 24, 3);                       // HUD
-  icon(ring, 0, 0, STAR); icon(ring, 2, 0, HEART);
-  M.drawText(ring, 'R', 96, 0, 0);
-  M.drawText(ring, P.hud, 8, 16, 1); M.drawText(ring, R.hud, 104, 16, 1);
-  fillRect(ring, 0, 24, M.W, 16, 3);                      // crowd in the dark, ropes across
-  for (let x = 0; x < M.W; x += 4) {
-    ring.pixels[(26 + (x % 8 ? 1 : 3)) * M.W + x] = 1; ring.pixels[(27 + (x % 8 ? 1 : 3)) * M.W + x + 1] = 1;
-  }
-  for (const y of [32, 36]) { fillRect(ring, 0, y, M.W, 1, 0); fillRect(ring, 0, y + 1, M.W, 1, 2); }
-  for (const side of [0, 1]) {                            // the corner posts (a tile each), their pads on the
-    const at = (x, y, slot) => { ring.pixels[y * M.W + (side ? M.W - 1 - x : x)] = slot; };   // ropes, and the
-    for (let y = 32; y < 40; y++) for (let x = 0; x < 4; x++) at(x, y, 3);                   // side ropes off the edge
-    for (const y of [32, 36]) for (let k = 0; k < 3; k++) {
-      if (y + 1 + k < 40) at(2 - k, y + 1 + k, 0);
-      if (y + 2 + k < 40) at(2 - k, y + 2 + k, 2);
-    }
-    for (let y = 26; y < 40; y++) { at(4, y, 0); at(5, y, 2); at(6, y, 2); }    // (up in the crowd: no flashes there)
-    at(4, 26, 3); at(6, 26, 3);
-    for (const y of [32, 36]) for (let x = 3; x < 8; x++) { at(x, y, 1); at(x, y + 1, 1); }
-  }
-  fillRect(ring, 0, 40, M.W, 104, 0);                     // the mat, plain to the bottom as Punch-Out!!'s (the rival's
-                                                          // rows scroll on their own as he moves)
-  S[2].fight = {
-    rival: { x: 6, y: 5, palettes: { s: 3, g: 4, h: 5 }, poses: R.poses },
-    player: { palette: 0, tiredPalette: 2, ...(P.downColors ? { downPalette: 3 } : {}), poses: P.poses },
-    referee: { palette: 1, poses: REF_POSES },
-    hud: { stars: { x: 1, y: 0 }, hearts: { x: 3, y: 0 }, points: { x: 6, y: 0 }, clock: { x: 15, y: 0 },
-           round: { x: 13, y: 0 }, playerBar: { x: 1, y: 1 }, rivalBar: { x: 13, y: 1 } },
-    textSlot: 0, barSlot: 2, crowdRow: 3,
-    opening: [['idle', 250], ['idle', 250], ['idle', 250], ['idle', 250]],      // does nothing for 40 seconds
-    loop: [['idle', 90], ['jab', 0], ['idle', 60], ['guard', 90], ['jab', 0], ['idle', 40], ['hook', 0],
-           ['idle', 70], ['guard', 60], ['jab', 0], ['idle', 30], ['jab', 0], ['idle', 50], ['hook', 0]],
-    timed: [{ round: 1, time: '0:40', op: 'taunt', arg: 0 }, { round: 2, time: '0:30', op: 'taunt', arg: 0 },
-            { round: 3, time: '0:30', op: 'taunt', arg: 0 }],
-    win: 3, lose: 4, corner: 6, ...(pack.loseGlove ? { winTko: 8 } : {}),
-    ...(pack.effects ? { effects: { ...pack.effects } } : {}),
-    ...(R.nes ? { nes: { ...R.nes } } : {}),
-  };
-  for (const [c, palette] of M.rivalPoseCells(S[2].fight, 'idle')) S[2].cellPal[c] = palette;
-
   // ---- Endings and help ----
   // Punch-Out!!'s screens after the fight: blue, the W.V.B.A. header, a word for Mac, the big glove, the next
   // challenge. LOSS and its glove's palette, then each screen's lines (rows; the glove covers the one at row 10).
   let LOSS = null;
-  function nesScreen(scene, layer, lines, gloveAt) {
+  function nesScreen(scene, layer, lines, gloveAt, gloveX) {   // (gloveX: the glove's own place, a line's third its x)
     if (LOSS === null) {
       LOSS = p.palettes.length;
       p.palettes.push(pal('Loss', [[1, 2, 18], [7, 22, 25], [29, 29, 29], [0, 0, 0]]),       // NES $02, $2C, $30
@@ -240,57 +176,229 @@ export function boxingGame(pack) {
     const line = (text, y, slot) => M.drawText(layer, text, centered(text) >> 3 << 3, y, slot);   // (on whole tiles, as the NES's)
     line('THE W.V.B.A.', 8, 1); line(pack.circuit, 16, 1);
     for (let x = 0; x < M.W; x += 8) fillRect(layer, x + 1, 27, 5, 1, 1);
-    for (const [text, y] of lines) line(text, y, 2);
-    const g = pack.loseGlove, gx = (centered(gloveAt) >> 3 << 3) + 5 * 8, gy = 8 * 8;
+    for (const [text, y, x] of lines) x === undefined ? line(text, y, 2) : M.drawText(layer, text, x, y, 2);
+    const g = pack.loseGlove, gx = gloveX ?? (centered(gloveAt) >> 3 << 3) + 5 * 8, gy = 8 * 8;
     for (let i = 0; i < g.w * g.h; i++) {               // over the line at row 10, as the NES has it (on whole tiles:
       const v = +g.pixels[i], x = gx + i % g.w, y = gy + (i / g.w | 0);   // the letters beside it keep their color)
       if (v) { layer.pixels[y * M.W + x] = v; scene.cellPal[(y >> 3) * M.CW + (x >> 3)] = LOSS + 1; }
     }
   }
   const NEXT = [['ARE YOU READY', 104], ['FOR THE', 114], ['NEXT CHALLENGE ?', 124]];
-  if (pack.loseGlove) {                                  // Punch-Out!!'s: "GREAT FIGHTING", ranked up
-    const ranked = `RANKED UP TO #${(R.rank.match(/\d+/) || ['1'])[0]}`;
-    for (const [scene, layer, how] of [[S[3], win, 'KO'], [S[8], winTko, 'TKO']]) {
-      nesScreen(scene, layer, [['"GREAT FIGHTING"', 40], [`YOU WON BY ${how}!`, 56], [ranked, 80], ...NEXT], ranked);
-      scene.pressStart = { target: 0, flashes: 3, area: null, prompt: { label: 'PUSH START!', x: 4, y: 17, textSlot: 1, blink: true } };
+
+  // ---- Each rival: his challenger screen, his ring, the screens after (won, won on a TKO, lost), his corner and
+  // the rematch. The first rival's are scenes 1-4, 6-8; the next ones' come after, seven each. ----
+  const rivals = pack.rivals || [R];
+  const SCENE_NAMES = ['Challenger', 'Fight', 'You win', 'wins', 'Corner', 'Rematch', 'You win (TKO)'];
+  const ids = rivals.map((rv, k) => {
+    if (k === 0) return { challenger: 1, fight: 2, win: 3, lose: 4, corner: 6, rematch: 7, winTko: 8 };
+    const at = p.scenes.length;
+    for (const name of SCENE_NAMES) {
+      const full = name === 'wins' ? `${rv.short} wins` : `${name}: ${rv.short}`;
+      p.scenes.push({ name: full, pixels: new Uint8Array(M.W * M.H), cellPal: new Uint8Array(M.CW * M.CH),
+        menu: null, pressStart: null, pressed: null, options: null, puzzle: null, fight: null, passKey: null, back: null,
+        texts: [], notes: notes(rv.short)[name === 'wins' ? `${rv.short} wins` : name] });
     }
-  } else {
-    fillRect(win, 0, 0, M.W, M.H, 3);
-    M.drawText(win, 'K.O.!', 41, 33, 2, 3); M.drawText(win, 'K.O.!', 40, 32, 1, 3);
-    S[3].texts = pack.win.map((label, n) => ({ label, x: centered(label) >> 3, y: 9 + n, textSlot: 0 }));
-    S[3].pressStart = { target: 0, flashes: 3, area: null, prompt: { label: 'PRESS START', x: 4, y: 15, textSlot: 1, blink: true } };
-  }
-  if (pack.loseGlove) {                                  // Punch-Out!!'s: "DON'T CRY, MAC!", then the rematch
-    const rematch = "LET'S REMATCH!";
-    nesScreen(S[4], lose, [[`"DON'T CRY,${P.hud}!"`, 40], ['YOU LOST!', 56], [rematch, 80], ...NEXT], rematch);
-    S[4].pressStart = { target: 7, flashes: 3, area: null, prompt: { label: 'PUSH START!', x: 4, y: 17, textSlot: 1, blink: true } };
-  } else {
-    fillRect(lose, 0, 0, M.W, M.H, 3);
-    const wins = `${R.hud} WINS`;
-    M.drawText(lose, wins, centered(wins, 2) + 1, 41, 2, 2); M.drawText(lose, wins, centered(wins, 2), 40, 0, 2);
-    S[4].texts = pack.lose.map((label, n) => ({ label, x: centered(label) >> 3, y: 9 + n, textSlot: 1 }));
-    S[4].pressStart = { target: 0, flashes: 3, area: null, prompt: { label: 'PRESS START', x: 4, y: 15, textSlot: 1, blink: true } };
-  }
+    return { challenger: at, fight: at + 1, win: at + 2, lose: at + 3, corner: at + 4, rematch: at + 5, winTko: at + 6 };
+  });
+  const layer = i => M.layerOf(p, i);
+  rivals.forEach((rv, k) => {
+    const id = ids[k], next = k + 1 < rivals.length ? ids[k + 1].challenger : 0;
+    const rivalPals = k === 0 ? { s: 3, g: 4, h: 5 } : (() => {   // his own three, past the first rival's
+      const at = p.palettes.length;
+      ['skin', 'gloves', 'hair'].forEach((part, j) => p.palettes.push(pal(`${rv.short} ${part}`, [matOf(rv), ...rv.palettes[j].slice(1)])));
+      return { s: at, g: at + 1, h: at + 2 };
+    })();
+    for (const sc of [id.challenger, id.rematch, id.corner]) cellPalettes(S[sc], 0, 0, M.CW, M.CH, ROLE.t);
+    for (const sc of [id.win, id.lose, id.winTko]) cellPalettes(S[sc], 0, 0, M.CW, M.CH, ROLE.t);
+
+    // ---- Challenger: his rank, name and portrait top right with your record beside it; your name and portrait
+    // bottom left with his record beside it ----
+    function challenger(scene, lay, rematch) {
+      fillRect(lay, 0, 0, M.W, M.H, 3);
+      portrait(scene, lay, rv.portrait, M.CW - PT, 3);
+      portrait(scene, lay, P.portrait, 0, 10);
+      const right = (label, y, textSlot) => ({ label, x: M.CW - label.length, y, textSlot });
+      const lines = rv.playerLines || P.lines;          // (your record as it stands by then)
+      const record = rematch ? lines.map(l => l.replace(/^(\d+)-(\d+) /, (_, w, l2) => `${w}-${+l2 + 1} `)) : lines;
+      scene.texts = [
+        { label: pack.circuit, x: 0, y: 0, textSlot: 1 },
+        ...(rematch ? [{ label: 'REMATCH', x: 0, y: 1, textSlot: 1 }] : []),
+        right(rv.rank, 1, 2), right(rv.name, 2, 0),
+        ...record.map((label, n) => ({ label, x: 0, y: 3 + n, textSlot: 0 })),
+        { label: rv.playerRank || P.rank, x: 0, y: 8, textSlot: 2 }, { label: P.name, x: 0, y: 9, textSlot: 0 },
+        { label: 'VS.', x: PT + 1, y: 10, textSlot: 1 },
+        ...rv.lines.map((label, n) => right(label, 11 + n, 0)),
+      ];
+      scene.pressStart = { target: id.fight, flashes: 3, area: null, prompt: { label: 'PUSH START!', x: 9, y: 17, textSlot: 1, blink: true },
+                           ...(rv.nes?.sound ? { nesDmc: 1, hold: 160 } : {}) };   // Start sets the crowd off and the
+                                                                   // screen stays a while with it, as in Punch-Out!!
+      scene.slideIn = true;
+    }
+    challenger(S[id.challenger], layer(id.challenger), false);
+    challenger(S[id.rematch], layer(id.rematch), true);  // after a loss: Punch-Out!!'s REMATCH
+
+    // ---- The ring ----
+    const sf = S[id.fight], ring = layer(id.fight);
+    let crowd = 1;                                          // his crowd's color (Punch-Out!!'s differs by fight)
+    if (rv.crowdColor) {
+      crowd = p.palettes.length;
+      const [c0, , c2, c3] = p.palettes[1].colors;
+      p.palettes.push(pal(`${rv.short} crowd`, [c0, rv.crowdColor, c2, c3]));
+    }
+    let mat = 2;                                            // his ring's mat (another circuit's: its own)
+    if (String(matOf(rv)) !== String(p.palettes[2].colors[0])) {
+      mat = p.palettes.length;
+      p.palettes.push(pal(`${rv.short} mat`, [matOf(rv), ...p.palettes[2].colors.slice(1)]));
+    }
+    cellPalettes(sf, 0, 0, M.CW, 3, 0);
+    cellPalettes(sf, 0, 3, M.CW, 2, crowd);
+    cellPalettes(sf, 0, 5, M.CW, 13, mat);
+    const nesRing = ringOf(rv)?.wall;                       // Punch-Out!!'s: the HUD in boxes on its wall, the crowd
+    const hud = nesRing                                     // behind three ropes, red posts with blue pads
+      ? { stars: { x: 1, y: 1 }, hearts: { x: 3, y: 1 }, points: { x: 7, y: 1 }, clock: { x: 15, y: 1 },
+          round: { x: 12, y: 2 }, playerBar: { x: 0, y: 2 }, rivalBar: { x: 14, y: 2 } }
+      : { stars: { x: 1, y: 0 }, hearts: { x: 3, y: 0 }, points: { x: 6, y: 0 }, clock: { x: 15, y: 0 },
+          round: { x: 13, y: 0 }, playerBar: { x: 1, y: 1 }, rivalBar: { x: 13, y: 1 } };
+    if (nesRing) {
+      const r = ringOf(rv), [white, , red, dark] = p.palettes[crowd].colors;
+      const wall = p.palettes.length, posts = wall + 1;
+      p.palettes.push(pal(`${rv.short} wall`, [r.wall, white, r.wall, r.brick]),
+                      pal(`${rv.short} posts`, [white, matOf(rv), dark, r.post]));
+      // The HUD as Punch-Out!!'s: boxes on the arena's wall (its lamps along the top). Left: stars, hearts, your
+      // bar; middle: points, the round; right: the clock, his bar.
+      const boxes = [[0, 5], [7, 12], [14, 19]];
+      cellPalettes(sf, 0, 0, M.CW, 3, wall);
+      for (const [x0, x1] of boxes) cellPalettes(sf, x0, 1, x1 - x0 + 1, 2, 0);
+      for (let y = 0; y < 24; y++) for (let x = 0; x < M.W; x++)       // bricks, joints staggered
+        ring.pixels[y * M.W + x] = y % 4 === 3 || x % 8 === (y & 4 ? 4 : 0) ? 3 : 0;
+      for (let x = 2; x < M.W; x += 8) {                    // the lamps
+        fillRect(ring, x, 0, 4, 3, 1); ring.pixels[x] = 3; ring.pixels[x + 3] = 3;
+      }
+      for (const [x0, x1] of boxes) fillRect(ring, x0 * 8, 8, (x1 - x0 + 1) * 8, 16, 3);
+      icon(ring, 0, 1, STAR); icon(ring, 2, 1, HEART);
+      M.drawText(ring, 'ROUND', 56, 16, 0);
+      // The crowd: heads in rows behind three ropes; the posts' cells their own (the floor's blue outside the ring).
+      cellPalettes(sf, 0, 3, 1, 2, posts); cellPalettes(sf, M.CW - 1, 3, 1, 2, posts);
+      fillRect(ring, 0, 24, M.W, 16, 3);
+      const ropes = [29, 34, 39];
+      for (let y = 24; y < 40; y++) {
+        if (ropes.includes(y)) continue;
+        const r4 = (y - 24) % 5, shift = Math.floor((y - 24) / 5) % 2 ? 2 : 0;
+        for (let x = 8; x < M.W - 8; x++) {
+          const k = (x + shift) % 4;
+          if ((r4 < 2 && k < 2) || (r4 === 2 && k < 3) || (r4 === 3 && k === 1)) ring.pixels[y * M.W + x] = 1;
+        }
+      }
+      for (const y of ropes) fillRect(ring, 8, y, M.W - 16, 1, 0);
+      for (const side of [0, 1]) {
+        const at = (x, y, slot) => { ring.pixels[y * M.W + (side ? M.W - 1 - x : x)] = slot; };
+        for (let y = 24; y < 40; y++) for (let x = 0; x < 8; x++) at(x, y, 1);
+        for (let y = 25; y < 40; y++) for (let x = 3; x < 7; x++) at(x, y, (y >> 1) & 1 ? 0 : 3);   // the post, striped
+        for (const y of ropes) {
+          for (let x = 2; x < 8; x++) at(x, y, 0);          // the rope to it, its pad blue under
+          if (y > 24) for (let x = 2; x < 8; x++) at(x, y - 1, 1);
+          at(1, y, 0); at(0, y, 0);                         // and on off the side
+        }
+        for (let y = 24; y < 40; y++) at(2, y, 2);           // (its edge)
+      }
+        } else {
+      if (ringOf(rv)?.post) {                               // the corner posts in the ring's colors, pads the mat's
+        const [c0, , c2] = p.palettes[crowd].colors;
+        const posts = p.palettes.length;
+        p.palettes.push(pal(`${rv.short} posts`, [c0, matOf(rv), c2, ringOf(rv).post]));
+        cellPalettes(sf, 0, 4, 1, 1, posts); cellPalettes(sf, M.CW - 1, 4, 1, 1, posts);
+      }
+      fillRect(ring, 0, 0, M.W, 24, 3);                     // HUD
+      icon(ring, 0, 0, STAR); icon(ring, 2, 0, HEART);
+      M.drawText(ring, 'R', 96, 0, 0);
+      M.drawText(ring, P.hud, 8, 16, 1); M.drawText(ring, rv.hud, 104, 16, 1);
+      fillRect(ring, 0, 24, M.W, 16, 3);                    // crowd in the dark, ropes across
+      for (let x = 0; x < M.W; x += 4) {
+        ring.pixels[(26 + (x % 8 ? 1 : 3)) * M.W + x] = 1; ring.pixels[(27 + (x % 8 ? 1 : 3)) * M.W + x + 1] = 1;
+      }
+      for (const y of [32, 36]) { fillRect(ring, 0, y, M.W, 1, 0); fillRect(ring, 0, y + 1, M.W, 1, 2); }
+      for (const side of [0, 1]) {                          // the corner posts (a tile each), their pads on the
+        const at = (x, y, slot) => { ring.pixels[y * M.W + (side ? M.W - 1 - x : x)] = slot; };   // ropes, and the
+        for (let y = 32; y < 40; y++) for (let x = 0; x < 4; x++) at(x, y, 3);                   // side ropes off the edge
+        for (const y of [32, 36]) for (let j = 0; j < 3; j++) {
+          if (y + 1 + j < 40) at(2 - j, y + 1 + j, 0);
+          if (y + 2 + j < 40) at(2 - j, y + 2 + j, 2);
+        }
+        for (let y = 26; y < 40; y++) { at(4, y, 0); at(5, y, 2); at(6, y, 2); }  // (up in the crowd: no flashes there)
+        at(4, 26, 3); at(6, 26, 3);
+        for (const y of [32, 36]) for (let x = 3; x < 8; x++) { at(x, y, 1); at(x, y + 1, 1); }
+      }
+    }
+    fillRect(ring, 0, 40, M.W, 104, 0);                     // the mat, plain to the bottom as Punch-Out!!'s (the rival's
+                                                            // rows scroll on their own as he moves)
+    sf.fight = {
+      rival: { x: 6, y: 5, palettes: rivalPals, poses: rv.poses, ...(rv.cgbPoses ? { cgbPoses: rv.cgbPoses } : {}) },
+      player: { palette: 0, tiredPalette: 2, ...(P.downColors ? { downPalette: 3 } : {}), poses: P.poses },
+      referee: { palette: 1, poses: pack.referee?.poses || REF_POSES,
+                 ...(pack.referee?.shirtColors ? { shirtPalette: P.downColors ? 4 : 3 } : {}) },
+      hud,
+      textSlot: 0, barSlot: 2, crowdRow: 3,
+      opening: [['idle', 250], ['idle', 250], ['idle', 250], ['idle', 250]],      // does nothing for 40 seconds
+      loop: [['idle', 90], ['jab', 0], ['idle', 60], ['guard', 90], ['jab', 0], ['idle', 40], ['hook', 0],
+             ['idle', 70], ['guard', 60], ['jab', 0], ['idle', 30], ['jab', 0], ['idle', 50], ['hook', 0]],
+      timed: [{ round: 1, time: '0:40', op: 'taunt', arg: 0 }, { round: 2, time: '0:30', op: 'taunt', arg: 0 },
+              { round: 3, time: '0:30', op: 'taunt', arg: 0 }],
+      win: id.win, lose: id.lose, corner: id.corner, ...(pack.loseGlove ? { winTko: id.winTko } : {}),
+      ...(pack.effects ? { effects: { ...pack.effects } } : {}),
+      ...(rv.nes ? { nes: { ...rv.nes } } : {}),
+    };
+    for (const [c, palette] of M.rivalPoseCells(sf.fight, 'idle')) sf.cellPal[c] = palette;
+
+    // ---- After the fight ----
+    if (pack.loseGlove) {                                  // Punch-Out!!'s: "GREAT FIGHTING", ranked up
+      const ranked = rv.winRank || `RANKED UP TO #${(rv.rank.match(/\d+/) || ['1'])[0]}`;
+      for (const [sc, how] of [[id.win, 'KO'], [id.winTko, 'TKO']]) {
+        const champ = rv.winRank ? [ranked, 80, M.W - 8 - ranked.length * 8] : [ranked, 80];   // a title: the glove
+        nesScreen(S[sc], layer(sc), [['"GREAT FIGHTING"', 40], [`YOU WON BY ${how}!`, 56], champ, ...NEXT], ranked,
+                  rv.winRank ? 8 : undefined);                                                  // beside the line
+        S[sc].pressStart = { target: next, flashes: 3, area: null, quiet: true, prompt: { label: 'PUSH START!', x: 4, y: 17, textSlot: 1, blink: true } };
+      }
+      const rematch = "LET'S REMATCH!";                  // "DON'T CRY, MAC!", then the rematch
+      nesScreen(S[id.lose], layer(id.lose), [[`"DON'T CRY,${P.hud}!"`, 40], ['YOU LOST!', 56], [rematch, 80], ...NEXT], rematch);
+      S[id.lose].pressStart = { target: id.rematch, flashes: 3, area: null, quiet: true, prompt: { label: 'PUSH START!', x: 4, y: 17, textSlot: 1, blink: true } };
+    } else {
+      const winL = layer(id.win), loseL = layer(id.lose);
+      fillRect(winL, 0, 0, M.W, M.H, 3);
+      M.drawText(winL, 'K.O.!', 41, 33, 2, 3); M.drawText(winL, 'K.O.!', 40, 32, 1, 3);
+      S[id.win].texts = pack.win.map((label, n) => ({ label, x: centered(label) >> 3, y: 9 + n, textSlot: 0 }));
+      S[id.win].pressStart = { target: next, flashes: 3, area: null, prompt: { label: 'PRESS START', x: 4, y: 15, textSlot: 1, blink: true } };
+      fillRect(loseL, 0, 0, M.W, M.H, 3);
+      const wins = `${rv.hud} WINS`;
+      M.drawText(loseL, wins, centered(wins, 2) + 1, 41, 2, 2); M.drawText(loseL, wins, centered(wins, 2), 40, 0, 2);
+      S[id.lose].texts = pack.lose.map((label, n) => ({ label, x: centered(label) >> 3, y: 9 + n, textSlot: 1 }));
+      S[id.lose].pressStart = { target: 0, flashes: 3, area: null, prompt: { label: 'PRESS START', x: 4, y: 15, textSlot: 1, blink: true } };
+    }
+
+    // ---- The corner, between rounds: a word from each side ----
+    const cornerL = layer(id.corner), sc = S[id.corner];
+    fillRect(cornerL, 0, 0, M.W, M.H, 3);
+    portrait(sc, cornerL, rv.hurtPortrait || rv.portrait, 1, 2);
+    const say = PT + 2;                                    // his words, right of his portrait
+    const words = rv.corner || pack.corner;
+    sc.texts = [
+      { label: 'BETWEEN ROUNDS', x: 3, y: 0, textSlot: 1 },
+      { label: `${rv.hud}:`, x: say, y: 3, textSlot: 2 },
+      ...words.rival.map((label, n) => ({ label, x: say, y: 4 + n, textSlot: 0 })),
+      { label: 'COACH:', x: 1, y: 10, textSlot: 2 },
+      ...words.coach.map((label, n) => ({ label, x: 0, y: 11 + n, textSlot: 0 })),
+      { label: 'SELECT: CATCH BREATH', x: 0, y: 15, textSlot: 1 },
+    ];
+    sc.pressStart = { target: id.fight, flashes: 1, area: null, quiet: true,   // (Punch-Out!!'s corner: no sound on Start)
+                      prompt: { label: 'START: FIGHT', x: 4, y: 17, textSlot: 1, blink: true } };
+  });
+
   // ---- Pass key: Punch-Out!!'s ten digits (not checked yet) ----
+  cellPalettes(S[5], 0, 0, M.CW, M.CH, ROLE.t);
   fillRect(passKey, 0, 0, M.W, M.H, 3);
   S[5].texts = [{ label: 'PASS KEY', x: 6, y: 4, textSlot: 1 },
                 { label: 'UP/DOWN: NUMBER', x: 2, y: 12, textSlot: 0 }, { label: 'LEFT/RIGHT: MOVE', x: 2, y: 13, textSlot: 0 },
                 { label: 'START: OK  B: BACK', x: 1, y: 15, textSlot: 0 }];
   S[5].passKey = { x: 4, y: 8, textSlot: 0, target: 1 };
   S[5].back = 0;
-
-  // ---- The corner, between rounds: a word from each side ----
-  fillRect(corner, 0, 0, M.W, M.H, 3);
-  portrait(S[6], corner, R.hurtPortrait || R.portrait, 1, 2);
-  const say = PT + 2;                                    // his words, right of his portrait
-  S[6].texts = [
-    { label: 'BETWEEN ROUNDS', x: 3, y: 0, textSlot: 1 },
-    { label: `${R.hud}:`, x: say, y: 3, textSlot: 2 },
-    ...pack.corner.rival.map((label, n) => ({ label, x: say, y: 4 + n, textSlot: 0 })),
-    { label: 'COACH:', x: 1, y: 10, textSlot: 2 },
-    ...pack.corner.coach.map((label, n) => ({ label, x: 0, y: 11 + n, textSlot: 0 })),
-    { label: 'SELECT: CATCH BREATH', x: 0, y: 15, textSlot: 1 },
-  ];
-  S[6].pressStart = { target: 2, flashes: 1, area: null, prompt: { label: 'START: FIGHT', x: 4, y: 17, textSlot: 1, blink: true } };
   return p;
 }

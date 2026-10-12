@@ -9,7 +9,7 @@
 import { luminance, sameColor } from './color.js';
 
 export const W = 160, H = 144, CELL = 8, CW = W / CELL, CH = H / CELL;
-export const MAX_BG_PALETTES = 24;                 // in a project (same as gbstage/project.py)
+export const MAX_BG_PALETTES = 48;                 // in a project (same as gbstage/project.py)
 export const SCENE_BG_PALETTES = 8;                // in one scene: what the hardware holds
 export const MAX_OBJ_PALETTES = 8;
 export const MAX_TILES = 256;
@@ -366,7 +366,8 @@ export function textInk(label, x, y) {
 export const FIGHT_W = 8, FIGHT_H = 10;
 export const FIGHT_POSES = ['idle', 'idle2', 'guard', 'hit_l', 'hit_r', 'hit_body', 'dazed',
                             'jab_tell', 'jab_mid', 'jab', 'hook_tell', 'hook_mid', 'hook', 'slip', 'idle3', 'hit_back',
-                            'kd_stagger', 'kd_fall', 'kd_down', 'kd_kneel', 'taunt', 'arm_pop', 'guard_low'];
+                            'kd_stagger', 'kd_fall', 'kd_down', 'kd_kneel', 'taunt', 'arm_pop', 'guard_low',
+                            'tell1', 'tell2', 'tell3', 'tell4', 'tell5'];   // (a fighter's own wind-up frames)
 const FIGHT_HUD = { stars: 1, hearts: 2, points: 6, clock: 4, round: 1, playerBar: 6, rivalBar: 6 };
 
 // Pixel index -> slot for one rival pose, placed in the scene.
@@ -852,7 +853,8 @@ const clonePress = ps => ps && { ...ps, area: ps.area && { ...ps.area }, prompt:
 const cloneTexts = t => (Array.isArray(t) ? t : []).map(x => ({ label: String(x.label), x: x.x, y: x.y, textSlot: x.textSlot }));
 const clonePuzzle = pz => pz && JSON.parse(JSON.stringify(pz));
 const POSE_FALLBACK = { idle2: 'idle', idle3: 'idle', hit_back: 'hit_l', slip: 'idle', jab_mid: 'jab_tell', hook_mid: 'hook_tell', kd_stagger: 'hit_body', kd_fall: 'fall',
-                        kd_down: 'down', kd_kneel: 'fall', arm_pop: 'hit_body', guard_low: 'guard' };   // as in gbstage/fight.py: older projects borrow a pose
+                        kd_down: 'down', kd_kneel: 'fall', arm_pop: 'hit_body', guard_low: 'guard',
+                        tell1: 'jab_tell', tell2: 'jab_tell', tell3: 'jab_tell', tell4: 'jab_tell', tell5: 'jab_tell' };   // as in gbstage/fight.py: older projects borrow a pose
 const cloneFight = ft => {
   if (!ft) return ft;
   const out = JSON.parse(JSON.stringify(ft));

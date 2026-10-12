@@ -40,10 +40,10 @@ def lfsr(s):
 class Nes:
     """The NES routines, with $18 (its random byte) fed the Game Boy port's sequence."""
 
-    def __init__(self):
+    def __init__(self, bank=0):
         sys.path.insert(0, str(ROOT / "tools" / "punchout_art"))
         import cpu6502
-        self.nes = cpu6502.Nes(DISASM, 0)
+        self.nes = cpu6502.Nes(DISASM, bank)
         hi = bytearray(self.nes.hi)
         # drawing: the Game Boy does its own. What's left is $C890's flags: his sprite changes taken
         # ($A0 = 0) and a sprite transfer asked of the vblank ($17 = 1).
@@ -78,6 +78,10 @@ class Gb:
         self.m = Machine(build.rom, True)
         self.wnes = self.sym["wNes"][1]
         self.m.write(0x2000, self.sym["NesFighter"][0])
+        fight = next(s for s in project["scenes"] if s.get("fight"))["fight"]   # the fight's own values, as
+        for name, value in (("wFtBankNes", self.sym["NesFighter"][0]), ("wFtBankData", self.sym["RivalMaps"][0]),
+                            ("wFtNesOffset", fight["nes"]["offset"])):        # FightLoad sets them
+            self.m.write(self.sym[name][1], value)
 
     def call(self, name, a=None, bank=None):
         m, cpu = self.m, self.m.cpu
@@ -110,15 +114,21 @@ ROUTINES = [(0xB069, "NesTimeline"), (0xB10A, "NesAiMode"), (0xC291, "NesGuard")
 
 
 def run(log=print):
-    """Each ending the NES frame reaches, both machines byte for byte all the way."""
-    return all([
-        scenario(log, "Mac busy: punching, dodging, aiming", frames=6000, seed=7, busy=True),
-        full(log, "Mac fights: Joe down and up, then out on the third (TKO)", 14000, 3, low=True),
-        full(log, "Mac stands there: down, counted out", 14000, 2),
-        full(log, "Mac gets up by mashing: down three times (TKO)", 14000, 3, idle=True, style="mash"),
-        full(log, "Mac defends: three rounds to the final bell", 14000, 1, style="defend"),
-        sound(log, "the sound engine: effects, music and samples at random", 6000, 2),
-    ])
+    """Each ending the NES frame reaches, both machines byte for byte all the way: for each opponent."""
+    global FIGHTER
+    ok = True
+    for name in FIGHTERS:
+        FIGHTER = name
+        log(f"  {name}:")
+        ok = all([
+            scenario(log, "Mac busy: punching, dodging, aiming", frames=6000, seed=7, busy=True),
+            full(log, "Mac fights: down and up, then out on the third (TKO)", 14000, 3, low=True),
+            full(log, "Mac stands there: down, counted out", 14000, 2),
+            full(log, "Mac gets up by mashing: down three times (TKO)", 14000, 3, idle=True, style="mash"),
+            full(log, "Mac defends: three rounds to the final bell", 14000, 1, style="defend"),
+        ]) and ok
+    FIGHTER = "Glass Joe"
+    return sound(log, "the sound engine: effects, music and samples at random", 6000, 2) and ok
 
 
 # NES RAM the Game Boy doesn't keep: its drawing (OAM, PPU update buffers, palettes, the crowd's palette
@@ -146,19 +156,37 @@ def vblank(ram):
     ram[0x1E] = (ram[0x1E] + 1) & 0xFF
 
 
+# The opponents the port is checked with: (PRG bank, offset in it) of the NES game's data for each.
+FIGHTERS = {"Glass Joe": (0, 0x00), "Von Kaiser": (2, 0x00), "Piston Honda": (5, 0x30)}
+FIGHTER = "Glass Joe"
+
+
+def fighter_project(name):
+    """The Joe vs Mac project with this opponent's NES data in the rival's place, and his bank."""
+    import base64
+    bank, offset = FIGHTERS[name]
+    raw = json.loads(EXAMPLE.read_text())
+    if name != "Glass Joe":
+        nes = next(s for s in raw["scenes"] if s.get("fight"))["fight"]["nes"]
+        nes["bank"] = base64.b64encode((DISASM / "original_files" / f"PRG_Bank{bank:03X}.bin").read_bytes()).decode()
+        nes["offset"] = offset
+    return codegen.validate(raw), bank
+
+
 def full(log, title, frames, seed, low=False, idle=False, style=None):
     """The Game Boy's NesEngineFrame against the NES game's own frame ($A669, as its NMI runs it)."""
     if not DISASM.exists():
         return True
-    project = codegen.validate(json.loads(EXAMPLE.read_text()))
-    gb, nes = Gb(project), Nes()
+    project, bank = fighter_project(FIGHTER)
+    gb, nes = Gb(project), Nes(bank)
     gb.call("NesFightStart", bank="NesFighter")
     gb.call("NesRoundStart", 1, bank="NesFighter")
     ram = nes.nes.ram
     for a in range(0x800):
         v = gb.ram(a)
         ram[a] = (v + 0x40) & 0xFF if a in POINTER_HI and v else v
-    ram[0x02] = 0; ram[0x03] = 0; ram[0x04] = 0xFF
+    ram[0x02], ram[0x03] = FIGHTERS[FIGHTER]      # (the NES finds his data by these; the port knows its own)
+    (ram[0x02], ram[0x03]), ram[0x04] = FIGHTERS[FIGHTER], 0xFF
     rng = random.Random(seed)
     nes.rand = rng.randrange(1, 256)
     held, hold = 0, 0
@@ -249,8 +277,8 @@ def sound(log, title, frames, seed, music=0x1F):
     written, and which writes this frame start something ($4003/$4007/$400B/$400F/$4015, sweeps $4001/$4005)."""
     if not DISASM.exists():
         return True
-    project = codegen.validate(json.loads(EXAMPLE.read_text()))
-    gb, nes = Gb(project), Nes()
+    project, bank = fighter_project(FIGHTER)
+    gb, nes = Gb(project), Nes(bank)
     nes.nes.lo = nes.nes.bank(8)
     ram = nes.nes.ram
     sym = gb.sym
@@ -305,15 +333,15 @@ def fight(log, title, frames, seed):
     """Buttons -> both fighters -> the exchange, as the NES frame runs them (bank 0 Joe, B Mac, 7 exchange)."""
     if not DISASM.exists():
         return True
-    project = codegen.validate(json.loads(EXAMPLE.read_text()))
-    gb, nes = Gb(project), Nes()
+    project, bank = fighter_project(FIGHTER)
+    gb, nes = Gb(project), Nes(bank)
     gb.call("NesFightStart", bank="NesFighter")
     gb.call("NesRoundStart", 1)
     ram = nes.nes.ram
     for a in range(0x800):
         v = gb.ram(a)
         ram[a] = (v + 0x40) & 0xFF if a in POINTER_HI and v else v
-    ram[0x02] = 0                           # the fight's bank (Glass Joe)
+    ram[0x02], ram[0x03] = FIGHTERS[FIGHTER]      # (the NES finds his data by these; the port knows its own)
     ram[0x04] = 0xFF                        # playing, not the demo
     ram[0x00] = 0x01                        # the fight phase ($B530 -> $B549)
     rng = random.Random(seed)
@@ -376,14 +404,15 @@ def scenario(log, title, frames, seed, busy):
     if not DISASM.exists():
         log(f"NES tests skipped: no disassembly at {DISASM}")
         return True
-    project = codegen.validate(json.loads(EXAMPLE.read_text()))
-    gb, nes = Gb(project), Nes()
+    project, bank = fighter_project(FIGHTER)
+    gb, nes = Gb(project), Nes(bank)
     gb.call("NesFightStart")
     gb.call("NesRoundStart", 1)
     ram = nes.nes.ram
     for a in range(0x800):                 # the NES starts from the same RAM, its pointers as the NES had them
         v = gb.ram(a)
         ram[a] = (v + 0x40) & 0xFF if a in POINTER_HI and v else v
+    ram[0x02], ram[0x03] = FIGHTERS[FIGHTER]      # (the NES finds his data by these; the port knows its own)
     rng = random.Random(seed)
     nes.rand = rand = rng.randrange(1, 256)
     gb.poke(0x18, 0); gb.m.write(gb.sym["wNesRand"][1], rand)

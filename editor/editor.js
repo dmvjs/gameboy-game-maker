@@ -1253,7 +1253,7 @@ function renderMeters() {
   const p = state.project;
   meter($('palMeter'), `"${scene().name}" BG palettes`, new Set(scene().cellPal).size, M.SCENE_BG_PALETTES);
   $('palMeter').title = `Background palettes this scene uses: the hardware holds ${M.SCENE_BG_PALETTES} at once. ` +
-    `The project has ${p.palettes.length} of ${M.MAX_BG_PALETTES}. A fight or puzzle scene uses palettes 1-8 only.`;
+    `The project has ${p.palettes.length} of ${M.MAX_BG_PALETTES}. A puzzle scene uses palettes 1-8 only.`;
   meter($('objMeter'), 'Sprite palettes', p.objPalettes.length, M.MAX_OBJ_PALETTES);
   meter($('sceneMeter'), 'Scenes', p.scenes.length, M.MAX_SCENES);
   const tiles = M.uniqueTileCount(scene());

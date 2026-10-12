@@ -9,16 +9,20 @@ REGION_W, REGION_H = 8, 10                      # rival area, in tiles
 RIVAL_POSES = ["idle", "idle2", "guard", "hit_l", "hit_r", "hit_body", "dazed",
                "jab_tell", "jab_mid", "jab", "hook_tell", "hook_mid", "hook", "slip", "idle3", "hit_back",
                "kd_stagger", "kd_fall", "kd_down", "kd_kneel",
-               "taunt", "arm_pop", "guard_low"]
+               "taunt", "arm_pop", "guard_low",
+               "tell1", "tell2", "tell3", "tell4", "tell5"]  # a fighter's own wind-up frames (Honda's gloves rolling)
 # Pose sets share one area of video memory: the attack set is there normally; the knockdown set replaces it
 # while he's down, the special set while he taunts or pops an arm. Poses in no set are always there.
-POSE_SETS = {"attack": ["idle2", "idle3", "guard", "guard_low", "hit_back", "jab_tell", "jab_mid", "jab", "hook_tell", "hook_mid", "hook", "slip"],
+POSE_SETS = {"attack": ["jab_tell", "hook_tell", "tell1", "tell2", "tell3", "tell4", "tell5",   # (tells first: shared
+                                                                                              # tiles keep theirs)
+                        "idle2", "idle3", "guard", "guard_low", "hit_back", "jab_mid", "jab", "hook_mid", "hook", "slip"],
              "knockdown": ["kd_stagger", "kd_fall", "kd_down", "kd_kneel"],
              "special": ["taunt", "arm_pop"]}
 KD_POSES = POSE_SETS["knockdown"]
 # Older projects: newer poses borrow one they already have.
 POSE_FALLBACK = {"idle2": "idle", "idle3": "idle", "hit_back": "hit_l", "slip": "idle", "jab_mid": "jab_tell", "hook_mid": "hook_tell", "kd_stagger": "hit_body", "kd_fall": "fall",
-                 "kd_down": "down", "kd_kneel": "fall", "arm_pop": "hit_body", "guard_low": "guard"}
+                 "kd_down": "down", "kd_kneel": "fall", "arm_pop": "hit_body", "guard_low": "guard",
+                 "tell1": "jab_tell", "tell2": "jab_tell", "tell3": "jab_tell", "tell4": "jab_tell", "tell5": "jab_tell"}
 PLAYER_POSES = ["idle", "jab", "jab_high", "dodge", "block", "hit", "star", "down", "win"]
 PLAYER_W, PLAYER_H = 24, 48                     # player pose size in pixels (3x6 sprites, empty ones skipped)
 PLAYER_X = 80 - PLAYER_W // 2 - 8               # a little left of center, so the rival shows past him
@@ -36,6 +40,7 @@ DROP_TILE = ["...3....", "..323...", ".32223..", ".32223..", "..333...", "......
 STAR_TILE = ["...1....", "...1....", ".11311..", "1133311.", ".11311..", "...1....", "...1....", "........"]             # sprite text: the referee's count, "KO!", "FIGHT!"
 REF_POSES = ["stand", "count", "wave"]
 REF_W, REF_H = 24, 32
+PLAYER_RARE = ["star", "down", "win"]           # the player's poses loaded as they're needed (one at a time)
 REF_Y = 84                                      # the referee's top, in screen pixels: his feet below the rival's (in front)
 
 # HUD items: (key, cells, what)

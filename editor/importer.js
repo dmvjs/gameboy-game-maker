@@ -54,7 +54,10 @@ function frames(img, fw, fh, count, what, need = count) {
 
 // Returns { poses, palettes: [3 x 4 colors], changed } where changed counts tiles whose colors had to move.
 export function importRival(img, mat) {
-  const all = frames(img, RW, RH, FIGHT_POSES.length, 'rival', FIGHT_POSES.indexOf('guard_low'));   // older sheets: no low guard
+  const need = FIGHT_POSES.indexOf('guard_low');   // older sheets: no low guard, no tells of his own (they borrow)
+  const all = frames(img, RW, RH, FIGHT_POSES.length, 'rival', need);
+  const blank = px => !px.some(c => c && key(c) !== key(px[0] || c));
+  while (all.length > need && blank(all[all.length - 1])) all.pop();   // (an empty last frame: not a pose)
   // The background: transparent pixels, or the color in each frame's top-left corner.
   const bg = all.map(px => px[0] && key(px[0]));
   const isBg = (n, c) => !c || key(c) === bg[n];

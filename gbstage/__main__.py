@@ -118,6 +118,8 @@ def cmd_build(args):
     try:
         project = codegen.validate(json.loads(path.read_text()))
         asm = codegen.generate_asm(project)
+        if args.asm:                    # (before linking: a failed link is when it's wanted most)
+            Path(args.asm).write_text(asm)
         build = build_rom(asm, codegen.rom_title(project["name"]), cgb=True)
     except codegen.ProjectError as e:
         for err in e.errors:
@@ -128,8 +130,6 @@ def cmd_build(args):
         return 1
     out = Path(args.output or path.with_suffix("").with_suffix(".gb"))
     out.write_bytes(build.rom)
-    if args.asm:
-        Path(args.asm).write_text(asm)
     print(f"Built {out}")
     print_report(profiler.profile(build, codegen.auto_session(project)))
     return 0

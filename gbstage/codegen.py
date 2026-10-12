@@ -317,15 +317,22 @@ def hw_palettes(s):
     uses 8 at most. Returns the scene with its palette map in hardware slots and, when any palette moved,
     "pal_slots" (palette -> slot) and "pal_used" (the project palettes it uploads). Palettes 0-7 keep their
     own slot, so a project with 8 or fewer builds exactly as before."""
-    used = sorted(set(s["cell_pal"]))
-    if all(g < 8 for g in used):
+    fight = s.get("fight")
+    used = sorted(set(s["cell_pal"]) | (set(fight["palettes"].values()) if fight else set()))   # (a fight: his
+    if all(g < 8 for g in used):                                                    # palettes, every pose's)
         return s
     slots = {g: g for g in used if g < 8}
     free = [k for k in range(8) if k not in slots.values()]
     for g in used:
         if g >= 8:
             slots[g] = free.pop(0)
-    return dict(s, cell_pal=[slots[g] for g in s["cell_pal"]], pal_slots=slots, pal_used=used)
+    out = dict(s, cell_pal=[slots[g] for g in s["cell_pal"]], pal_slots=slots, pal_used=used)
+    if fight:                           # his poses' cells too
+        out["fight_attrs"] = {pose: [slots[g] for g in cells] for pose, cells in s["fight_attrs"].items()}
+        if s.get("fight_cgb"):
+            cgb = s["fight_cgb"]
+            out["fight_cgb"] = dict(cgb, attrs={pose: [slots[g] for g in cells] for pose, cells in cgb["attrs"].items()})
+    return out
 
 
 # ---- one still screen: straight-line code ------------------------------------
@@ -511,7 +518,7 @@ def _scene_palettes(i, s, project, sprites):
     if s.get("fight"):
         f = s["fight"]
         obj_pals = sorted({f["player"]["palette"], f["player"]["tired_palette"], f["player"]["down_palette"],
-                           f["referee"]["palette"]})
+                           f["referee"]["palette"]} | ({f["referee"]["shirt_palette"]} if f["referee"].get("shirt_palette") is not None else set()))
     at = (max(used) + 1) * 8                            # HL's offset into the fade row so far
     for pal in obj_pals:
         skip = (len(project["palettes"]) + pal) * 8 - at
@@ -571,8 +578,16 @@ def _press_code(i, s, index_of, corner=False):
     call nz, FtCornerSelect
 """ if corner else ""
     press_sound = "    ld a, SFX_PRESS_START\n    call PlaySfx\n"
+    if p.get("quiet"):                      # no sound; the NES game's music, if it's playing, stopped (as its screens do)
+        press_sound = ("IF DEF(FT_NES_SOUND)\n    ldh a, [hNesSound]\n    and a\n    jr z, .quiet\n    ld a, $80\n"
+                       "    ld [wNes + $F2], a\n.quiet:\nENDC\n")
     if p.get("nes_dmc"):                    # the press starts an NES sample instead (the crowd, as Punch-Out!!'s)
         press_sound = (f"IF DEF(FT_NES_SOUND)\n    ld a, {p['nes_dmc']}\n    call NesDmc\nELSE\n" + press_sound + "ENDC\n")
+    hold, hold_code = "", ""
+    if p.get("hold"):                       # then a while on the screen (the crowd, before the fight)
+        hold = f"    ld a, {p['hold']}\n    ldh [hTimer], a\n    SET_UPDATE Scene{i}Hold\n    ret\n"
+        hold_code = (f"Scene{i}Hold:\n    ld hl, hTimer\n    dec [hl]\n    ret nz\n"
+                     f"    ld a, {index_of[p['target']]}\n    jp StartTransition\n")
     return f"""Scene{i}Update:              ; press-start screen: wait for Start or A
 {select}    ldh a, [hPadNew]
     and PADF_A | PADF_START
@@ -598,9 +613,9 @@ Scene{i}Press:              ; flip the flash area, then go
     dec [hl]
 {flip}
 .go:
-    ld a, {index_of[p['target']]}
+{hold}    ld a, {index_of[p['target']]}
     jp StartTransition
-"""
+{hold_code}"""
 
 
 def _press_data(i, s):
@@ -1228,13 +1243,53 @@ def _bank_switch():
 """
 
 
-def _fight_asm(i, s, index_of, project, banked=False):
-    """Constants, tables and generated HUD code for the fight scene, plus the hand-written kit."""
+def _fight_entry(i, s, index_of, suffix):
+    """A fight's row of FtFights: its scene, then the kit's wFtFight (its banks, its swap area, where it goes)."""
+    from . import fight as kit
+    ft, sw = s["fight"], s["fight_swap"]
+    swap_a = max(0, min(sw["count"], 128 - sw["first"]))
+    vram_a = 0x9000 + 16 * sw["first"] if swap_a else 0
+    vram_b = 0x8800 + 16 * (max(sw["first"], 128) - 128)
+    scene = lambda key: index_of[ft[key]] if ft.get(key) is not None else "$FF"
+    return (f"    db {i}, BANK(RivalMaps{suffix}), BANK(RivalMap_idle{suffix}), BANK(FtSwapSet0{suffix}), "
+            f"{f'BANK(NesFighter{suffix})' if ft.get('nes') else '0'}, {(ft.get('nes') or {}).get('offset', 0)}\n"
+            f"    db {sw['count']}, {swap_a}\n    dw ${vram_a:04X}, ${vram_b:04X}\n"
+            f"    db {s['fight_flash_tile']}, {scene('win')}, {scene('win_tko')}, {scene('lose')}, {scene('corner')}\n"
+            f"    db {f'BANK(CgbMaps{suffix}), BANK(CgbSwap{suffix})' if s.get('fight_cgb') else '0, 0'}")
+
+
+def _suffixed(text, suffix):
+    """A later fight's data: every label it defines renamed with the suffix (sections too), and checks that
+    each sits where the first fight's does (the kit uses those)."""
+    names = re.findall(r"^([A-Za-z_]\w*)::?", text, flags=re.M)
+    for n in sorted(set(names), key=len, reverse=True):
+        text = re.sub(rf"(?<![\w.]){n}(?!\w)", n + suffix, text)
+    text = re.sub(r'SECTION "([^"]+)"', lambda m: f'SECTION "{m.group(1)}{suffix}"', text)
+    checks = "\n".join(f'ASSERT {n} == {n}{suffix}, "{n}{suffix}: not where the first fight\'s is"' for n in sorted(set(names)))
+    return text, checks
+
+
+POSES_PER_BANK = 25                 # a pose's map rows: 640 bytes (25 to a 16 KB bank)
+
+
+def _blank_top(pixels):
+    """A rival pose's blank pixel rows on top (at most FT_NES_UP_MAX)."""
+    from . import fight as kit
+    w = kit.REGION_W * 8
+    rows = next((i // w for i, v in enumerate(pixels) if int(v)), len(pixels) // w)
+    return min(rows, 48)
+
+
+def _fight_asm(i, s, index_of, project, banked=False, suffix="", shared=True, pads=None, table=""):
+    """Constants, tables and generated HUD code for the fight scene, plus the hand-written kit. A game's first
+    fight scene brings the kit and what every fight shares (shared); each fight's own data goes in sections of
+    its own at $4000, laid out alike (swap sets padded to `pads`), its labels with `suffix` past the first:
+    the kit uses the first's labels and each fight's banks (FtFights, `table`)."""
     from . import fight as kit
     ft = s["fight"]
     nl = "\n"
     tiles = s["cell_tiles"]
-    pose_ids = "\n".join(f"DEF RP_{p.upper()} EQU {k}" for k, p in enumerate(kit.RIVAL_POSES))
+    pose_ids = "\n".join(f"DEF RP_{p.upper()} EQU {k}" for k, p in enumerate(kit.RIVAL_POSES)) + f"\nDEF RP_COUNT EQU {len(kit.RIVAL_POSES)}"
     pp_ids = "\n".join(f"DEF PP_{p.upper()} EQU {k}" for k, p in enumerate(kit.PLAYER_POSES))
     tuning = "\n".join(f"DEF FT_{k} EQU {v}" for k, v in kit.TUNING.items())
 
@@ -1273,7 +1328,7 @@ def _fight_asm(i, s, index_of, project, banked=False):
     flash_upload = nl.join(f"    ld a, $80 | {k * 8}\n    ldh [rBCPS], a\n    ld c, LOW(rBCPD)\n    REPT 8\n        ld a, [hl+]\n        ldh [c], a\n    ENDR"
                            for k in rival_pals)
     nes = ft.get("nes")
-    nes_defs, nes_data = "", ""
+    nes_defs, nes_data, nes_shared = "", "", ""
     if nes:
         parts = _nes_parts()
         hx, hy = nes["home"]
@@ -1302,7 +1357,8 @@ NesPlaceY:
 RivalPoseSet:               ; per pose: the set whose tiles it needs ($FF: always in video memory)
 {_db([set_of.get(p, 0xFF) for p in kit.RIVAL_POSES])}
 {parts["fighter"]}
-
+"""
+        nes_shared = f"""
 SECTION "NES Mac", ROMX[$4000]
 NesMac::                    ; Little Mac: Punch-Out!!'s PRG bank B, as it was at $8000
 {_db(list(nes["mac"]))}
@@ -1319,7 +1375,7 @@ SECTION "NES engine: shared", ROM0
 {parts["common"]}
 """
         if nes.get("sound"):
-            nes_data += f"""
+            nes_shared += f"""
 {sound_head}
 SECTION "NES sound", ROMX[$4000]
 NesSnd::                    ; Punch-Out!!'s sound bank (PRG bank 8), as it was at $8000 (see kit_nes_sound.asm)
@@ -1336,19 +1392,18 @@ NesSndFix:                  ; and its tables in the fixed bank, NES $F400-$F8FF
         cols = [side if ft["x"] <= c < ft["x"] + kit.REGION_W else c for c in range(CW)]
         tail_t += [s["cell_tiles"][row * CW + c] for c in cols]
         tail_p += [s["cell_pal"][row * CW + c] for c in cols]
-    nes_data += f"""
-SECTION "Fight: band tail", ROM0
-FtTailTiles:
+    tail_data = f"""FtTailTiles:                ; his band's last rows without him (the scene's own tiles)
 {_db(_pad_rows(tail_t, True), 32)}
 FtTailAttr:
-{_db(_pad_rows(tail_p, True), 32)}
-"""
-    return f"""; ---- Fight: "{s['name']}" ----
+{_db(_pad_rows(tail_p, True), 32)}"""
+    pad = lambda data, k: data + [0] * (max(0, (pads or {}).get(k, len(data)) - len(data)))
+    code = f"""; ---- Fight: "{s['name']}" ----
 {nes_defs}
-DEF FT_WIN_SCENE EQU {index_of[ft['win']]}
-DEF FT_LOSE_SCENE EQU {index_of[ft['lose']]}
-{f"DEF FT_WIN_TKO_SCENE EQU {index_of[ft['win_tko']]}" if ft.get('win_tko') is not None else ""}
-DEF FT_CORNER_SCENE EQU {index_of[ft['corner']] if ft['corner'] is not None else '$FF'}   ; between rounds
+DEF FT_WIN_SCENE EQU 0                             ; results (the scenes they go to: this fight's, FtFights)
+DEF FT_LOSE_SCENE EQU 1
+DEF FT_CORNER_RESULT EQU 2
+FtFights:                   ; per fight scene: its number, then the kit's wFtFight
+{table}
 DEF FT_REGION_X EQU {ft['x']}
 DEF FT_REGION_W EQU {kit.REGION_W}
 DEF FT_REGION_H EQU {kit.REGION_H}
@@ -1362,6 +1417,7 @@ DEF FT_TAIL_ROWS EQU 6                              ; off-screen map rows: the b
 DEF FT_TAIL_ROW EQU 24                              ; without him, for when he's shown higher in it
 DEF FT_TAIL_SCY EQU (FT_TAIL_ROW - {ft['y'] + kit.REGION_H} + FT_TAIL_ROWS) * 8 & $FF
 DEF FT_HEADROOM EQU 0                               ; his band never rises over the crowd and ropes
+DEF FT_GAP_SCY EQU ({CH - 1} * 8 - FT_BAND_TOP - 1) & $FF   ; (the lines his band has left: the screen's last row, plain)
 DEF FT_STAND_UP EQU 6                               ; standing, he shifts up into his frame's empty top only
 DEF FT_POSE_BYTES EQU {kit.REGION_H * 32}          ; map rows per pose; the same again for palettes
 DEF FT_HUD_CELLS EQU {len(s['fight_hud_cells'])}
@@ -1378,6 +1434,9 @@ DEF FT_BAR_CELLS EQU {kit.BAR_CELLS}
 DEF FT_HEALTH EQU {kit.HEALTH}
 DEF FT_OBJ_FIRST EQU {kit.OBJ_FIRST_TILE}
 DEF FT_OBJ_TILES EQU {len(s['fight_obj'])}
+DEF FT_REF_SLOT EQU {s['fight_slots']['ref']}               ; the referee's poses' own tiles: two areas of FT_REF_TILES
+DEF FT_REF_TILES EQU {s['fight_slots']['ref_tiles']}
+DEF FT_PL_SLOT EQU {s['fight_slots']['pl']}                ; the player's rare poses' own tiles (one at a time)
 DEF FT_COUNT_TILE EQU {s['fight_count_tile']}
 DEF FT_PLAYER_W EQU {kit.PLAYER_W}
 DEF FT_PLAYER_X EQU {kit.PLAYER_X + 8}       ; OAM coordinates of the player's top-left
@@ -1386,6 +1445,7 @@ DEF FT_PLAYER_PAL EQU {ft['player']['palette']}
 DEF FT_TIRED_PAL EQU {ft['player']['tired_palette']}
 DEF FT_DOWN_PAL EQU {ft['player']['down_palette']}
 DEF FT_REF_ATTR EQU {ft['referee']['palette'] | 0x10}
+DEF FT_SAY_ATTR EQU {(ft['referee']['shirt_palette'] if ft['referee'].get('shirt_palette') is not None else ft['referee']['palette']) | 0x10}   ; his words' bubble: white and black
 DEF FT_STAR_TILE EQU {s['fight_star_tile']}
 DEF FT_DROP_TILE EQU {s['fight_drop_tile']}
 DEF FT_SPARK_TILE EQU {s['fight_spark_tile']}
@@ -1412,8 +1472,8 @@ FtHudDraw:                  ; during VBlank: every HUD tile
 {hud_draw}
     ret
 
-FtFlashPalettes:            ; during VBlank, Color only: the rival's palettes, white-flashed or normal
-    ldh a, [hIsCGB]
+FtFlashPalettes:            ; during VBlank, Color only: the rival's palettes, white-flashed or normal, into his
+    ldh a, [hIsCGB]         ; slots (RivalPalSlots: this fight's)
     and a
     ret z
     ldh a, [hFtFlashShown]
@@ -1422,23 +1482,48 @@ FtFlashPalettes:            ; during VBlank, Color only: the rival's palettes, w
     jr z, .upload
     ld hl, RivalPalFlash
 .upload:
-{flash_upload}
+    ld de, RivalPalSlots
+    ld a, [de]
+    inc de
+    ld b, a
+.pal:
+    ld a, [de]
+    inc de
+    ldh [rBCPS], a
+    ld c, LOW(rBCPD)
+    REPT 8
+        ld a, [hl+]
+        ldh [c], a
+    ENDR
+    dec b
+    jr nz, .pal
     ret
+"""
+    data = f"""
+SECTION "Data: Rival poses", {"ROMX[$4000]" if banked else "ROM0"}   ; per pose: 10 full map rows, then their palettes
+{nl.join(poses[:POSES_PER_BANK])}
 
-SECTION "Data: Rival poses", {"ROMX" if banked else "ROM0"}, ALIGN[4]   ; per pose: 10 full map rows, then their palettes
-{nl.join(poses)}
+SECTION "Data: Rival poses 2", {"ROMX[$4000]" if banked else "ROM0"}   ; (the rest: a bank holds 25)
+{nl.join(poses[POSES_PER_BANK:])}
 
-SECTION "Data: Rival swap", {"ROMX" if banked else "ROM0"}, ALIGN[4]
+SECTION "Data: Rival swap", {"ROMX[$4000]" if banked else "ROM0"}
 FtSwapSet0:                 ; attack poses (loaded with the scene, and put back)
-{_db(swap_sets[0])}
+{_db(pad(swap_sets[0], 0))}
 FtSwapSet1:                 ; knockdown
-{_db(swap_sets[1])}
+{_db(pad(swap_sets[1], 1))}
 FtSwapSet2:                 ; special: the taunt, the arm pop
-{_db(swap_sets[2])}
+{_db(pad(swap_sets[2], 2))}
 
-SECTION "Data: Fight", {"ROMX" if banked else "ROM0"}   ; mapped while the fight runs
+SECTION "Data: Fight", {"ROMX[$4000]" if banked else "ROM0"}   ; mapped while the fight runs
+RivalPalSlots:              ; his palettes' hardware slots, as BCPS writes ($80: auto-increment)
+    db {len(rival_pals)}, {", ".join(f"${0x80 | (s.get('pal_slots') or {}).get(k, k) * 8:02X}" for k in rival_pals)}
+{tail_data}
 RivalMaps:
     dw {", ".join(f"RivalMap_{p}" for p in kit.RIVAL_POSES)}
+RivalMapBanks:              ; (each pose's rows' bank)
+    db {", ".join(f"BANK(RivalMap_{p})" for p in kit.RIVAL_POSES)}
+RivalPoseRise:              ; per pose: how far it can rise in his band and stay whole (its blank rows on top)
+    db {", ".join(str(_blank_top(ft["poses"][p]["pixels"])) for p in kit.RIVAL_POSES)}
 CrowdMap:                   ; the crowd row's tiles, put back after each camera flash
     db {", ".join(f"${t:02X}" for t in s['cell_tiles'][crowd_y * CW:(crowd_y + 1) * CW])}
 RivalPalNormal:
@@ -1463,11 +1548,70 @@ PlayerPoses:
 RefPoses:
     dw {", ".join(f"Ref_{p}" for p in kit.REF_POSES)}
 {nl.join(ref_sprites)}
+RefTiles:                   ; per pose: its own tiles' address and count, loaded into his area as his pose changes
+{nl.join(f"    dw RefTiles_{p}" + nl + f"    db {len(s['fight_ref_tiles'][p])}" for p in kit.REF_POSES)}
+{nl.join(f"RefTiles_{p}:" + nl + (_db([b for t in s['fight_ref_tiles'][p] for b in encode_tile(list(t))]) or "") for p in kit.REF_POSES)}
+PlayerRare:                 ; per player pose: 1 if it's loaded as it's needed
+    db {", ".join("1" if p in kit.PLAYER_RARE else "0" for p in kit.PLAYER_POSES)}
+RareTiles:                  ; per player pose: its own tiles' address and count (the rare ones)
+{nl.join(f"    dw RareTiles_{p}" + nl + f"    db {len(s['fight_rare_tiles'][p])}" if p in kit.PLAYER_RARE else "    dw 0" + nl + "    db 0" for p in kit.PLAYER_POSES)}
+{nl.join(f"RareTiles_{p}:" + nl + (_db([b for t in s['fight_rare_tiles'][p] for b in encode_tile(list(t))]) or "") for p in kit.PLAYER_RARE)}
 FtObjTiles:                 ; the player's {len(s['fight_obj']) - len(kit.COUNT_GLYPHS)} tiles, then the count's glyphs
 {_db(obj_bytes)}
 {nes_data}
-SECTION "Code: Scenes after the fight", ROM0   ; the next scenes' code must not land in the data bank
+"""
+    cgb = s.get("fight_cgb")
+    cgb_data = ""
+    if cgb:                             # Color's finer poses: their map rows (a bank of their own), then their
+        tile_bytes = lambda ts: [b for t in ts for b in encode_tile(list(t))]   # tiles (another): kit_fight.asm
+        sets_b = [tile_bytes(t) for t in cgb["sets"]]                            # reads their headers (FtCgb*)
+        p0, p1 = tile_bytes(cgb["perm0"]), tile_bytes(cgb["perm1"])
+        vram = lambda t: 0x9000 + 16 * t if t < 128 else 0x8800 + 16 * (t - 128)
+        runs = []                       # (bank, offset, bytes, where): split where tile 128 moves to $8800
+        for b, first, count in ((0, cgb["perm0_first"], len(cgb["perm0"])), (1, cgb["perm1_first"], len(cgb["perm1"]))):
+            for lo, hi in ((first, min(first + count, 128)), (max(first, 128), first + count)):
+                if hi > lo:
+                    runs.append((b, 16 * (lo - first), 16 * (hi - lo), vram(lo)))
+        cgb_rows = lambda pose: (_db(rows(cgb["maps"][pose], tiles), 32) + "\n"
+                                 + _db(rows([a | b << 3 for a, b in zip(cgb["attrs"][pose], cgb["banks"][pose])], s["cell_pal"]), 32))
+        cgb_data = f"""
+SECTION "Data: Rival poses (Color){suffix}", ROMX[$4000]
+CgbMaps{suffix}:                ; per pose: its map rows' address, then their bank; each: its rows, their attributes
+    dw {", ".join(f"CgbMap{suffix}_{p}" for p in kit.RIVAL_POSES)}
+    db {", ".join(f"BANK(CgbMap{suffix}_{p})" for p in kit.RIVAL_POSES)}
+    ds {-3 * len(kit.RIVAL_POSES) % 16}                         ; (GDMA copies from 16-byte boundaries)
+{nl.join(f"CgbMap{suffix}_{p}:" + nl + cgb_rows(p) for p in kit.RIVAL_POSES[:POSES_PER_BANK - 1])}
 
+SECTION "Data: Rival poses (Color) 2{suffix}", ROMX[$4000]
+{nl.join(f"CgbMap{suffix}_{p}:" + nl + cgb_rows(p) for p in kit.RIVAL_POSES[POSES_PER_BANK - 1:])}
+
+SECTION "Data: Rival tiles (Color){suffix}", ROMX[$4000]
+CgbSwap{suffix}:                ; swap area (bank 1): tiles, first run's; its two runs; the sets; his always-there
+    db {cgb["size"]}, {min(cgb["size"], 128)}   ; tiles: bank 0's, then bank 1's (source, bytes, where)
+    dw $9000, $8800
+    dw CgbSwap{suffix}.set0, CgbSwap{suffix}.set1, CgbSwap{suffix}.set2
+    db {len(runs)}                    ; then his always-there tiles' runs: source, bytes, where, bank
+{nl.join(f"    dw CgbSwap{suffix}.perm{b} + {off}, {n}, ${dest:04X}" + nl + f"    db {b}" for b, off, n, dest in runs)}
+    ds {-(13 + 7 * len(runs)) % 16}                         ; (GDMA copies from 16-byte boundaries)
+{nl.join(f".set{k}:" + nl + _db(b) for k, b in enumerate(sets_b))}
+.perm0:
+{_db(p0)}
+.perm1:
+{_db(p1)}
+ASSERT (CgbMap{suffix}_idle | CgbSwap{suffix}.set0) & 15 == 0, "GDMA copies from 16-byte boundaries"
+"""
+    if not shared:                      # a later fight: its scene's update, its own data under its own labels
+        data, checks = _suffixed(data, suffix)
+        return f"""; ---- Fight: "{s['name']}" (its own data; the kit is the first fight's) ----
+Scene{i}Update:
+    jp FightUpdate
+{data}
+{cgb_data}
+{checks}
+SECTION "Code: Scenes after fight {i}", ROM0
+"""
+    return code + data + cgb_data + nes_shared + """
+SECTION "Code: Scenes after the fight", ROM0   ; the next scenes' code must not land in the data bank
 """
 
 
@@ -1758,8 +1902,6 @@ def generate_asm(project):
     if len(puzzles) > 1:
         raise ProjectError(["A project can have one puzzle grid scene for now."])
     fights = [i for i, sc in enumerate(scenes) if sc.get("fight")]
-    if len(fights) > 1:
-        raise ProjectError(["A project can have one fight scene for now."])
     slides = any(s.get("slide") for s in scenes)
     repeat = menus or options or bool(puzzles) or passes
     opt_index, opt_rows = {}, []
@@ -1836,7 +1978,7 @@ def generate_asm(project):
     if cursor_on:
         hram += ["hCursorY: db", "hCursorX: db"]
     if fights:
-        hram += ["hFtActive: db", "hFtHudReady: db", "hFtScx: db", "hFtBandX: db", "hFtBandY: db", "hFtBandTop: db", "hFtBandBottom: db", "hFtBandOn: db", "hFtFlash: db",
+        hram += ["hFtActive: db", "hFtHudReady: db", "hFtScx: db", "hFtBandX: db", "hFtBandY: db", "hFtBandTop: db", "hFtBandGap: db", "hFtBandBottom: db", "hFtBandOn: db", "hFtFlash: db",
                  "hFtFlashShown: db", "hOAMDMA: ds 8           ; OAM DMA routine (runs from HRAM)"]
         if any((scenes[i]["fight"].get("nes") or {}).get("sound") for i in fights):
             hram += ["hNesSound: db           ; nonzero: the NES's sound engine has the sound hardware"]
@@ -1966,6 +2108,10 @@ def generate_asm(project):
     updates = [f"Scene{i}Update" if s["menu"] or s["press"] or s["options"] or s.get("puzzle") or s.get("fight") or s.get("pass_key")
                or s["back"] is not None else "NoUpdate"
                for i, s in enumerate(scenes)]
+    # Fights: each one's swap sets padded alike (their labels sit where the first fight's do), and the table of
+    # each one's own values the kit loads (FtFights).
+    fight_pads = {k: max(len(scenes[f]["fight_swap"]["sets"][k]) * 16 for f in fights) for k in range(3)} if fights else {}
+    fight_table = "\n".join(_fight_entry(f, scenes[f], index_of, "" if k == 0 else f"_F{k}") for k, f in enumerate(fights))
     scene_code = []
     for i, s in enumerate(scenes):
         if s["menu"]:
@@ -1980,7 +2126,9 @@ def generate_asm(project):
         elif s.get("puzzle"):
             scene_code.append(_puzzle_asm(i, s, index_of, opt_rows))
         elif s.get("fight"):
-            scene_code.append(_fight_asm(i, s, index_of, project, banked))
+            k = fights.index(i)
+            scene_code.append(_fight_asm(i, s, index_of, project, banked, suffix="" if k == 0 else f"_F{k}",
+                                         shared=k == 0, pads=fight_pads, table=fight_table))
         elif s["back"] is not None:
             scene_code.append(f"""Scene{i}Update:              ; B goes back
     ldh a, [hPadNew]
@@ -2250,7 +2398,7 @@ CopyAttr:
 
 ; Upload the current scene's palettes at the current fade step (step 0 = the real colors).
 UploadPalettes:
-{'    xor a' + nl + '    ldh [hPalDirty], a' + nl + '    ldh a, [hFadeStep]' if fade else '    xor a'}
+{"    ld a, BANK(FadeColor)   ; (their own bank: the bank that was mapped (hBank) back after)" + nl + "    ld [$2100], a" + nl + "    call .upload" + nl + "    ldh a, [hBank]" + nl + "    ld [$2100], a" + nl + "    ret" + nl + ".upload:" + nl if banked else ""}{'    xor a' + nl + '    ldh [hPalDirty], a' + nl + '    ldh a, [hFadeStep]' if fade else '    xor a'}
     ld b, a
     ldh a, [hIsCGB]
     and a
@@ -2287,12 +2435,12 @@ UploadPalettes:
     ldh [rBGP], a
 {'    ldh [rOBP0], a' + nl if sprites else ''}{'    ldh [rOBP1], a' + nl if fights else ''}    ret
 
-ScenePalettes:
+{'SECTION "Data: Palettes", ROMX' + nl if banked else ""}ScenePalettes:
     dw {", ".join(f"Scene{i}Palettes" for i in range(len(scenes)))}
 
 {nl.join(_scene_palettes(i, s, project, cursor_on) for i, s in enumerate(scenes))}
 
-SECTION "Data: Palettes", ROM0
+{'' if banked else 'SECTION "Data: Palettes", ROM0'}
 FadeColor:                  ; RGB555: {n_bg} background{f" + {n_obj} sprite" if n_obj else ""} palettes per fade step
     dw {", ".join(f"FadeColor.step{k}" for k in range(steps + 1))}
 {nl.join(cgb_rows)}
@@ -2520,6 +2668,9 @@ OptionDefaults:
     if nes_sound:                   # each effect's counterpart in the NES game (an SQ1 effect; 0: none)
         out.append("SfxNes:\n" + _db([NES_SFX.get(n, 0) for n in sfx.effects(project.get("sound", "arcade"), sfx_groups(scenes))]) + "\n")
     out += [_scene_data(i, s, banked) for i, s in enumerate(scenes)]
+    if banked:                      # every bank switch noted (hBank), for what maps a bank of its own and puts back
+        hram.append("hBank: db               ; the ROM bank mapped")    # (UploadPalettes): all of them in ROM0
+        out = [re.sub(r"^(\s*)ld \[\$2000\], a", r"\1ldh [hBank], a\n\1ld [$2000], a", o, flags=re.M) for o in out]
     out.append('SECTION "Variables", HRAM\n' + nl.join(hram) + "\n")
     return nl.join(out)
 
