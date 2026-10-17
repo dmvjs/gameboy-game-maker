@@ -183,7 +183,8 @@ SECTION "Fight OAM", WRAM0, ALIGN[8]
 wFtOAM: ds 256              ; 40 sprites go to OAM; a busy frame's extras land in the spare room and aren't shown
 IF DEF(FT_ROPE)
 wFtOAM2: ds 256             ; (a rope row: the screen's lower part's own 40, copied in at FT_DMA_LINE mid-frame; the
-ENDC                        ; upper part's, his top rows over the ropes, in wFtOAM from VBlank)
+wFtOAM3: ds 256             ; upper part's, his top rows over the ropes, in wFtOAM from VBlank. Two of them: one
+ENDC                        ; built while the other's copied in, swapped at VBlank: never half built)
 
 SECTION "Code: Fight", ROM0
 
@@ -433,6 +434,12 @@ ENDC
     xor a
     ldh [hFtHudReady], a
     ldh [hFtScx], a
+IF DEF(FT_ROPE)
+    ld a, HIGH(wFtOAM3)     ; (the lower list's two: built in one, shown from the other)
+    ldh [hFtOamShown], a
+    ld a, HIGH(wFtOAM2)
+    ldh [hFtOamBuild], a
+ENDC
     call FtBuildOAM
     ld hl, wFtOAM           ; OAM is writable with the screen off
     ld de, $FE00
@@ -448,12 +455,16 @@ ENDC
     xor a
     ldh [hFtBandX], a
     ldh [hFtBandY], a
+    ldh [hFtShowX], a
+    ldh [hFtShowY], a
+
     ldh [hFtBandOn], a
     ldh [hFtBandGap], a
     ldh [hFtFlash], a       ; (not flashing: his palettes come up with the fade)
     ldh [hFtFlashShown], a
     ld a, FT_BAND_BOTTOM
     ldh [hFtBandBottom], a
+    ldh [hFtShowBottom], a
 IF DEF(FT_ROPE)
     ld a, FT_ROPE_LINE      ; the bottom rope's row over his area's first, then his band: interrupts there
 ELSE
@@ -526,7 +537,7 @@ ENDC
     dec a
     jp nz, .bottom
 .end:
-    ldh a, [hFtBandY]       ; his band's end: raised (scrolled down), the background below him down to its
+    ldh a, [hFtShowY]       ; his band's end: raised (scrolled down), the background below him down to its
     and a                   ; usual end
     jp z, .bottom
     bit 7, a
@@ -574,9 +585,9 @@ ENDC
     pop af
     reti
 .band:
-    ldh a, [hFtBandX]
+    ldh a, [hFtShowX]
     ldh [rSCX], a
-    ldh a, [hFtBandY]
+    ldh a, [hFtShowY]
     ldh [rSCY], a
 IF DEF(FT_ROPE)
     ld a, FT_DMA_LINE       ; then the lower part's sprites, where none are
@@ -589,14 +600,14 @@ IF DEF(FT_ROPE)
     pop af
     reti
 .dma:                       ; mid-frame: the lower part's 40 sprites in (his top rows' have all been drawn)
-    ld a, HIGH(wFtOAM2)
+    ldh a, [hFtOamShown]
     call hOAMDMA
-    ldh a, [hFtBandBottom]
+    ldh a, [hFtShowBottom]
     ldh [rLYC], a
     ld a, 1
     ldh [hFtBandOn], a
     push bc                 ; (late, his band's end gone by: its end now; an interrupt keeps what it uses)
-    ldh a, [hFtBandBottom]
+    ldh a, [hFtShowBottom]
     ld b, a
     ldh a, [rLY]
     cp b
@@ -605,7 +616,7 @@ IF DEF(FT_ROPE)
     pop af
     reti
 ENDC
-    ldh a, [hFtBandBottom]
+    ldh a, [hFtShowBottom]
     ldh [rLYC], a
     ld a, 1
     ldh [hFtBandOn], a
@@ -634,6 +645,18 @@ FtVBlank:
     ldh [hFtBandOn], a
     ldh a, [hFtBandTop]
     ldh [rLYC], a
+    ldh a, [hFtBandX]       ; his band as this frame shows it: taken now, with the sprites built with it (set
+    ldh [hFtShowX], a       ; mid-frame, it would move before them)
+    ldh a, [hFtBandY]
+    ldh [hFtShowY], a
+    ldh a, [hFtBandBottom]
+    ldh [hFtShowBottom], a
+IF DEF(FT_ROPE)
+    ldh a, [hFtOamBuild]    ; the lower list just built: shown from this frame; the next built in the other
+    ldh [hFtOamShown], a
+    xor HIGH(wFtOAM2) ^ HIGH(wFtOAM3)
+    ldh [hFtOamBuild], a
+ENDC
     ldh a, [hFtFlash]       ; Color: the rival flashes white when a punch lands
     and a
     jr z, .noFlash
@@ -1520,9 +1543,25 @@ IF DEF(FT_NES)
     jr .y
 .up:
 IF DEF(FT_ROPE)
-    cp -FT_NES_UP_MAX       ; as far up as the NES puts him (over the ropes and crowd: his top rows are sprites)
+    ld c, a                 ; as far up as the NES puts him (over the ropes and crowd: his top rows are sprites),
+    ld a, [wRvPose]         ; his top no higher than the crowd's (a tall pose's head would go over the HUD)
+    ld e, a
+    ld d, 0
+    ld hl, RivalPoseRise
+    add hl, de
+    ld a, [hl]
+    add FT_HEAD_ROOM
+    cp FT_NES_UP_MAX
+    jr c, .room
+    ld a, FT_NES_UP_MAX
+.room:
+    cpl
+    inc a
+    ld e, a                 ; (E: -how far)
+    ld a, c
+    cp e
     jr nc, .y
-    ld a, -FT_NES_UP_MAX
+    ld a, e
     jr .y
 ENDC
     ld c, a                 ; standing, as far as his band rises (his head's at the top of the frame);
@@ -3846,7 +3885,9 @@ ENDC
 
 FtBuildOAM:
 IF DEF(FT_ROPE)
-    ld hl, wFtOAM2          ; (Mac, the referee: the screen's lower part's list)
+    ldh a, [hFtOamBuild]    ; (Mac, the referee: the screen's lower part's list, the one not being shown)
+    ld h, a
+    ld l, 0
 ELSE
     ld hl, wFtOAM
 ENDC

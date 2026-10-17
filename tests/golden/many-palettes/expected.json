@@ -1,5 +1,5 @@
 {
-  "rom_sha256": "2e4b930e8ffdf88186153adc506f6f704543dfa3e45a4cf860bc344ba5b4fa49",
+  "rom_sha256": "9b772217d63d6552928fe6b0f9a61c603882eed6a8b44edb2965e937d4c788f4",
   "bytes": {
     "rom_used": 6586,
     "code": 1565,
@@ -9,16 +9,16 @@
   },
   "cycles": {
     "color": {
-      "startup_cycles": 8144,
+      "startup_cycles": 8184,
       "frame_cycles_max": 2348,
       "vblank_work_cycles": 1160,
-      "scene_load_cycles": 281264
+      "scene_load_cycles": 351604
     },
     "original": {
       "startup_cycles": 38792,
       "frame_cycles_max": 2348,
       "vblank_work_cycles": 1160,
-      "scene_load_cycles": 491384
+      "scene_load_cycles": 561592
     }
   },
   "screens": {

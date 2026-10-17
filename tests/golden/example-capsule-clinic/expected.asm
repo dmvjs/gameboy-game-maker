@@ -295,6 +295,8 @@ LoadScene:
     jr z, .waitVBlank
     ld a, 1                 ; (interrupts are off outside a fight: nothing comes between)
     ldh [hLoadOn], a
+    call VWait              ; every palette black, not just the faded ones the last scene used (the new
+    call BlackPalettes      ; scene's others would show it loading)
     jr .screenOff
 .waitVBlank:
     ldh a, [rLY]
@@ -363,6 +365,27 @@ VWait:
     ldh a, [rLY]
     cp 144
     jr c, .wait
+    ret
+
+; Every palette black (in VBlank): Color's 8 background and 8 sprite palettes, the original's three.
+BlackPalettes:
+    ld a, $FF
+    ldh [$FF47], a          ; BGP, OBP0, OBP1
+    ldh [$FF48], a
+    ldh [$FF49], a
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    ld a, $80
+    ldh [rBCPS], a
+    ldh [rOCPS], a
+    xor a
+    ld b, 64
+.color:
+    ldh [rBCPD], a
+    ldh [rOCPD], a
+    dec b
+    jr nz, .color
     ret
 
 
@@ -719,6 +742,12 @@ UploadPalettes:
 
 ScenePalettes:
     dw Scene0Palettes, Scene1Palettes, Scene2Palettes, Scene3Palettes, Scene4Palettes, Scene5Palettes
+PalCopy8:                   ; a palette's 8 bytes from HL to the port C names (BCPD or OCPD)
+    REPT 8
+        ld a, [hl+]
+        ldh [c], a
+    ENDR
+    ret
 
 Scene0Palettes:
     ld h, d
@@ -726,25 +755,16 @@ Scene0Palettes:
     ld c, LOW(rBCPD)
     ld a, $80 | 0
     ldh [rBCPS], a
-    REPT 8
-        ld a, [hl+]
-        ldh [c], a
-    ENDR
+    call PalCopy8
     ld de, 16
     add hl, de
     ld a, $80 | 24
     ldh [rBCPS], a
-    REPT 8
-        ld a, [hl+]
-        ldh [c], a
-    ENDR
+    call PalCopy8
     ld a, $80 | 0
     ldh [rOCPS], a
     ld c, LOW(rOCPD)
-    REPT 8
-        ld a, [hl+]
-        ldh [c], a
-    ENDR
+    call PalCopy8
     ret
 Scene1Palettes:
     ld h, d
@@ -752,19 +772,13 @@ Scene1Palettes:
     ld c, LOW(rBCPD)
     ld a, $80 | 0
     ldh [rBCPS], a
-    REPT 8
-        ld a, [hl+]
-        ldh [c], a
-    ENDR
+    call PalCopy8
     ld de, 24
     add hl, de
     ld a, $80 | 0
     ldh [rOCPS], a
     ld c, LOW(rOCPD)
-    REPT 8
-        ld a, [hl+]
-        ldh [c], a
-    ENDR
+    call PalCopy8
     ret
 Scene2Palettes:
     ld h, d
@@ -774,10 +788,7 @@ Scene2Palettes:
     ldh [rBCPS], a
     ld b, 3
 .palettes0:
-    REPT 8
-        ld a, [hl+]
-        ldh [c], a
-    ENDR
+    call PalCopy8
     dec b
     jr nz, .palettes0
     ret
@@ -787,10 +798,7 @@ Scene3Palettes:
     ld c, LOW(rBCPD)
     ld a, $80 | 0
     ldh [rBCPS], a
-    REPT 8
-        ld a, [hl+]
-        ldh [c], a
-    ENDR
+    call PalCopy8
     ret
 Scene4Palettes:
     ld h, d
@@ -798,10 +806,7 @@ Scene4Palettes:
     ld c, LOW(rBCPD)
     ld a, $80 | 0
     ldh [rBCPS], a
-    REPT 8
-        ld a, [hl+]
-        ldh [c], a
-    ENDR
+    call PalCopy8
     ret
 Scene5Palettes:
     ld h, d
@@ -809,10 +814,7 @@ Scene5Palettes:
     ld c, LOW(rBCPD)
     ld a, $80 | 0
     ldh [rBCPS], a
-    REPT 8
-        ld a, [hl+]
-        ldh [c], a
-    ENDR
+    call PalCopy8
     ret
 
 SECTION "Data: Palettes", ROM0

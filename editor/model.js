@@ -367,7 +367,7 @@ export const FIGHT_W = 8, FIGHT_H = 10;
 export const FIGHT_POSES = ['idle', 'idle2', 'guard', 'hit_l', 'hit_r', 'hit_body', 'dazed',
                             'jab_tell', 'jab_mid', 'jab', 'hook_tell', 'hook_mid', 'hook', 'slip', 'idle3', 'hit_back',
                             'kd_stagger', 'kd_fall', 'kd_down', 'kd_kneel', 'taunt', 'arm_pop', 'guard_low',
-                            'tell1', 'tell2', 'tell3', 'tell4', 'tell5',
+                            'tell1', 'tell2', 'tell3', 'tell4', 'tell5', 'extra1', 'extra2', 'extra3', 'extra4',
                             'kd2_stagger', 'kd2_fall', 'kd2_down', 'kd2_kneel'];   // (his other way down)   // (a fighter's own wind-up frames)
 const FIGHT_HUD = { stars: 1, hearts: 2, points: 6, clock: 4, round: 1, playerBar: 6, rivalBar: 6 };
 
@@ -860,7 +860,8 @@ const clonePuzzle = pz => pz && JSON.parse(JSON.stringify(pz));
 const POSE_FALLBACK = { idle2: 'idle', idle3: 'idle', hit_back: 'hit_l', slip: 'idle', jab_mid: 'jab_tell', hook_mid: 'hook_tell', kd_stagger: 'hit_body', kd_fall: 'fall',
                         kd_down: 'down', kd_kneel: 'fall', arm_pop: 'hit_body', guard_low: 'guard',
                         tell1: 'jab_tell', tell2: 'jab_tell', tell3: 'jab_tell', tell4: 'jab_tell', tell5: 'jab_tell',
-                        kd2_stagger: 'kd_stagger', kd2_fall: 'kd_fall', kd2_down: 'kd_down', kd2_kneel: 'kd_kneel' };   // as in gbstage/fight.py: older projects borrow a pose
+                        kd2_stagger: 'kd_stagger', kd2_fall: 'kd_fall', kd2_down: 'kd_down', kd2_kneel: 'kd_kneel',
+                        extra1: 'jab', extra2: 'jab', extra3: 'jab', extra4: 'jab' };   // as in gbstage/fight.py: older projects borrow a pose
 const cloneFight = ft => {
   if (!ft) return ft;
   const out = JSON.parse(JSON.stringify(ft));
@@ -875,6 +876,7 @@ const cloneScene = s => ({ name: s.name, pixels: s.pixels.slice(), cellPal: s.ce
                            options: cloneOptions(s.options), puzzle: clonePuzzle(s.puzzle),
                            fight: cloneFight(s.fight), passKey: clonePass(s.passKey || null), texts: cloneTexts(s.texts),
                            slideIn: !!s.slideIn, nesDmc: s.nesDmc || 0, notes: s.notes || '',
+                           ...(s.nesMusic ? { nesMusic: s.nesMusic } : {}),
                            ...(s.cutscene ? { cutscene: JSON.parse(JSON.stringify(s.cutscene)) } : {}),
                            ...(s.typed ? { typed: JSON.parse(JSON.stringify(s.typed)) } : {}) });
 
@@ -905,6 +907,7 @@ export function serialize(p) {
       ...(s.texts?.length ? { texts: cloneTexts(s.texts) } : {}),
       ...(s.slideIn ? { slideIn: true } : {}),
       ...(s.nesDmc ? { nesDmc: s.nesDmc } : {}),
+      ...(s.nesMusic ? { nesMusic: s.nesMusic } : {}),
       ...(s.cutscene ? { cutscene: s.cutscene } : {}),
       ...(s.typed ? { typed: s.typed } : {}),
       ...(s.notes ? { notes: s.notes } : {}),
@@ -962,6 +965,7 @@ export function deserialize(raw) {
       texts: cloneTexts(s.texts),
       slideIn: s.slideIn === true && !s.fight,
       nesDmc: Number.isInteger(s.nesDmc) ? s.nesDmc : 0,
+      ...(Number.isInteger(s.nesMusic) && s.nesMusic > 0 ? { nesMusic: s.nesMusic } : {}),
       ...(s.cutscene ? { cutscene: s.cutscene } : {}),
       ...(s.typed ? { typed: s.typed } : {}),
       notes: typeof s.notes === 'string' ? s.notes.slice(0, 2000) : '',

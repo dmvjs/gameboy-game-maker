@@ -157,7 +157,7 @@ def vblank(ram):
 
 
 # The opponents the port is checked with: (PRG bank, offset in it) of the NES game's data for each.
-FIGHTERS = {"Glass Joe": (0, 0x00), "Von Kaiser": (2, 0x00), "Piston Honda": (5, 0x30), "Don Flamenco": (0, 0x10), "King Hippo": (1, 0x00)}
+FIGHTERS = {"Glass Joe": (0, 0x00), "Von Kaiser": (2, 0x00), "Piston Honda": (5, 0x30), "Don Flamenco": (0, 0x10), "King Hippo": (1, 0x00), "Great Tiger": (2, 0x10), "Bald Bull": (3, 0x30), "Piston Honda 2": (5, 0x20), "Soda Popinski": (4, 0x10), "Bald Bull 2": (3, 0x20), "Don Flamenco 2": (0, 0x20), "Mr. Sandman": (3, 0x10), "Super Macho Man": (4, 0x30), "Mike Tyson": (5, 0x40)}
 FIGHTER = "Glass Joe"
 
 

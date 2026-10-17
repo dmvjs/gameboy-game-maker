@@ -21,12 +21,14 @@ RIVAL_POSES = ["idle", "idle2", "guard", "hit_l", "hit_r", "hit_body", "dazed",
                "kd_stagger", "kd_fall", "kd_down", "kd_kneel",
                "taunt", "arm_pop", "guard_low",
                "tell1", "tell2", "tell3", "tell4", "tell5",  # a fighter's own wind-up frames (Honda's gloves rolling)
+               "extra1", "extra2", "extra3", "extra4",       # more of his own (a big fighter's spin punches)
                "kd2_stagger", "kd2_fall", "kd2_down", "kd2_kneel"]  # his other way down (the NES drops him either way)
 # Pose sets share one area of video memory: the attack set is there normally; the knockdown set replaces it
 # while he's down, the special set while he taunts or pops an arm. Poses in no set are always there.
 POSE_SETS = {"attack": ["jab_tell", "hook_tell", "tell1", "tell2", "tell3", "tell4", "tell5",   # (tells first: shared
                                                                                               # tiles keep theirs)
-                        "idle2", "idle3", "guard", "guard_low", "hit_back", "jab_mid", "jab", "hook_mid", "hook", "slip"],
+                        "idle2", "idle3", "guard", "guard_low", "hit_back", "jab_mid", "jab", "hook_mid", "hook", "slip",
+                        "extra1", "extra2", "extra3", "extra4"],
              "knockdown": ["kd_stagger", "kd_fall", "kd_down", "kd_kneel", "kd2_stagger", "kd2_fall", "kd2_down", "kd2_kneel"],
              "special": ["taunt", "arm_pop"]}
 KD_POSES = POSE_SETS["knockdown"]
@@ -34,7 +36,8 @@ KD_POSES = POSE_SETS["knockdown"]
 POSE_FALLBACK = {"idle2": "idle", "idle3": "idle", "hit_back": "hit_l", "slip": "idle", "jab_mid": "jab_tell", "hook_mid": "hook_tell", "kd_stagger": "hit_body", "kd_fall": "fall",
                  "kd_down": "down", "kd_kneel": "fall", "arm_pop": "hit_body", "guard_low": "guard",
                  "tell1": "jab_tell", "tell2": "jab_tell", "tell3": "jab_tell", "tell4": "jab_tell", "tell5": "jab_tell",
-                 "kd2_stagger": "kd_stagger", "kd2_fall": "kd_fall", "kd2_down": "kd_down", "kd2_kneel": "kd_kneel"}
+                 "kd2_stagger": "kd_stagger", "kd2_fall": "kd_fall", "kd2_down": "kd_down", "kd2_kneel": "kd_kneel",
+                 "extra1": "jab", "extra2": "jab", "extra3": "jab", "extra4": "jab"}
 PLAYER_POSES = ["idle", "jab", "jab_high", "dodge", "block", "hit", "star", "down", "win"]
 PLAYER_W, PLAYER_H = 24, 48                     # player pose size in pixels (3x6 sprites, empty ones skipped)
 PLAYER_X = 80 - PLAYER_W // 2 - 8               # a little left of center, so the rival shows past him

@@ -240,6 +240,37 @@ def vs_screen(opponent):
     return img
 
 
+def splash_screen():
+    """The game's first screen, MIKE IS WAITING FOR YOUR CHALLENGE!!, as it shows from power-on: RGB rows."""
+    cache = HERE / "out" / "nes-splash.pkl"
+    if cache.exists():
+        return pickle.load(open(cache, "rb"))
+    b = Fight()
+    for _ in range(300):
+        b.frame(0)
+    img = b.render()
+    cache.parent.mkdir(exist_ok=True)
+    pickle.dump(img, open(cache, "wb"))
+    return img
+
+
+def ending_screen():
+    """The game's last screen, after Mike Tyson: Mac standing, his record, THE END (reached by setting the win
+    ($00 = $FC) in his fight: only its pictures are wanted). RGB rows, cached."""
+    cache = HERE / "out" / "nes-ending.pkl"
+    if cache.exists():
+        return pickle.load(open(cache, "rb"))
+    b = fight(13)
+    for _ in range(300):
+        b.frame(0)
+    b.ram[0x00] = 0xFC
+    for _ in range(4300):
+        b.frame(0)
+    img = b.render()
+    pickle.dump(img, open(cache, "wb"))
+    return img
+
+
 MONTAGE_CACHE = HERE / "out" / "nes-montage.pkl"
 
 

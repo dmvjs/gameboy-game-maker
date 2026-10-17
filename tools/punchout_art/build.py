@@ -168,8 +168,9 @@ def write_sheet(path, frames, FW, FH, cols=4):
 # ---- editor/importer.js, ported ----
 
 FIGHT_W, FIGHT_H = 8, 10
-FIGHT_POSES = ['idle','idle2','guard','hit_l','hit_r','hit_body','dazed','jab_tell','jab_mid','jab','hook_tell','hook_mid','hook','slip','idle3','hit_back','kd_stagger','kd_fall','kd_down','kd_kneel','taunt','arm_pop','guard_low','tell1','tell2','tell3','tell4','tell5','kd2_stagger','kd2_fall','kd2_down','kd2_kneel']
-TELL_FALLBACK = {**{f'tell{k}': 'jab_tell' for k in range(1, 6)}, **{f'kd2_{p}': f'kd_{p}' for p in ('stagger', 'fall', 'down', 'kneel')}}   # (a fighter without his own)
+FIGHT_POSES = ['idle','idle2','guard','hit_l','hit_r','hit_body','dazed','jab_tell','jab_mid','jab','hook_tell','hook_mid','hook','slip','idle3','hit_back','kd_stagger','kd_fall','kd_down','kd_kneel','taunt','arm_pop','guard_low','tell1','tell2','tell3','tell4','tell5','extra1','extra2','extra3','extra4','kd2_stagger','kd2_fall','kd2_down','kd2_kneel']
+TELL_FALLBACK = {**{f'tell{k}': 'jab_tell' for k in range(1, 6)}, **{f'kd2_{p}': f'kd_{p}' for p in ('stagger', 'fall', 'down', 'kneel')},
+                 **{f'extra{k}': 'jab' for k in range(1, 5)}}   # (a fighter without his own)
 PLAYER_POSES = ['idle','jab','jab_high','dodge','block','hit','star','down','win']
 RW, RH, PW, PH = 64, 80, 24, 48
 KINDS = 'sgh'
@@ -185,7 +186,7 @@ def frames(path, fw, fh, count):
     w, h, px = png.read(path)
     assert w % fw == 0 and h % fh == 0
     cols = w // fw; out = []
-    for n in range(count):
+    for n in range(min(count, cols * (h // fh))):   # (an older sheet: fewer poses, the rest borrow one)
         fx, fy = (n % cols)*fw, (n // cols)*fh
         out.append([None if px[fy+y][fx+x][3] < 128 else from8(px[fy+y][fx+x][:3]) for y in range(fh) for x in range(fw)])
     return out
@@ -391,7 +392,7 @@ CROP = PORTRAIT - 2                                                      # insid
 PORTRAITS = {"joe": ("glass-joe.png", (938 + 22, 16 + 18)),            # top-left of the crop in the sheet
              "joe_hurt": ("glass-joe.png", (938 + 22, 97 + 18)),
              "mac": ("little-mac.png", (782 + 26, 1 + 8))}
-PORTRAIT_PALETTES = {"joe": 5, "mac": 1, "kaiser": 5, "honda": 5, "don": 5, "hippo": 5}      # palettes per fighter's portraits (joe_hurt shares Joe's)
+PORTRAIT_PALETTES = {"joe": 5, "mac": 1, "kaiser": 5, "honda": 5, "don": 5, "hippo": 5, "tiger": 5, "bull": 5, "soda": 5, "sandman": 5, "macho": 5, "tyson": 4}      # palettes per fighter's portraits (joe_hurt shares Joe's)
 FRAME = [31, 31, 31]
 
 VS_BOX = (161, 52, 238, 126)                  # the portrait's box on the NES challenger screen (inside the frame)
@@ -468,7 +469,8 @@ def _draw(px, pals):
         cells.append(best)
     return slots, cells
 
-_cell = lambda k: str(k) if k < 10 else chr(65 + k - 10)   # a tile's palette: 0-9, then A-Z
+_cell = lambda k: str(k) if k < 10 else chr(65 + k - 10) if k < 36 else chr(0xC0 + k - 36)   # a tile's palette: 0-9,
+                                                                                          # A-Z, then À on
 
 def portraits():
     """({name: {pixels, cells}}, palettes): cells are digits, each tile's palette in the returned list."""
@@ -604,6 +606,172 @@ def title_logo():
             "colors": [to5(LOGO_HOLE), to5(LOGO_MESH), to5(LOGO_TOP), to5(LOGO_BOTTOM)]}
 
 
+# ---- the first screen ----
+# Punch-Out!!'s power-on screen, MIKE IS WAITING FOR YOUR CHALLENGE!!, from the game's own pixels at 1:1: its
+# MIKE TYSON pattern (8 tiles, a tile further left each row), his framed portrait centered (just 8 rows of its
+# blue padding over his head left out, to fit 144 lines), and its black box under it, as the game has it, with
+# the big green MIKE TYSON and the two lines (spaced by the pixel inside the box: one palette there). His face
+# gets 6 of the scene's 8 palettes, the pattern and the box one each.
+
+SPLASH_W, SPLASH_H = 160, 144
+SPLASH_FRAME = (88, 48, 167, 127)             # the portrait's 1-pixel white frame on the NES screen
+SPLASH_TRIM = (6, 2)                          # rows of its inside left out: over his head (blue), under (chest)
+SPLASH_FACE_PALETTES = 6
+SPLASH_FRAMES = 390                           # up, as the game holds it (frame 138 to its fade at 528)
+SPLASH_MUSIC = 0x02                           # the song the game starts with it (on into the title)
+SPLASH_BELLS = {"sfx": 0x0C, "at": [0, 13, 26, 40, 82, 96, 109, 123], "frames": 132}   # before it, over black: its
+                                              # bell, twice four rings (the frames the game rings them, from the first)
+
+def splash():
+    import nes_play
+    img = [[tuple(px)[:3] for px in row] for row in nes_play.splash_screen()]
+    NAVY, BLUE, BLACK = img[16][0], None, (0, 0, 0)
+    out = [[NAVY] * SPLASH_W for _ in range(SPLASH_H)]
+    kind = [[None] * (SPLASH_W // 8) for _ in range(SPLASH_H // 8)]      # per tile: 'p'attern, 'f'ace, 'b'ox
+    # the pattern: the NES tile with the same place in its 8-tile run (rows 1-5 there are all pattern)
+    src = {}
+    for R in range(1, 6):
+        for C in range(1, 32):
+            src.setdefault((C - R) % 8, (R, C))
+    for r in range(SPLASH_H // 8):
+        for c in range(SPLASH_W // 8):
+            R, C = src[(c - r + 3) % 8]                # (its phase: MIKE TYSON whole beside his portrait)
+            for y in range(8):
+                for x in range(8):
+                    out[r * 8 + y][c * 8 + x] = img[R * 8 + y][C * 8 + x]
+            kind[r][c] = "p"
+    # his portrait: frame, inside less the trim, frame; centered, from line 8
+    x0, y0, x1, y1 = SPLASH_FRAME
+    top, bottom = SPLASH_TRIM
+    rows = [y0] + list(range(y0 + 1 + top, y1 - bottom)) + [y1]
+    fx, fy = (SPLASH_W - (x1 - x0 + 1)) // 2, 8
+    for k, y in enumerate(rows):
+        for x in range(x0, x1 + 1):
+            out[fy + k][fx + x - x0] = img[y][x]
+    for r in range(fy // 8, (fy + len(rows)) // 8):
+        for c in range(fx // 8, (fx + x1 - x0 + 1) // 8):
+            kind[r][c] = "f"
+    # the box: black, the rest of the screen under him
+    by = fy + len(rows)
+    for y in range(by, SPLASH_H):
+        out[y] = [BLACK] * SPLASH_W
+        for c in range(SPLASH_W // 8): kind[y // 8][c] = "b"
+    def ink(y0, y1, xa, xb):                       # a run of the NES's lines: its inked columns' extent
+        cols = [x for x in range(xa, xb) if any(img[y][x] != BLACK for y in range(y0, y1))]
+        return cols[0], cols[-1] + 1
+    def put(y0, y1, at_y, tighten=0):               # centered by its ink; its word gaps narrowed by `tighten`
+        a, b = ink(y0, y1, 40, 216)
+        blank = [all(img[y][x] == BLACK for y in range(y0, y1)) for x in range(a, b)]
+        cols, run = [], []
+        for k, x in enumerate(range(a, b)):
+            if blank[k]:
+                run.append(x); continue
+            cols += run[tighten:] if len(run) >= 5 else run      # (a word's gap: 5 blank columns or more)
+            run = []
+            cols.append(x)
+        ox = (SPLASH_W - len(cols)) // 2
+        assert len(cols) <= SPLASH_W, "a line wider than the screen"
+        for y in range(y0, y1):
+            for k, x in enumerate(cols):
+                out[at_y + y - y0][ox + k] = img[y][x]
+        return len(cols)
+    big = (136, 168)                                # MIKE / TYSON, then the two lines (NES rows 22, 24)
+    gap = (SPLASH_H - by - 32 - 16) // 4            # the box's space, even: over, between, between, under
+    put(*big, by + gap)
+    put(176, 184, by + gap + 32 + gap, 3)
+    w2 = put(192, 200, by + gap + 32 + gap + 8 + gap, 3)
+    head = next(y for y in range(y0 + 1, y1) if any(img[y][x] not in (img[y0 + 2][x0 + 2],) for x in range(x0 + 1, x1)))
+    print(f"    splash: his head {head - y0 - 1 - top} lines under the frame, the box's spacing {gap}, its last line {w2} wide")
+    # palettes: the pattern's (letters slot 2, its navy 3: dark on the original), the box's, his face's
+    pc = lambda c: from8(c)
+    letters = next(c for row in out[:8] for c in row if c != NAVY)
+    pat = [pc(letters), pc(letters), pc(letters), pc(NAVY)]
+    box_colors = sorted({c for row in out[by:] for c in row} - {BLACK}, key=lambda c: -lum(pc(c)))
+    assert len(box_colors) <= 3, box_colors
+    box = [pc(c) for c in box_colors] + [pc(BLACK)] * (4 - len(box_colors))
+    box = box[:3] + [pc(BLACK)] if len(box_colors) == 3 else box
+    face_tiles = [[pc(out[r * 8 + y][c * 8 + x]) for y in range(8) for x in range(8)]
+                  for r in range(SPLASH_H // 8) for c in range(SPLASH_W // 8) if kind[r][c] == "f"]
+    faces = choose_palettes(face_tiles, SPLASH_FACE_PALETTES)
+    # each color a slot of its own across his palettes, so the original's grays agree from tile to tile: the blue
+    # behind him (and the frame and his teeth, where there's room) lightest, then his brown, dark brown, black
+    shade = {key(pc(c)): t for c, t in ((img[y0 + 2][x0 + 2], 0), ((236, 238, 236), 0), ((120, 60, 0), 1), ((60, 24, 0), 2), (BLACK, 3))}
+    count = {}
+    for t in face_tiles:
+        for col in t: count[key(col)] = count.get(key(col), 0) + 1
+    import itertools
+    def order(pal):
+        cs = list({key(c): c for c in pal}.values())
+        cs += [None] * (4 - len(cs))
+        best = min(itertools.permutations(cs), key=lambda perm: sum(count.get(key(c), 0) * (n - shade.get(key(c), n)) ** 2
+                                                                    for n, c in enumerate(perm) if c))
+        return [list(c) if c else [31, 0, 31] for c in best]     # (a slot none of his pixels use)
+    faces = [order(f) for f in faces]
+    palettes = [pat, box] + faces
+    pixels, cells = [0] * (SPLASH_W * SPLASH_H), []
+    for r in range(SPLASH_H // 8):
+        for c in range(SPLASH_W // 8):
+            tile = [pc(out[r * 8 + y][c * 8 + x]) for y in range(8) for x in range(8)]
+            k = kind[r][c]
+            best = 0 if k == "p" else 1 if k == "b" else 2 + min(range(len(faces)), key=lambda p: _tile_err(tile, faces[p]))
+            pal = palettes[best]
+            for n, col in enumerate(tile):
+                v = (2 if col != pal[3] else 3) if k == "p" else min(range(4), key=lambda q: dist(col, pal[q]))
+                pixels[(r * 8 + n // 8) * SPLASH_W + c * 8 + n % 8] = v
+            cells.append(best)
+    return {"pixels": "".join(map(str, pixels)), "cells": "".join(map(str, cells)), "palettes": palettes,
+            "frames": SPLASH_FRAMES, "music": SPLASH_MUSIC, "bells": SPLASH_BELLS}
+
+
+# ---- the ending ----
+# After Mike Tyson, as the game has it: his word to Mac under his portrait, then each fighter's portrait and name
+# in turn (the ten of them, no rematches), then Mac standing on blue (the game's own picture, 1:1) with his record
+# and THE END typed under him. Its song plays from the first.
+ENDING_BOX = (108, 50, 156, 154)              # Mac on the game's last screen (a tile-whole crop around him)
+ENDING_MUSIC = 0x1F
+
+def ending():
+    import nes_play
+    img = [[tuple(px)[:3] for px in row] for row in nes_play.ending_screen()]
+    navy = img[5][5]
+    x0, y0, x1, y1 = ENDING_BOX
+    w, h = x1 - x0, y1 - y0
+    pc = lambda c: from8(c)
+    tiles = []
+    for ty in range(h // 8):
+        for tx in range(w // 8):
+            px = [img[y0 + ty * 8 + y][x0 + tx * 8 + x] for y in range(8) for x in range(8)]
+            count = {c: px.count(c) for c in set(px) - {navy}}
+            tiles.append(set(sorted(count, key=lambda c: -count[c])[:3]))   # (a fourth: its nearest, below)
+    pals = []                                   # each: navy, then up to 3 colors (dark to light, for the original)
+    for cs in sorted(tiles, key=len, reverse=True):
+        if not cs or any(cs <= set(p) for p in pals):
+            continue
+        fit = next((p for p in pals if len(set(p) | cs) <= 3), None)
+        if fit is not None:
+            pals[pals.index(fit)] = sorted(set(fit) | cs, key=lambda c: -lum(pc(c)))
+        else:
+            pals.append(sorted(cs, key=lambda c: -lum(pc(c))))
+    assert len(pals) <= 4, len(pals)
+    pixels, cells = [], []
+    for ty in range(h // 8):
+        for tx in range(w // 8):
+            cs = tiles[ty * (w // 8) + tx]
+            k = next((i for i, p in enumerate(pals) if cs <= set(p)), 0)
+            cells.append(k)
+    for y in range(h):
+        for x in range(w):
+            c = img[y0 + y][x0 + x]
+            p = pals[cells[(y // 8) * (w // 8) + x // 8]]
+            pixels.append(0 if c == navy else 1 + min(range(len(p)), key=lambda i: dist(pc(c), pc(p[i]))))
+    palettes = [[pc(navy)] + [pc(c) for c in p] + [pc(navy)] * (3 - len(p)) for p in pals]
+    return {"mac": {"w": w, "h": h, "pixels": "".join(map(str, pixels)), "cells": "".join(map(str, cells)),
+                    "palettes": palettes}, "navy": pc(navy), "music": ENDING_MUSIC,
+            "tyson": ["MIKE TYSON:", '"GREAT FIGHTING!!', "YOU WERE TOUGH, MAC!", "I'VE NEVER SEEN", "SUCH FINGER SPEED",
+                      'BEFORE."'],
+            "frames": {"word": 480, "portrait": 280}}
+
+
 NES_TITLE_START = HERE / "out" / "title-start.pkl"
 
 def title_punch(logo_y):
@@ -701,6 +869,29 @@ def lose_glove(s=40 / 56):
     return {"w": w, "h": h, "pixels": "".join(str(SLOT.index(c) if c else 0) for row in small for c in row)}
 
 
+def title_gloves():
+    """The title's gloves, a pair either side of the chosen item (the NES game's sprites $EC-$F1, its palette
+    1), as they're up before Start: the left one, 24x16 (the right is it mirrored). Slots: 1 white, 2 red, 3 black
+    (light to dark, for the original's grays). gap: from CONTINUE's letters; dy: over the item's row."""
+    import pickle, nes_boot
+    frames = pickle.load(open(NES_TITLE_START, "rb"))      # (title_punch records them)
+    left = lambda fr: [t for t in fr['spr'] if 236 <= t[1] <= 241 and not t[2] & 0x40 and t[2] & 3 == 1]
+    fr = next(fr for fr in frames if left(fr))
+    data, sp = nes_boot.CHR[fr['chr'][0xC000]], left(fr)
+    x0, y0 = min(t[3] for t in sp), min(t[0] for t in sp)
+    px = [[0] * 24 for _ in range(16)]
+    for sy, t, a, sx in sp:
+        d = data[t * 16:t * 16 + 16]
+        for y in range(8):
+            for x in range(8):
+                v = ((d[y] >> (7 - x)) & 1) | (((d[y + 8] >> (7 - x)) & 1) << 1)
+                px[sy - y0 + y][sx - x0 + x] = (0, 2, 1, 3)[v]
+    rgb5 = lambda v: [round(c * 31 / 255) for c in nes_boot.NES_RGB[v & 0x3F]]
+    pal = fr['pal'][16 + 4:16 + 8]
+    return {"w": 24, "h": 16, "pixels": "".join(str(v) for row in px for v in row),
+            "colors": [rgb5(pal[2]), rgb5(pal[1]), rgb5(0x0F)], "gap": 96 - (x0 + 24), "dy": -4}
+
+
 # Little Mac's poses from the NES game's own frames (mac_nes.py draws them as bank B does); the rest from the rip.
 MAC_NES = dict(idle=0x00, jab=0x10, jab_high=0x1A, dodge=0x0A, block=0x5F, hit=0x2F, down=0x3C, win=0x55)
 # ($18 draws as $10, his body jab; his punch to the face is $19-$1B, arm straight up: taller than the 24x48
@@ -783,7 +974,7 @@ HONDA_FRAMES = {
     "26": "kd_stagger", "28": "kd_fall", "2A": "kd_down", "2C": "kd_kneel", "2E": "kd_kneel", "0C": "kd_down",
     "30": "kd2_stagger", "30|": "kd2_stagger", "32": "kd2_fall", "32|": "kd2_fall", "34": "kd2_down", "34|": "kd2_down",
     "36": "kd2_kneel", "36|": "kd2_kneel", "38": "kd2_kneel", "38|": "kd2_kneel",              # (his other way down)
-    "3A": "taunt", "3C": "arm_pop",
+    "3A": "taunt", "3C": "arm_pop", "52": "slip", "52|": "slip",   # (52: his rematch's, a dodge between swings)
 }
 HONDA_FROM_NES = dict(idle="C0", idle2="C2", idle3="04", guard="08", guard_low="42|", jab_tell="40", jab_mid="16",
                       jab="18", hook_tell="54|", hook_mid="48", hook="3E|", slip="4A", hit_l="22", hit_r="1E",
@@ -814,14 +1005,135 @@ HIPPO_FRAMES = {
     "C0": "idle", "C4": "idle2", "C8": "idle3", "CA": "idle2", "00": "idle", "10": "guard",
     "12": "jab_tell", "C6": "jab_mid", "16": "jab", "14|": "hook_tell", "3C|": "hook_mid", "3C": "hook",
     "24": "tell1", "24|": "tell2", "3A": "tell3", "20": "tell4", "22": "tell5", "CC": "taunt",
-    "26": "hit_back", "30|": "hit_l", "30": "hit_r",
+    "26": "hit_r", "30|": "hit_l", "30": "hit_r",
     "28": "kd_fall", "80": "kd_down", "82": "kd_down", "86": "kd_kneel", "88": "kd_kneel",
+    # punched in the open mouth: holding it, his trunks falling, gut-punched, pulling them up (all in the always-there
+    # and attack sets: nothing swaps in while it plays)
+    "0C": "dazed", "84": "hit_body", "1E": "hit_back", "1A": "slip", "1C": "guard_low",
 }
-HIPPO_FROM_NES = dict(idle="C0", idle2="C4", idle3="C8", guard="10", guard_low="00", jab_tell="12", jab_mid="C6",
-                      jab="16", hook_tell="14|", hook_mid="3C|", hook="3C", slip="C6", hit_l="30|", hit_r="26",
-                      hit_body="26", hit_back="26", dazed="30|", kd_stagger="26", kd_fall="28", kd_down="80",
+HIPPO_FROM_NES = dict(idle="C0", idle2="C4", idle3="C8", guard="10", guard_low="1C", jab_tell="12", jab_mid="C6",
+                      jab="16", hook_tell="14|", hook_mid="3C|", hook="3C", slip="1A", hit_l="30|", hit_r="26",
+                      hit_body="84", hit_back="1E", dazed="0C", kd_stagger="26", kd_fall="28", kd_down="80",
                       kd_kneel="86", taunt="CC", arm_pop="20", tell1="24", tell2="24|", tell3="3A", tell4="20",
                       tell5="22", kd2_stagger="26", kd2_fall="28", kd2_down="82", kd2_kneel="88")
+# Mr. Sandman (opponent 11, bank 3 at $10): his bob C0-C4-C2, two attacks after the tells 82-80 (16-18-1A, and
+# 40|-40-3C|-3C-3E|-3E), the uppercut 0E|-52|-52 (and 0C-4A), the counter 54|-54 off a block, the Dreamland
+# Express 46-44-46-48-4A; a lookalike shares a pose where his frames outnumber them (0E 0C's, 4A and 52| 52's,
+# 14 and 54| 54's, 48 the lunge 1A's, 44 and 46 the crouch 16's), down either way 26-28-2A-2C or 30-32-34-36|.
+SANDMAN_FRAMES = {
+    "C0": "idle", "00": "idle", "C4": "idle2", "02": "idle2", "06": "idle2", "C6": "idle2", "C2": "idle3", "04": "idle3",
+    "08": "guard", "10": "guard", "12": "guard", "0A": "guard_low",
+    "82": "tell1", "80": "tell2", "16": "jab_tell", "44": "jab_tell", "46": "jab_tell", "18": "jab_mid",
+    "1A": "jab", "48": "jab", "40|": "hook_tell", "40": "tell3", "3C|": "hook_mid", "3C": "hook_mid",
+    "3E|": "hook", "3E": "hit_back", "0C": "slip", "0E": "slip", "0E|": "slip",
+    "52": "tell5", "52|": "tell5", "4A": "tell5", "54": "tell4", "54|": "tell4", "14": "tell4",
+    "24": "hit_l", "24|": "hit_r", "20": "hit_r", "1C": "hit_body", "1E": "dazed", "22": "dazed", "22|": "dazed",
+    "3A": "taunt", "CC": "arm_pop",
+    "26": "kd_stagger", "28": "kd_fall", "2A": "kd_down", "2C": "kd_kneel", "2E": "kd_kneel",
+    "30": "kd2_stagger", "32": "kd2_fall", "34": "kd2_down", "34|": "kd2_down", "36|": "kd2_kneel", "38|": "kd2_kneel",
+}
+SANDMAN_FROM_NES = dict(idle="C0", idle2="C4", idle3="C2", guard="08", guard_low="0A", jab_tell="16", jab_mid="18",
+                        jab="1A", hook_tell="40|", hook_mid="3C|", hook="3E|", slip="0C", hit_l="24", hit_r="20",
+                        hit_body="1C", hit_back="3E", dazed="1E", kd_stagger="26", kd_fall="28", kd_down="2A",
+                        kd_kneel="2C", taunt="3A", arm_pop="CC", tell1="82", tell2="80", tell3="40", tell4="54",
+                        tell5="52", kd2_stagger="30", kd2_fall="32", kd2_down="34", kd2_kneel="36|")
+# Super Macho Man (opponent 12, bank 4 at $30): his bob C0-C4-C2, the jab 16-18-1A, the spin punch 4C|-4E|-50|-50,
+# the uppercut 44-46-48, the super spin punch 52-54-56-5A (the extra poses), his flex 3A-CC; hit 22/22|, 12-14,
+# turned 24/20/1E, dazed 42; down 26-28-2A-2C or 30-32-34-36|. Some frames come only from cynes (bank latches
+# exact), Mac's pixels taken out; the ones it catches Mac in instead (0E, 3E, C6, 1C, 86, 26, 50|) share a lookalike.
+MACHO_FRAMES = {
+    "C0": "idle", "04": "idle", "06": "idle", "80": "idle", "C6": "idle", "C4": "idle2", "C2": "idle3",
+    "08": "guard", "10": "guard", "0E": "guard", "0A": "guard_low",
+    "16": "jab_tell", "18": "jab_mid", "1A": "jab",
+    "4C|": "hook_tell", "4C": "hook_tell", "4E|": "tell3", "50|": "hook", "50": "hook",
+    "44": "tell4", "82": "tell4", "86": "tell4", "46": "tell5", "48": "hit_back", "0C": "slip", "4A": "slip",
+    "52": "extra1", "54": "extra2", "56": "extra3", "5A": "extra4",
+    "22": "hit_l", "22|": "hit_r", "12": "hit_body", "14": "hit_body", "1C": "hit_body", "42": "dazed", "42|": "dazed",
+    "24": "tell1", "1E": "tell1", "20": "tell2",
+    "3A": "taunt", "3E": "taunt", "CC": "arm_pop",
+    "26": "kd_stagger", "28": "kd_fall", "2A": "kd_down", "2C": "kd_kneel", "2E": "kd_kneel",
+    "30": "kd2_stagger", "32": "kd2_fall", "34": "kd2_down", "34|": "kd2_down", "36|": "kd2_kneel", "38|": "kd2_kneel",
+}
+MACHO_FROM_NES = dict(idle="C0", idle2="C4", idle3="C2", guard="08", guard_low="0A", jab_tell="16", jab_mid="18",
+                      jab="1A", hook_tell="4C|", hook_mid="50", hook="50", slip="0C", hit_l="22", hit_r="22|",
+                      hit_body="12", hit_back="48", dazed="42", kd_stagger="1E", kd_fall="28", kd_down="2A",
+                      kd_kneel="2C", taunt="3A", arm_pop="CC", tell1="24", tell2="20", tell3="4E|", tell4="44",
+                      tell5="46", extra1="52", extra2="54", extra3="56", extra4="5A",
+                      kd2_stagger="30", kd2_fall="32", kd2_down="34", kd2_kneel="36|")
+# Mike Tyson (opponent 13, bank 5 at $40): his bob C0-C4-C2, the jab 16-18-1A, the uppercut 44-46-48, the dynamite
+# punch 4C|-4E|-50|-50 then 54/54|, his wink 82-80 (state 19), 3A/3C/CC; hit 24/24|/22|, 1E-20, 12-14-C6, down
+# 26-28-2A-2C. Frames never caught whole (18, 1A, 1C, 20, 2E, his other way down 30-38, ...) share a lookalike.
+TYSON_FRAMES = {
+    "C0": "idle", "00": "idle", "C4": "idle2", "02": "idle2", "CA": "idle2", "C2": "idle3", "04": "idle3", "06": "idle3",
+    "C8": "idle3", "08": "guard", "10": "guard", "0E": "guard", "0A": "guard_low", "0C": "guard_low",
+    "16": "jab_tell", "18": "jab_tell", "1A": "jab", "54": "jab", "54|": "jab",
+    "44": "tell4", "46": "tell5", "48": "hit_back",
+    "4C|": "hook_tell", "4C": "hook_tell", "4E|": "tell3", "4E": "tell3", "50|": "hook_mid", "50": "hook",
+    "82": "idle2", "80": "idle", "3A": "taunt", "CC": "arm_pop", "3C": "taunt", "C6": "idle2",
+    "24": "hit_l", "24|": "hit_r", "22|": "hit_r", "22": "hit_l", "1E": "dazed", "20": "dazed",
+    "12": "slip", "14": "slip", "1C": "hit_body",
+    "26": "kd_stagger", "28": "kd_fall", "2A": "kd_down", "2C": "kd_kneel", "2E": "kd_kneel",
+    "30": "kd2_stagger", "30|": "kd2_stagger", "32": "kd2_fall", "32|": "kd2_fall", "34": "kd2_down", "34|": "kd2_down",
+    "36|": "kd2_kneel", "38|": "kd2_kneel",
+}
+TYSON_FROM_NES = dict(idle="C0", idle2="C4", idle3="C2", guard="08", guard_low="0A", jab_tell="16", jab_mid="16",
+                      jab="54", hook_tell="4C|", hook_mid="50|", hook="50", slip="12", hit_l="24", hit_r="24|",
+                      hit_body="12", hit_back="48", dazed="1E", kd_stagger="26", kd_fall="28", kd_down="2A",
+                      kd_kneel="2C", taunt="3A", arm_pop="CC", tell1="16", tell2="16", tell3="4E|", tell4="44",
+                      tell5="46", extra1="54", extra2="54", extra3="54", extra4="54",
+                      kd2_stagger="26", kd2_fall="28", kd2_down="2A", kd2_kneel="2C")   # (fewer pictures: his face whole)
+# Great Tiger (opponent 5, bank 2): his bob CA-82-80 then the jab 0E (states 05, 16), his uppercut 16-18-46 (17),
+# the Tiger punch spinning 44|-44-3C|-3C-48|-48 (18: all in the attack set's spare slots, no swap mid-spin), dazed
+# 42/32, down either way 26-2A-2C-2E or 30-34-36-38.
+TIGER_FRAMES = {
+    "C0": "idle", "00": "idle", "CC": "idle", "C4": "idle2", "C2": "idle2", "C6": "idle2",
+    "08": "guard", "10": "guard", "3A": "guard", "0A": "guard_low", "12": "jab_tell", "40|": "jab_tell", "0E": "jab",
+    "CA": "tell1", "82": "tell2", "80": "tell3", "16": "hook_tell", "18": "hook_mid", "46": "hook", "1A": "hook",
+    "3E": "hook", "3E|": "hook", "4A": "hook", "4C|": "hook",
+    "44": "slip", "44|": "tell4", "3C": "tell5", "3C|": "jab_mid", "48": "hit_back", "48|": "idle3",
+    "1C": "hit_body", "1E": "hit_r", "22": "hit_l", "22|": "hit_r", "42|": "dazed", "42": "dazed", "32": "dazed", "32|": "dazed",
+    "26": "kd_stagger", "28": "kd_fall", "2A": "kd_down", "2C": "kd_kneel", "2E": "kd_kneel",
+    "30": "kd2_stagger", "30|": "kd2_fall", "34": "kd2_down", "34|": "kd2_down", "36|": "kd2_kneel", "38|": "kd2_kneel",
+}
+TIGER_FROM_NES = dict(idle="C0", idle2="C4", idle3="48|", guard="08", guard_low="0A", jab_tell="12", jab_mid="3C|",
+                      jab="0E", hook_tell="16", hook_mid="18", hook="46", slip="44", hit_l="22", hit_r="1E",
+                      hit_body="1C", hit_back="48", dazed="42|", kd_stagger="26", kd_fall="26", kd_down="2A",
+                      kd_kneel="2C", taunt="00", arm_pop="00", tell1="CA", tell2="82", tell3="80", tell4="44|",
+                      tell5="3C", kd2_stagger="30", kd2_fall="30|", kd2_down="34", kd2_kneel="36|")
+# Bald Bull (opponent 6, bank 3): his bob 02/00 then the jab 0E|-0E (state 16), his uppercut 82-80-16-18-1A (15),
+# the Bull Charge: hops back 46-44, charges 48, uppercuts 4A (17); down either way 26-2A-2C or 30-32-34-36-38.
+BULL_FRAMES = {
+    "C0": "idle", "00": "idle", "C6": "idle", "C8": "idle", "C4": "idle2", "04": "idle2", "06": "idle2", "C2": "idle3",
+    "08": "guard", "10": "guard", "12": "guard", "3A": "guard", "CA": "guard", "0A": "guard_low",
+    "02": "tell1", "82": "tell2", "80": "tell3", "46": "tell4", "44": "tell5", "48": "slip", "4A": "jab_tell",
+    "0E|": "jab_mid", "0E": "jab", "16": "hook_tell", "18": "hook_mid", "1A": "hook",
+    "20": "hit_body", "22": "hit_l", "22|": "hit_r", "24": "hit_back", "24|": "dazed", "CC": "taunt", "CE": "arm_pop",
+    "26": "kd_stagger", "28": "kd_fall", "2A": "kd_down", "2C": "kd_kneel", "2E": "kd_kneel",
+    "30": "kd2_stagger", "32": "kd2_fall", "34": "kd2_down", "34|": "kd2_down", "36|": "kd2_kneel", "38|": "kd2_kneel",
+}
+BULL_FROM_NES = dict(idle="C0", idle2="C4", idle3="C2", guard="08", guard_low="0A", jab_tell="4A", jab_mid="0E|",
+                     jab="0E", hook_tell="16", hook_mid="18", hook="1A", slip="48", hit_l="22", hit_r="22|",
+                     hit_body="20", hit_back="24", dazed="24", kd_stagger="26", kd_fall="28", kd_down="2A",
+                     kd_kneel="2C", taunt="CC", arm_pop="CE", tell1="02", tell2="82", tell3="80", tell4="46",
+                     tell5="44", kd2_stagger="30", kd2_fall="32", kd2_down="34", kd2_kneel="36|")
+# Soda Popinski (opponent 8, bank 4): his bob C6-80 then the jab 0E|-0E (state 16), his combo 40-3C-3E either way
+# (15), his rush 4C-4E-50 (18), his drink and laugh 3A, CC, 0C; down 30-32-34-36-38 (the one way captured).
+SODA_FRAMES = {
+    "C0": "idle", "00": "idle", "C4": "idle2", "02": "idle2", "06": "idle2", "C2": "idle3", "04": "idle3",
+    "08": "guard", "10": "guard", "10|": "guard", "12": "guard", "12|": "guard", "C8": "guard", "CA": "guard",
+    "CE": "guard", "4A": "guard", "0A": "guard_low",
+    "C6": "tell1", "80": "tell2", "0E|": "jab_mid", "0E": "jab", "D0": "jab",
+    "40|": "hook_tell", "40": "jab_tell", "3C|": "hook_mid", "3C": "tell3", "3E|": "hook", "3E": "hit_back",
+    "4C|": "tell4", "4E|": "tell5", "50": "slip", "50|": "slip",
+    "22|": "hit_r", "24": "hit_l", "42|": "dazed", "42": "dazed", "3A": "taunt", "CC": "taunt", "0C": "arm_pop",
+    "30": "kd_stagger", "30|": "kd2_stagger", "32": "kd_fall", "32|": "kd2_fall", "34": "kd_down", "34|": "kd2_down",
+    "36|": "kd_kneel", "38|": "kd2_kneel",
+}
+SODA_FROM_NES = dict(idle="C0", idle2="C4", idle3="C2", guard="08", guard_low="0A", jab_tell="40", jab_mid="0E|",
+                     jab="0E", hook_tell="40", hook_mid="3C|", hook="3E|", slip="50", hit_l="24", hit_r="22|",
+                     hit_body="24", hit_back="3E", dazed="42|", kd_stagger="30", kd_fall="32", kd_down="34",
+                     kd_kneel="36|", taunt="3A", arm_pop="0C", tell1="C6", tell2="80", tell3="3C|", tell4="4C|",
+                     tell5="4E|", kd2_stagger="30", kd2_fall="32", kd2_down="34|", kd2_kneel="38|")
 # The rivals after Joe, from their NES fights: opponent number, fighter bank (and offset), frames, and the game's
 # nth fight (where their tiles are measured).
 NES_RIVALS = {
@@ -829,6 +1141,12 @@ NES_RIVALS = {
     "honda": dict(name="Piston Honda", opp=2, bank=5, offset=0x30, frames=HONDA_FRAMES, canon=HONDA_FROM_NES, nth=2),
     "don": dict(name="Don Flamenco", opp=3, bank=0, offset=0x10, frames=DON_FRAMES, canon=DON_FROM_NES, nth=3),
     "hippo": dict(name="King Hippo", opp=4, bank=1, offset=0x00, frames=HIPPO_FRAMES, canon=HIPPO_FROM_NES, nth=4),
+    "tiger": dict(name="Great Tiger", opp=5, bank=2, offset=0x10, frames=TIGER_FRAMES, canon=TIGER_FROM_NES, nth=5),
+    "bull": dict(name="Bald Bull", opp=6, bank=3, offset=0x30, frames=BULL_FRAMES, canon=BULL_FROM_NES, nth=6),
+    "soda": dict(name="Soda Popinski", opp=8, bank=4, offset=0x10, frames=SODA_FRAMES, canon=SODA_FROM_NES, nth=8),
+    "sandman": dict(name="Mr. Sandman", opp=11, bank=3, offset=0x10, frames=SANDMAN_FRAMES, canon=SANDMAN_FROM_NES, nth=11),
+    "macho": dict(name="Super Macho Man", opp=12, bank=4, offset=0x30, frames=MACHO_FRAMES, canon=MACHO_FROM_NES, nth=12, cynes=True),
+    "tyson": dict(name="Mike Tyson", opp=13, bank=5, offset=0x40, frames=TYSON_FRAMES, canon=TYSON_FROM_NES, nth=13, lines=True),
 }
 FIGHTERS = {0: (NES_FRAMES, JOE_FROM_NES), **{r["opp"]: (r["frames"], r["canon"]) for r in NES_RIVALS.values()}}
 
@@ -895,7 +1213,8 @@ def joe_from_nes(s, shapes=None, opponent=0):
             X, Y = x + ax + mx, y + ay + my
             if 0 <= X < W and 0 <= Y < H:
                 img[Y][X] = tuple(c) + (255,)
-        small = scale(img, s)
+        lines = any(r["opp"] == opponent and r.get("lines") for r in NES_RIVALS.values())
+        small = shrink_lines(img, s) if lines else scale(img, s)   # (lines: whole rows and columns kept, hair crisp)
         frame = [[small[y][x] if y < len(small) and x < len(small[0]) else None for x in range(RW)] for y in range(RH)]
         frames.append(frame)
         moved[name] = (round(mx * s), round(my * s))
@@ -1005,7 +1324,7 @@ def joe_places(sheet, s, shapes=None, opponent=0):
                     best = (n, dx, dy)
         return JOE_ANCHOR[0] + best[1], JOE_ANCHOR[1] + best[2]
     found = {key: place(shapes[_key(key)], name) for key, name in frames_map.items() if _key(key) in shapes}
-    rx, ry = found["00"]
+    rx, ry = found.get("00") or next(found[k] for k, n in frames_map.items() if n == "idle" and k in found)   # (his stance)
     best = {}                               # per pose: its own frame's place (the one it was drawn from or
     for key, (x, y) in found.items():       # matched best; frames showing the same pose share it unless the
         best.setdefault(frames_map[key], (x, y))    # game really moves him: the same picture a pixel over
@@ -1135,7 +1454,13 @@ def write_js(poses, pals, colors, pposes, note, faces, mac_pal, places=None, riv
           "// The glove on the screen after a loss (the title's, as it first shows): slots dark red, light red, black.",
           f"export const LOSE_GLOVE = {json.dumps(lose_glove())};", "",
           "// What Start does on the title: the NES game's glove, flashing behind the logo, then punching out.",
-          f"export const TITLE_PUNCH = {json.dumps(title_punch(24))};", ""]
+          f"export const TITLE_PUNCH = {json.dumps(title_punch(24))};", "",
+          "// The title's gloves either side of the chosen item: 24x16, slots white, red, black (its colors).",
+          f"export const TITLE_GLOVES = {json.dumps(title_gloves())};", "",
+          "// The ending after Mike Tyson: Mac standing (1:1, each tile's palette), his word, the timings.",
+          f"export const ENDING = {json.dumps(ending())};", "",
+          "// The first screen: MIKE IS WAITING FOR YOUR CHALLENGE!!, the game's own (pixels, each tile's palette).",
+          f"export const SPLASH = {json.dumps(splash())};", ""]
     OUT_JS.write_text("\n".join(L))
 
 def _rival_js(key, art):

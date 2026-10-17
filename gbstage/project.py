@@ -189,7 +189,11 @@ def validate(data):
         dmc = (s or {}).get("nesDmc", 0)                 # an NES sample (1 the crowd) to start with the scene
         if not (isinstance(dmc, int) and 0 <= dmc <= 7):
             errors.append(f"{where}: nesDmc is an NES sample number, 0-7."); dmc = 0
+        music = (s or {}).get("nesMusic", 0)             # an NES song to start with the scene (Punch-Out!!'s numbers)
+        if not (isinstance(music, int) and 0 <= music <= 255):
+            errors.append(f"{where}: nesMusic is an NES song number, 0-255."); music = 0
         scenes.append({"name": name, "pixels": pixels, "cell_pal": cell_pal, "menu": menu, "press": press, "nes_dmc": dmc,
+                       **({"nes_music": music} if music else {}),
                        "options": options, "puzzle": puzzle, "fight": fight, "back": back, "texts": texts,
                        "slide": slide, **({"pass_key": pass_key} if pass_key else {}),
                        **({"cutscene": cutscene} if cutscene else {}), **({"typed": typed} if typed else {})})
@@ -324,13 +328,26 @@ def _menu(menu, where, index, scene_count, errors):
         else:
             pk = {"item": item, "label": label, "label_y": ly, "y": ky, "text_slot": pslot,
                   "codes": [{"key": [int(d) for d in c["key"]], "target": c["target"]} for c in codes]}
+    gloves = menu.get("gloves")             # Punch-Out!!'s: a glove either side of the chosen item, for the cursor
+    if gloves is not None:
+        g = gloves if isinstance(gloves, dict) else {}
+        px, cols, lx, rx, dy = (g.get(k) for k in ("pixels", "colors", "left", "right", "dy"))
+        good = lambda c: isinstance(c, list) and len(c) == 3 and all(isinstance(v, int) and 0 <= v <= 31 for v in c)
+        if not (isinstance(px, str) and len(px) == 24 * 16 and set(px) <= set("0123") and isinstance(cols, list)
+                and len(cols) == 3 and all(good(c) for c in cols) and all(isinstance(v, int) for v in (lx, rx, dy))
+                and 0 <= lx <= W - 24 and 0 <= rx <= W - 24 and -8 <= dy <= 8):
+            errors.append(f"{where}: the menu's gloves are 24x16 pixels of slots 0-3, 3 colors, and their places."); ok = False
+        else:
+            gloves = {"tiles": [tuple(int(px[(r * 8 + y) * 24 + c * 8 + x]) for y in range(8) for x in range(8))
+                                for r in range(2) for c in range(3)], "colors": cols, "left": lx, "right": rx, "dy": dy}
     if not ok:
         return None
     blinks = menu.get("blinks", 3)
     return {"x": x, "y": y, "spacing": spacing, "text_slot": slot, "items": out,
             "cursor_bob": menu.get("cursorAnimation", "bob") == "bob",
             "blinks": blinks if isinstance(blinks, int) and 0 <= blinks <= 8 else 3,
-            "select_moves": menu.get("selectMoves") is True, **({"pass_key": pk} if pk else {})}
+            "select_moves": menu.get("selectMoves") is True, **({"pass_key": pk} if pk else {}),
+            **({"gloves": gloves} if gloves else {})}
 
 
 MAX_CONFIRM_SPRITES = 30                          # OAM entries 2-31 (the cursor and slider marker take 0 and 1)
@@ -494,6 +511,16 @@ def _press_start(press, pressed, where, index, scene_count, errors):
     hold = press.get("hold", 0)             # frames on the screen after the flashes (Punch-Out!!'s challenger, its crowd)
     if not (isinstance(hold, int) and 0 <= hold <= 255):
         errors.append(f"{where}: the press's hold is 0-255 frames."); ok = False
+    auto = press.get("auto", 0)             # frames till it goes on by itself, Start ignored (Punch-Out!!'s first screen)
+    if not (isinstance(auto, int) and 0 <= auto <= 65535):
+        errors.append(f"{where}: the press's auto is 0-65535 frames."); ok = False
+    ring = press.get("ring")                # while it waits: an NES effect on these frames (Punch-Out!!'s bells at power-on)
+    at = (ring or {}).get("at") if isinstance(ring, dict) else None
+    if ring is not None and not (isinstance(ring.get("nesSfx"), int) and 1 <= ring["nesSfx"] <= 255 and auto
+                                 and isinstance(at, list) and 1 <= len(at) <= 32 and all(isinstance(f, int) for f in at)
+                                 and at[0] >= 0 and all(a < b for a, b in zip(at, at[1:])) and all(b - a <= 255 for a, b in zip([-1] + at, at))):
+        errors.append(f"{where}: the press's ring is an NES effect (1-255) on rising frames (up to 32, at most 255 apart), "
+                      "on a screen that goes on by itself."); ok = False
     quiet = press.get("quiet", False)       # no sound on the press (the NES game's own music stopped, as its screens do)
     if not isinstance(quiet, bool):
         errors.append(f"{where}: the press's quiet is true or false."); ok = False
@@ -503,6 +530,8 @@ def _press_start(press, pressed, where, index, scene_count, errors):
     if not ok:
         return None
     return {"target": target, "flashes": flashes, "prompt": prompt, "nes_dmc": dmc, "hold": hold, "quiet": quiet,
+            **({"auto": auto} if auto else {}),
+            **({"ring": {"sfx": ring["nesSfx"], "gaps": [b - a for a, b in zip([-1] + at, at)]}} if ring else {}),
             **({"card": card} if card else {}),
             "area": dict(area) if area else None,
             "pressed": [ord(c) - 48 for c in pressed] if area else None}

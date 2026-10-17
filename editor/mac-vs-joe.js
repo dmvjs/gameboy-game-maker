@@ -3,7 +3,7 @@
 // and art/mac-vs-joe.js (written by tools/punchout_art/build.py) stay out of git.
 
 import { boxingGame, BOXING_VERSION } from './boxing.js';
-import { JOE_PALETTES, JOE_POSES, JOE_POSES_CGB, MAC_COLORS, MAC_DOWN_COLORS, MAC_TIRED_COLORS, MAC_POSES, MAC_POSES_CGB, TEXT_PALETTE, PORTRAIT_PALETTES, PORTRAITS, JOE_NES, KAISER_PALETTES, KAISER_POSES, KAISER_POSES_CGB, KAISER_NES, HONDA_PALETTES, HONDA_POSES, HONDA_POSES_CGB, HONDA_NES, DON_PALETTES, DON_POSES, DON_POSES_CGB, DON_NES, HIPPO_PALETTES, HIPPO_POSES, HIPPO_POSES_CGB, HIPPO_NES, TITLE_LOGO, TITLE_PUNCH, LOSE_GLOVE, REFEREE, CROWD_COLORS, RING_COLORS, INTERMISSION }
+import { JOE_PALETTES, JOE_POSES, JOE_POSES_CGB, MAC_COLORS, MAC_DOWN_COLORS, MAC_TIRED_COLORS, MAC_POSES, MAC_POSES_CGB, TEXT_PALETTE, PORTRAIT_PALETTES, PORTRAITS, JOE_NES, KAISER_PALETTES, KAISER_POSES, KAISER_POSES_CGB, KAISER_NES, HONDA_PALETTES, HONDA_POSES, HONDA_POSES_CGB, HONDA_NES, DON_PALETTES, DON_POSES, DON_POSES_CGB, DON_NES, HIPPO_PALETTES, HIPPO_POSES, HIPPO_POSES_CGB, HIPPO_NES, TIGER_PALETTES, TIGER_POSES, TIGER_POSES_CGB, TIGER_NES, BULL_PALETTES, BULL_POSES, BULL_POSES_CGB, BULL_NES, SODA_PALETTES, SODA_POSES, SODA_POSES_CGB, SODA_NES, SANDMAN_PALETTES, SANDMAN_POSES, SANDMAN_POSES_CGB, SANDMAN_NES, MACHO_PALETTES, MACHO_POSES, MACHO_POSES_CGB, MACHO_NES, TYSON_PALETTES, TYSON_POSES, TYSON_POSES_CGB, TYSON_NES, TITLE_LOGO, TITLE_PUNCH, TITLE_GLOVES, SPLASH, ENDING, LOSE_GLOVE, REFEREE, CROWD_COLORS, RING_COLORS, INTERMISSION }
   from './art/mac-vs-joe.js';
 
 export const MAC_VS_JOE_VERSION = BOXING_VERSION;
@@ -104,6 +104,158 @@ const HIPPO = {
            ['I HAVE MY', 'WEAKNESS.', '', 'BUT I', "WON'T TELL", 'YOU!', '', 'HA,HA,HA!']],
 };
 
+const TIGER = {
+  short: 'Tiger', hud: 'TIGER', name: 'GREAT TIGER', rank: 'RANKED NO.1',
+  circuit: 'MAJOR CIRCUIT', ring: RING_COLORS.major,
+  lines: ['24-5 3KO', 'FROM BOMBAY,', 'INDIA', 'AGE: 29', 'WEIGHT:132'],
+  playerRank: 'RANKED NO.2',            // Mac, once Hippo's beaten
+  playerLines: ['"MINOR"', 'TITLE-', 'HOLDER', '', '5-0 5KO'],
+  palettes: TIGER_PALETTES,
+  poses: TIGER_POSES,
+  cgbPoses: TIGER_POSES_CGB,
+  crowdColor: CROWD_COLORS.tiger,
+  portrait: PORTRAITS.tiger,
+  nes: { ...JOE_NES, ...TIGER_NES },
+  talk: [[['HIS FATHER', 'WAS A', 'GREAT', 'MAGICIAN', 'IN INDIA.'], ["DON'T BE", 'CHARMED BY', 'HIS MAGIC', 'PUNCHES.']]],
+  quotes: [['SO A', 'PUSSYCAT', 'WANTS TO', 'FIGHT A', 'TIGER!'], ['BEWARE', 'MY TIGER', 'PUNCH!'],
+           ['A KITTEN', 'IS NO', 'MATCH FOR', 'A TIGER!'], ['I HAVE', 'PURRED', 'LONG', 'ENOUGH.', '', 'NOW HEAR', 'ME ROAR!']],
+};
+
+const BULL = {
+  short: 'Bull', hud: 'BULL', name: 'BALD BULL', rank: 'CHAMPION',
+  circuit: 'MAJOR CIRCUIT', ring: RING_COLORS.major, titleBout: true,
+  lines: ['34-4 29KO', 'FROM', 'ISTANBUL,', 'TURKEY', 'AGE: 36', 'WEIGHT:298'],
+  playerRank: 'RANKED NO.1',            // Mac, once Tiger's beaten
+  playerLines: ['"MINOR"', 'TITLE-', 'HOLDER', '', '6-0 6KO'],
+  winRank: 'NEW CHAMPION!',             // the Major Circuit's title fight
+  training: true,                       // then the training run, the World Circuit's pass key
+  trainingKey: '605 897 1454',
+  palettes: BULL_PALETTES,
+  poses: BULL_POSES,
+  cgbPoses: BULL_POSES_CGB,
+  crowdColor: CROWD_COLORS.bull,
+  portrait: PORTRAITS.bull,
+  nes: { ...JOE_NES, ...BULL_NES },
+  talk: [[['MAC! WATCH', 'HIS BULL', 'CHARGE!', 'STAND UP', 'TO HIM!']]],
+  quotes: [["DOC CAN'T", 'HELP YOU', 'NOW.', '', 'WILL YOU', 'BEG ME FOR', 'HELP?'],
+           ['HEY!LITTLE', 'MAC!', '', 'MAYBE DOC', 'SHOULD', 'THROW YOU', 'A TOWEL!'],
+           ['MY BARBER', "DIDN'T", 'KNOW WHEN', 'TO QUIT...', '', 'DO YOU?'],
+           ['ZIP YOUR', 'LIP,DOC!', '', 'LITTLE MAC', 'IS MINE', 'NOW.']],
+};
+
+const HONDA2 = {                        // the World Circuit's first: Honda again, his NES rematch (same art, bank 5 at $20)
+  ...HONDA, short: 'Honda2', name: 'PISTON HONDA', rank: 'RANKED NO.5', titleBout: false, winRank: null,
+  training: false, trainingKey: null, tip: null,
+  circuit: 'WORLD CIRCUIT', ring: RING_COLORS.world,
+  lines: ['26-2 18KO', 'FROM TOKYO,', 'JAPAN', 'AGE: 28', 'WEIGHT:174'],
+  playerRank: 'RANKED NO.6',
+  playerLines: ['"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER', '7-0 7KO'],
+  nes: { ...JOE_NES, ...HONDA_NES, offset: 0x20 },
+  quotes: [['I STILL', 'REMEMBER', 'OUR FIRST', 'FIGHT.', '', "NOW I'M", 'GONNA PAY', 'YOU BACK.', 'BANZAI!!'],
+           ['YOU SHOULD', 'WEAR A', 'HELMET', 'WHEN YOU', 'FIGHT ME!'],
+           ["I'LL GIVE", 'YOU A TKO', 'FROM', 'TOKYO!']],
+};
+
+const SODA = {
+  short: 'Soda', hud: 'SODA', name: 'SODA POPINSKI', rank: 'RANKED NO.4',
+  circuit: 'WORLD CIRCUIT', ring: RING_COLORS.world,
+  lines: ['33-2 24KO', 'FROM MOSCOW,', 'U.S.S.R.', 'AGE: 35', 'WEIGHT:237'],
+  playerRank: 'RANKED NO.5',            // Mac, once Honda's beaten again
+  playerLines: ['"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER', '8-0 8KO'],
+  palettes: SODA_PALETTES,
+  poses: SODA_POSES,
+  cgbPoses: SODA_POSES_CGB,
+  crowdColor: CROWD_COLORS.soda,
+  portrait: PORTRAITS.soda,
+  nes: { ...JOE_NES, ...SODA_NES },
+  quotes: [['WOULD YOU', 'LIKE SOME', 'PUNCH TO', 'DRINK?', 'HA,HA,HA!'], ["I'M GONNA", 'MAKE YOU', 'FEEL', 'PUNCH', 'DRUNK!'],
+           ['AFTER YOU', "LOSE,WE'LL", 'DRINK TO', 'YOUR', 'HEALTH!', '', 'HA,HA,HA!'],
+           ['I DRINK TO', 'PREPARE', 'FOR A', 'FIGHT.', '', 'TONIGHT I', 'AM VERY', 'PREPARED!']],
+};
+
+const BULL2 = {                         // the World Circuit's third: Bald Bull again, his NES rematch (same art, bank 3 at $20)
+  ...BULL, short: 'Bull2', rank: 'RANKED NO.3', titleBout: false, winRank: null,
+  training: false, trainingKey: null,
+  circuit: 'WORLD CIRCUIT', ring: RING_COLORS.world,
+  lines: ['34-5 29KO', 'FROM', 'ISTANBUL,', 'TURKEY', 'AGE: 36', 'WEIGHT:298'],
+  playerRank: 'RANKED NO.4',            // Mac, once Soda's beaten
+  playerLines: ['"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER', '9-0 9KO'],
+  nes: { ...JOE_NES, ...BULL_NES, offset: 0x20 },
+  quotes: [['THIS TIME', "I'M GONNA", 'CHARGE', 'RIGHT OVER', 'YOU!'],     // (his own, half the time in the game's)
+           ['THIS TIME', "I'M GONNA", 'CHARGE', 'RIGHT OVER', 'YOU!'],
+           BULL.quotes[0], BULL.quotes[2], BULL.quotes[3]],
+};
+
+const DON2 = {                          // the World Circuit's fourth: Don again, his NES rematch (same art, bank 0 at $20)
+  ...DON, short: 'Don2', rank: 'RANKED NO.2',
+  circuit: 'WORLD CIRCUIT', ring: RING_COLORS.world,
+  lines: ['22-4 9KO', 'FROM MADRID,', 'SPAIN', 'AGE: 23', 'WEIGHT:152'],
+  playerRank: 'RANKED NO.3',            // Mac, once Bull's beaten again
+  playerLines: ['"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER', '10-0 10KO'],
+  nes: { ...JOE_NES, ...DON_NES, offset: 0x20 },
+  quotes: [...Array(3)].map(() => ['FLAMENCO', 'STRIKES', 'BACK!!', '', 'RETURN OF', 'DON!!']).concat(   // (his own, most of
+           [DON.quotes[0], DON.quotes[1], DON.quotes[3]]),                                             // the time in the game's)
+};
+
+const SANDMAN = {
+  short: 'Sandman', hud: 'SANDMAN', name: 'MR.SANDMAN', rank: 'RANKED NO.1',
+  circuit: 'WORLD CIRCUIT', ring: RING_COLORS.world,
+  lines: ['27-2 21KO', 'FROM', 'PHILADEL-', 'PHIA,PA.', 'AGE: 31', 'WEIGHT:284'],
+  playerRank: 'RANKED NO.2',            // Mac, once Don's beaten again
+  playerLines: ['"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER', '11-0 11KO'],
+  palettes: SANDMAN_PALETTES,
+  poses: SANDMAN_POSES,
+  cgbPoses: SANDMAN_POSES_CGB,
+  crowdColor: CROWD_COLORS.sandman,
+  portrait: PORTRAITS.sandman,
+  nes: { ...JOE_NES, ...SANDMAN_NES },
+  talk: [[['JOIN THE', 'NINTENDO', 'FUN CLUB', 'TODAY!', 'MAC.']]],   // (Doc, in his corner)
+  quotes: [['HEY!', 'MAC BABY...', '', 'SAY', 'GOODNIGHT!'], ['WELCOME', 'TO', 'DREAMLAND,', 'BABY!'],
+           ['I THINK', "YOU'RE", 'GONNA', 'HAVE A', 'NIGHTMARE', 'TONIGHT!'], ['BEDTIME', 'FOR LITTLE', 'MAC!']],
+};
+
+const MACHO = {
+  short: 'Macho', hud: 'MACHO', name: 'SUPER MACHO MAN', rank: 'CHAMPION',
+  circuit: 'WORLD CIRCUIT', ring: RING_COLORS.world, titleBout: true,
+  lines: ['35-0 29KO', 'FROM', 'HOLLYWOOD,', 'CA.', 'AGE: 27', 'WEIGHT:242'],
+  playerRank: 'RANKED NO.1',            // Mac, once Sandman's beaten
+  playerLines: ['"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER', '12-0 12KO'],
+  winRank: 'NEW CHAMPION!',             // the World Circuit's title fight
+  training: true,                       // then the training run, and the pass key to the dream fight
+  trainingKey: '007 373 5963',
+  palettes: MACHO_PALETTES,
+  poses: MACHO_POSES,
+  cgbPoses: MACHO_POSES_CGB,
+  crowdColor: CROWD_COLORS.macho,
+  portrait: PORTRAITS.macho,
+  nes: { ...JOE_NES, ...MACHO_NES },
+  talk: [[['LOOK FOR', 'TWO TYPES', 'OF SPIN', 'PUNCH!', 'WATCH HIM']]],   // (Doc, in his corner)
+  quotes: [['MY SUPER', 'SPIN PUNCH', 'IS TOTALLY', 'TOUGH!'], ['MY SUPER', 'SPIN PUNCH', 'IS TOTALLY', 'TOUGH!'],   // (his
+           ['MY BODY', 'IS JUST', 'SO TOTALLY', 'COOL!'],                                                          // most often)
+           ['I WORK ON', 'MY TAN', 'HARDER', "THAN I'LL", 'HAVE TO', 'WORK ON', 'YOU!'],
+           ["I DON'T", 'SMOKE...', '', 'BUT', 'TONIGHT', "I'M GONNA", 'SMOKE YOU!']],
+};
+
+const TYSON = {
+  short: 'Tyson', hud: 'TYSON', name: 'MIKE TYSON', rank: 'KID DYNAMITE',
+  circuit: 'THE DREAM FIGHT', ring: RING_COLORS.dream,   // (his own ring: the game's last)
+  lines: ['31-0 27KO', 'FROM', 'CATSKILL,', 'N.Y.', 'AGE: 21', 'WEIGHT:220'],
+  playerRank: 'CHAMPION',               // Mac, the World Circuit's champion
+  playerLines: ['"WORLD"', '"MAJOR"', '"MINOR"', 'TITLEHOLDER', '13-0 13KO'],
+  winRank: 'THE CHAMPION!',
+  palettes: TYSON_PALETTES,
+  poses: TYSON_POSES,
+  cgbPoses: TYSON_POSES_CGB,
+  crowdColor: CROWD_COLORS.tyson,
+  portrait: PORTRAITS.tyson,
+  nes: { ...JOE_NES, ...TYSON_NES },
+  quotes: [['YOU THINK', 'THE SPEED', 'OF YOUR', 'FINGERS', 'CAN MATCH', 'THE', 'STRENGTH', 'OF MY', 'FISTS?'],
+           ['IF I KNOCK', 'YOU DOWN,', "DON'T", 'GET UP!'],
+           ['THEY SAY', "I CAN'T", 'LOSE.', '', 'I SAY YOU', "CAN'T WIN!"],
+           ['HEY!', '', 'IS THIS', 'KID A', 'JOKE?', '', "WHERE'S", 'THE REAL', 'CHALLENGER'],
+           ['YOUR', 'EXPERIENCE', "DOESN'T", 'MATCH MINE.', '', 'GO HOME', 'AND', 'PRACTICE!']],
+};
+
 export const JOE_VS_MAC = {
   id: 'mac-vs-joe',
   name: 'Joe vs Mac',
@@ -115,13 +267,16 @@ export const JOE_VS_MAC = {
   title: [{ text: 'MIKE TYSON\'S', x: 32, y: 8, scale: 1, slot: 1 }],    // over the logo, as Punch-Out!!'s
   titleLogo: { ...TITLE_LOGO, y: 24 },
   titlePunch: TITLE_PUNCH,
+  splash: SPLASH,
+  titleGloves: TITLE_GLOVES,
+  ending: ENDING,
   circuit: 'MINOR CIRCUIT',
   intermission: INTERMISSION,           // the training run between circuits
   ring: RING_COLORS.minor,              // the Minor Circuit's ring, as the NES colors it
   textPalette: TEXT_PALETTE,
   portraitPalettes: PORTRAIT_PALETTES,
   rival: JOE,
-  rivals: [JOE, KAISER, HONDA, DON, HIPPO],            // fought in turn: each win on to the next
+  rivals: [JOE, KAISER, HONDA, DON, HIPPO, TIGER, BULL, HONDA2, SODA, BULL2, DON2, SANDMAN, MACHO, TYSON],            // fought in turn: each win on to the next
   player: {
     name: 'LITTLE MAC', hud: 'MAC', rank: 'RANKED NO.3',
     lines: ['FROM BRONX', 'N.Y.', 'AGE: 17', 'WEIGHT:107', '0-0 0KO'],
