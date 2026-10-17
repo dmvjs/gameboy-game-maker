@@ -9,14 +9,14 @@
 import { luminance, sameColor } from './color.js';
 
 export const W = 160, H = 144, CELL = 8, CW = W / CELL, CH = H / CELL;
-export const MAX_BG_PALETTES = 48;                 // in a project (same as gbstage/project.py)
+export const MAX_BG_PALETTES = 128;                // in a project (same as gbstage/project.py)
 export const SCENE_BG_PALETTES = 8;                // in one scene: what the hardware holds
 export const MAX_OBJ_PALETTES = 8;
 export const MAX_TILES = 256;
 export const MAX_MENU_ITEMS = 6;
 export const MAX_FLASH_TILES = 80;   // the flash area must flip within one VBlank
 export const MAX_OPTION_ROWS = 6;
-export const MAX_SCENES = 32;
+export const MAX_SCENES = 120;
 export const FORMAT_VERSION = 2;
 
 // Every preset is ordered lightest to darkest, so it works on the original Game Boy as is.
@@ -367,7 +367,8 @@ export const FIGHT_W = 8, FIGHT_H = 10;
 export const FIGHT_POSES = ['idle', 'idle2', 'guard', 'hit_l', 'hit_r', 'hit_body', 'dazed',
                             'jab_tell', 'jab_mid', 'jab', 'hook_tell', 'hook_mid', 'hook', 'slip', 'idle3', 'hit_back',
                             'kd_stagger', 'kd_fall', 'kd_down', 'kd_kneel', 'taunt', 'arm_pop', 'guard_low',
-                            'tell1', 'tell2', 'tell3', 'tell4', 'tell5'];   // (a fighter's own wind-up frames)
+                            'tell1', 'tell2', 'tell3', 'tell4', 'tell5',
+                            'kd2_stagger', 'kd2_fall', 'kd2_down', 'kd2_kneel'];   // (his other way down)   // (a fighter's own wind-up frames)
 const FIGHT_HUD = { stars: 1, hearts: 2, points: 6, clock: 4, round: 1, playerBar: 6, rivalBar: 6 };
 
 // Pixel index -> slot for one rival pose, placed in the scene.
@@ -571,6 +572,9 @@ export function optionsProblems(p, s) {
 export const PASS_OFFSETS = [0, 1, 2, 4, 5, 6, 7, 9, 10, 11];
 const clonePass = pk => pk && { x: pk.x, y: pk.y, textSlot: pk.textSlot ?? 0, target: pk.target };
 
+// A prompt's lines (a label can have two: Punch-Out!!'s PUSH / START!).
+const promptRows = pr => pr.label.split('\n');
+
 // The scene's pixels with menu and prompt text baked in, exactly as the ROM shows them.
 // frame 'pressed' shows the flash area's pressed frame.
 export function composed(scene, frame = 'normal') {
@@ -595,7 +599,7 @@ export function composed(scene, frame = 'normal') {
   }
   if (scene.menu) for (const ink of menuInk(scene.menu)) for (const i of ink) out[i] = scene.menu.textSlot;
   if (scene.passKey) for (const off of PASS_OFFSETS) for (const i of textInk('0', scene.passKey.x + off, scene.passKey.y)) out[i] = scene.passKey.textSlot;
-  if (pr) for (const i of textInk(pr.label, pr.x, pr.y)) out[i] = pr.textSlot;
+  if (pr) promptRows(pr).forEach((row, k) => { for (const i of textInk(row, pr.x, pr.y + k)) out[i] = pr.textSlot; });
   if (frame === 'pressed' && scene.pressed) for (const i of areaPixels(scene.pressStart.area)) out[i] = scene.pressed[i];
   return out;
 }
@@ -607,9 +611,10 @@ export function pressStartProblems(p, s) {
   if (ps.area && ps.area.w * ps.area.h > MAX_FLASH_TILES) out.push(`The flash area is ${ps.area.w * ps.area.h} tiles; at most ${MAX_FLASH_TILES} can change in one frame.`);
   const pr = ps.prompt;
   if (pr) {
-    if (pr.x + pr.label.length > CW) out.push('The prompt runs off the right edge.');
-    if (ps.area && pr.y >= ps.area.y && pr.y < ps.area.y + ps.area.h &&
-        pr.x < ps.area.x + ps.area.w && ps.area.x < pr.x + pr.label.length) out.push('The prompt and the flash area overlap; move one of them.');
+    const rows = promptRows(pr), wide = Math.max(...rows.map(r => r.length));
+    if (pr.x + wide > CW) out.push('The prompt runs off the right edge.');
+    if (ps.area && pr.y + rows.length > ps.area.y && pr.y < ps.area.y + ps.area.h &&
+        pr.x < ps.area.x + ps.area.w && ps.area.x < pr.x + wide) out.push('The prompt and the flash area overlap; move one of them.');
   }
   return out;
 }
@@ -841,7 +846,7 @@ export function uniqueTileCount(scene) {
   }
   if (scene.fight) fightTiles(scene, add);
   const ps = scene.pressStart;
-  if (ps?.prompt) for (let k = 0; k < ps.prompt.label.length; k++) add(scene.pixels, ps.prompt.y * CW + ps.prompt.x + k);
+  if (ps?.prompt) promptRows(ps.prompt).forEach((row, r) => { for (let k = 0; k < row.length; k++) add(scene.pixels, (ps.prompt.y + r) * CW + ps.prompt.x + k); });
   if (ps?.area && scene.pressed) for (const c of areaCells(ps.area)) add(scene.pressed, c);
   return seen.size;
 }
@@ -854,7 +859,8 @@ const cloneTexts = t => (Array.isArray(t) ? t : []).map(x => ({ label: String(x.
 const clonePuzzle = pz => pz && JSON.parse(JSON.stringify(pz));
 const POSE_FALLBACK = { idle2: 'idle', idle3: 'idle', hit_back: 'hit_l', slip: 'idle', jab_mid: 'jab_tell', hook_mid: 'hook_tell', kd_stagger: 'hit_body', kd_fall: 'fall',
                         kd_down: 'down', kd_kneel: 'fall', arm_pop: 'hit_body', guard_low: 'guard',
-                        tell1: 'jab_tell', tell2: 'jab_tell', tell3: 'jab_tell', tell4: 'jab_tell', tell5: 'jab_tell' };   // as in gbstage/fight.py: older projects borrow a pose
+                        tell1: 'jab_tell', tell2: 'jab_tell', tell3: 'jab_tell', tell4: 'jab_tell', tell5: 'jab_tell',
+                        kd2_stagger: 'kd_stagger', kd2_fall: 'kd_fall', kd2_down: 'kd_down', kd2_kneel: 'kd_kneel' };   // as in gbstage/fight.py: older projects borrow a pose
 const cloneFight = ft => {
   if (!ft) return ft;
   const out = JSON.parse(JSON.stringify(ft));
@@ -868,7 +874,9 @@ const cloneScene = s => ({ name: s.name, pixels: s.pixels.slice(), cellPal: s.ce
                            pressStart: clonePress(s.pressStart), pressed: s.pressed && s.pressed.slice(), back: s.back,
                            options: cloneOptions(s.options), puzzle: clonePuzzle(s.puzzle),
                            fight: cloneFight(s.fight), passKey: clonePass(s.passKey || null), texts: cloneTexts(s.texts),
-                           slideIn: !!s.slideIn, nesDmc: s.nesDmc || 0, notes: s.notes || '' });
+                           slideIn: !!s.slideIn, nesDmc: s.nesDmc || 0, notes: s.notes || '',
+                           ...(s.cutscene ? { cutscene: JSON.parse(JSON.stringify(s.cutscene)) } : {}),
+                           ...(s.typed ? { typed: JSON.parse(JSON.stringify(s.typed)) } : {}) });
 
 export const snapshot = p => ({
   name: p.name, palettes: p.palettes.map(clonePalette), objPalettes: p.objPalettes.map(clonePalette),
@@ -897,6 +905,8 @@ export function serialize(p) {
       ...(s.texts?.length ? { texts: cloneTexts(s.texts) } : {}),
       ...(s.slideIn ? { slideIn: true } : {}),
       ...(s.nesDmc ? { nesDmc: s.nesDmc } : {}),
+      ...(s.cutscene ? { cutscene: s.cutscene } : {}),
+      ...(s.typed ? { typed: s.typed } : {}),
       ...(s.notes ? { notes: s.notes } : {}),
     })),
     start: p.start,
@@ -952,6 +962,8 @@ export function deserialize(raw) {
       texts: cloneTexts(s.texts),
       slideIn: s.slideIn === true && !s.fight,
       nesDmc: Number.isInteger(s.nesDmc) ? s.nesDmc : 0,
+      ...(s.cutscene ? { cutscene: s.cutscene } : {}),
+      ...(s.typed ? { typed: s.typed } : {}),
       notes: typeof s.notes === 'string' ? s.notes.slice(0, 2000) : '',
     };
   });

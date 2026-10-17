@@ -35,9 +35,10 @@ RECOLOR = {"glass-joe.png": {(250, 195, 231): (242, 183, 203),     # skin
 # Pose -> frame number in the source sheet (frames found left to right, top to bottom; see --contact).
 JOE = dict(idle=0, idle2=1, guard=28, hit_l=37, hit_r=36, hit_body=41, dazed=35, jab_tell=7, jab_mid=8, jab=15,
            hook_tell=16, hook_mid=17, hook=11, slip=43, idle3=2, hit_back=42, kd_stagger=47, kd_fall=44,
-           kd_down=49, kd_kneel=45, taunt=6, arm_pop=10, guard_low=31, tell1=7, tell2=7, tell3=7, tell4=7, tell5=7)
+           kd_down=49, kd_kneel=45, taunt=6, arm_pop=10, guard_low=31, tell1=7, tell2=7, tell3=7, tell4=7, tell5=7,
+           kd2_stagger=47, kd2_fall=44, kd2_down=49, kd2_kneel=45)
 MAC = dict(idle=0, jab=2, jab_high=7, dodge=5, block=38, hit=34, star=30, down=37, win=24)
-KD = {"kd_fall", "kd_down", "kd_kneel", "kd_stagger"}     # sit on the floor of the frame
+KD = {"kd_fall", "kd_down", "kd_kneel", "kd_stagger", "kd2_fall", "kd2_down", "kd2_kneel", "kd2_stagger"}   # sit on the floor of the frame
 JOE_ROWS, MAC_ROWS = (9, 114, 100), (25, 98, 95)  # source rows' top lines, and the y where the second row starts:
                                                  # standing poses keep their offset from their row's top
 
@@ -95,11 +96,43 @@ def scale(f, s, outline_weight=1.8):
             for y, oy in ys[Y]:
                 for x, ox in xs[X]:
                     c = f[y][x]; k = c[:3] if c else None
-                    score[k] = score.get(k, 0) + oy * ox * (outline_weight if k == dark else 1)
+                    weight = outline_weight if k == dark else (0.85 if k is None else      # (the background gives
+                             1.6 if lum(k) > 200 else 1)                                      # way at his edges; eyes'
+                    score[k] = score.get(k, 0) + oy * ox * weight                             # and teeth's whites stay)
             k = max(score, key=score.get)
             row.append(k + (255,) if k else None)
         out.append(row)
     return out
+
+def shrink_lines(f, s):
+    """Shrink pixel art by dropping whole rows and columns (3 in every 10 at 0.7): in each block the ones that
+    most repeat a neighbour, never two side by side, the blocks' phase the one losing least. What's kept is the
+    art's own pixels, so thin lines (hair, straps, outlines) stay crisp instead of being voted away."""
+    def same(a, b):
+        return sum(1 for x, y in zip(a, b) if (x[:3] if x else None) != (y[:3] if y else None))
+    def keep(rows):
+        n = len(rows)
+        cost = [min(same(rows[i], rows[i - 1]) if i else 99, same(rows[i], rows[i + 1]) if i + 1 < n else 99)
+                for i in range(n)]
+        best = None
+        for phase in range(10):
+            drop = set()
+            for b0 in range(-phase, n, 10):
+                block = [i for i in range(b0, b0 + 10) if 0 <= i < n]
+                want, got = round(len(block) * (1 - s)), []
+                for i in sorted(block, key=lambda i: cost[i]):
+                    if len(got) == want:
+                        break
+                    if all(abs(i - j) > 1 for j in got):
+                        got.append(i)
+                drop |= set(got)
+            total = sum(cost[i] for i in drop)
+            if best is None or total < best[0]:
+                best = (total, drop)
+        return [i for i in range(n) if i not in best[1]]
+    f = [f[y] for y in keep(f)]
+    xs = keep([[r[x] for r in f] for x in range(len(f[0]))])
+    return [[r[x] for x in xs] for r in f]
 
 def place(f, FW, FH, dy):               # centred, or slid to keep the most pixels when wider than the frame
     h, w = len(f), len(f[0]); best, ox = -1, 0
@@ -135,8 +168,8 @@ def write_sheet(path, frames, FW, FH, cols=4):
 # ---- editor/importer.js, ported ----
 
 FIGHT_W, FIGHT_H = 8, 10
-FIGHT_POSES = ['idle','idle2','guard','hit_l','hit_r','hit_body','dazed','jab_tell','jab_mid','jab','hook_tell','hook_mid','hook','slip','idle3','hit_back','kd_stagger','kd_fall','kd_down','kd_kneel','taunt','arm_pop','guard_low','tell1','tell2','tell3','tell4','tell5']
-TELL_FALLBACK = {f'tell{k}': 'jab_tell' for k in range(1, 6)}   # (a fighter without his own)
+FIGHT_POSES = ['idle','idle2','guard','hit_l','hit_r','hit_body','dazed','jab_tell','jab_mid','jab','hook_tell','hook_mid','hook','slip','idle3','hit_back','kd_stagger','kd_fall','kd_down','kd_kneel','taunt','arm_pop','guard_low','tell1','tell2','tell3','tell4','tell5','kd2_stagger','kd2_fall','kd2_down','kd2_kneel']
+TELL_FALLBACK = {**{f'tell{k}': 'jab_tell' for k in range(1, 6)}, **{f'kd2_{p}': f'kd_{p}' for p in ('stagger', 'fall', 'down', 'kneel')}}   # (a fighter without his own)
 PLAYER_POSES = ['idle','jab','jab_high','dodge','block','hit','star','down','win']
 RW, RH, PW, PH = 64, 80, 24, 48
 KINDS = 'sgh'
@@ -358,7 +391,7 @@ CROP = PORTRAIT - 2                                                      # insid
 PORTRAITS = {"joe": ("glass-joe.png", (938 + 22, 16 + 18)),            # top-left of the crop in the sheet
              "joe_hurt": ("glass-joe.png", (938 + 22, 97 + 18)),
              "mac": ("little-mac.png", (782 + 26, 1 + 8))}
-PORTRAIT_PALETTES = {"joe": 5, "mac": 2, "kaiser": 5, "honda": 5}      # palettes per fighter's portraits (joe_hurt shares Joe's)
+PORTRAIT_PALETTES = {"joe": 5, "mac": 1, "kaiser": 5, "honda": 5, "don": 5, "hippo": 5}      # palettes per fighter's portraits (joe_hurt shares Joe's)
 FRAME = [31, 31, 31]
 
 VS_BOX = (161, 52, 238, 126)                  # the portrait's box on the NES challenger screen (inside the frame)
@@ -484,12 +517,14 @@ DISASM_BANK = gamefiles.banks() / "PRG_Bank000.bin"      # your copy of the game
 # Down: 28 the fall (the spin, legs up), 2A on the mat for the count, 2C/2E up on his hands, 30/32 bent over after.
 NES_FRAMES = {
     "00": "idle", "C0": "idle", "02": "idle2", "C2": "idle2", "04": "idle3", "C4": "idle3", "06": "idle",
-    "08": "guard", "0A": "guard_low", "0C": "idle2", "0E": "jab", "10": "guard_low", "12": "guard", "14": "guard",
+    "08": "guard", "0A": "guard_low", "0C": "dazed", "0E": "jab", "10": "guard_low", "12": "guard", "14": "guard",
     "C6": "guard", "16": "hook_tell", "18": "hook", "1A": "hook_mid", "1C": "hit_body", "1E": "hit_r",
-    "20": "hit_r", "22": "hit_l", "24": "hit_back", "C8": "dazed", "CA": "dazed", "CC": "jab_tell",
-    "80": "guard", "82": "idle", "84": "slip", "86": "jab_mid", "26": "kd_fall", "30": "kd_stagger",
-    "28": "kd_fall", "32": "kd_stagger", "2A": "kd_down", "34": "kd_down", "2C": "kd_kneel", "36": "kd_stagger",
-    "2E": "kd_kneel", "38": "kd_stagger", "3A": "taunt",
+    "20": "hit_r", "22": "hit_l", "24": "hit_back", "C8": "guard", "CA": "guard", "CC": "jab_tell",   # (0C: his
+                                                                   # stunned face, just before he goes down)
+    "80": "tell2", "82": "tell1", "84": "slip", "86": "jab_mid", "26": "kd_stagger", "28": "kd_fall",
+    "2A": "kd_down", "2C": "kd_kneel", "2E": "kd_kneel", "3A": "taunt",   # (82, 80: his taunting bob, state $19)
+    "30": "kd2_stagger", "32": "kd2_fall", "34": "kd2_down", "36": "kd2_kneel", "38": "kd2_kneel",   # his other way
+    "30|": "kd2_stagger", "32|": "kd2_fall", "34|": "kd2_down", "36|": "kd2_kneel", "38|": "kd2_kneel",   # down
     "1E|": "hit_l", "20|": "hit_l", "22|": "hit_r",      # mirrored ($A2): the hit from the other side
 }
 
@@ -562,7 +597,8 @@ def title_logo():
             if c:
                 out.append(2 if c[:3] == LOGO_TOP else 3)
             else:
-                out.append(1 if x % 3 == 0 or y % 3 == 0 else 0)
+                edge = y == 0 or y == LOGO_H - 1        # (the mesh 46 rows, every cell whole, a dark row over and under)
+                out.append(0 if edge else 1 if x % 3 == 0 or (y - 1) % 3 == 0 else 0)
     to5 = lambda c: [round(v * 31 / 255) for v in c]
     return {"w": LOGO_W, "h": LOGO_H, "pixels": "".join(map(str, out)),
             "colors": [to5(LOGO_HOLE), to5(LOGO_MESH), to5(LOGO_TOP), to5(LOGO_BOTTOM)]}
@@ -691,9 +727,9 @@ def mac_from_nes(s):
                 arm = [y for y in range(glove, len(f) // 2) if sum(1 for c in f[y] if c) <= 12]
                 drop = set(arm[k * len(arm) // extra] for k in range(extra)) if len(arm) >= extra else set()
                 f = [row for y, row in enumerate(f) if y not in drop]
+            small = shrink_lines(f, s)          # (the game's own pixels, kept crisp)
         else:
-            f = cut(rip, boxes[MAC[pose]])
-        small = scale(f, s, outline_weight=1.0)
+            small = scale(cut(rip, boxes[MAC[pose]]), s, outline_weight=1.0)
         out.append(place(small, PW, PH, PH - len(small)))
     return out
 
@@ -708,8 +744,9 @@ def mac_from_nes(s):
 # NES game share a picture (and its tiles) with the nearest one.
 JOE_FROM_NES = dict(idle="00", idle2="02", idle3="04", guard="08", guard_low="0A", jab_tell="CC", jab_mid="CC",
                     jab="0E", hook_tell="16", hook_mid="1A", hook="18", slip="C6", hit_l="22", hit_r="1E",
-                    hit_body="1C", hit_back="24", dazed="C8", kd_stagger="32", kd_fall="28", kd_down="2A",
-                    kd_kneel="2C", taunt="3A", arm_pop="3A")
+                    hit_body="1C", hit_back="24", dazed="0C", kd_stagger="26", kd_fall="28", kd_down="2A",
+                    kd_kneel="2C", taunt="3A", arm_pop="3A", tell1="82", tell2="80",
+                    kd2_stagger="30", kd2_fall="32", kd2_down="34", kd2_kneel="36|")
 JOE_ANCHOR = (35, 77)                       # his place (the NES's $B0, $B1) in each 64x80 frame: at 0.7, whole
                                             # NES pixels (50, 110), so every frame scales on the same grid and
                                             # what frames share (legs, trunks) comes out as the same tiles
@@ -723,14 +760,15 @@ KAISER_FRAMES = {
     "08": "guard", "0A": "guard_low", "10": "jab_tell", "12": "jab_mid", "0E": "jab",
     "16": "hook_tell", "18": "hook_mid", "1A": "hook", "44": "slip",                 # his uppercut; his duck
     "1C": "hit_body", "1E": "hit_r", "20": "hit_r", "22": "hit_l", "22|": "hit_r", "24": "hit_back",
-    "0C": "dazed", "26": "kd_fall", "28": "kd_fall", "30": "kd_stagger", "32": "kd_stagger",
-    "2A": "kd_down", "34": "kd_down", "2C": "kd_kneel", "2E": "kd_kneel", "36": "kd_kneel", "38": "kd_kneel",
+    "0C": "dazed", "26": "kd_stagger", "28": "kd_fall", "2A": "kd_down", "2C": "kd_kneel", "2E": "kd_kneel",
+    "30": "kd2_stagger", "32": "kd2_fall", "34": "kd2_down", "36": "kd2_kneel", "38": "kd2_kneel",   # his other way
     "3A": "guard", "46": "hook", "3C": "arm_pop",                  # (46: his uppercut's end, state $17)
 }
 KAISER_FROM_NES = dict(idle="00", idle2="C0", idle3="C2", guard="08", guard_low="0A", jab_tell="10", jab_mid="12",
                        jab="0E", hook_tell="16", hook_mid="18", hook="1A", slip="44|", hit_l="22", hit_r="1E",
-                       hit_body="1C", hit_back="24", dazed="0C", kd_stagger="30", kd_fall="26", kd_down="2A",
-                       kd_kneel="2C", taunt="46", arm_pop="3C|", tell1="82", tell2="CA", tell3="80")
+                       hit_body="1C", hit_back="24", dazed="0C", kd_stagger="26", kd_fall="26", kd_down="2A",
+                       kd_kneel="2C", taunt="46", arm_pop="3C|", tell1="82", tell2="CA", tell3="80",
+                       kd2_stagger="30", kd2_fall="30", kd2_down="34", kd2_kneel="36|")
 # Piston Honda (opponent 2): the same, from his fight's logged frames (his jab 40-16-18, his straight 54-3E, his
 # uppercut 4A-44-46-48, his celebration 3A-3C).
 HONDA_FRAMES = {
@@ -742,21 +780,55 @@ HONDA_FRAMES = {
     "54": "hook_tell", "54|": "hook_tell", "3E": "hook", "3E|": "hook", "48": "hook_mid",
     "4A": "slip", "44": "slip", "46": "slip", "1A": "hit_back", "20": "hit_back", "24": "hit_back", "1E": "hit_r",
     "22": "hit_l", "22|": "hit_r", "1C": "hit_body", "C8": "dazed", "CA": "dazed", "C8|": "dazed", "CA|": "dazed",
-    "26": "kd_stagger", "28": "kd_fall", "2A": "kd_down", "2C": "kd_kneel", "2E": "kd_kneel",
-    "30": "kd_stagger", "30|": "kd_stagger", "32": "kd_fall", "32|": "kd_fall", "34": "kd_down", "34|": "kd_down",
-    "36": "kd_kneel", "36|": "kd_kneel", "38": "kd_kneel", "38|": "kd_kneel", "0C": "kd_down",
+    "26": "kd_stagger", "28": "kd_fall", "2A": "kd_down", "2C": "kd_kneel", "2E": "kd_kneel", "0C": "kd_down",
+    "30": "kd2_stagger", "30|": "kd2_stagger", "32": "kd2_fall", "32|": "kd2_fall", "34": "kd2_down", "34|": "kd2_down",
+    "36": "kd2_kneel", "36|": "kd2_kneel", "38": "kd2_kneel", "38|": "kd2_kneel",              # (his other way down)
     "3A": "taunt", "3C": "arm_pop",
 }
 HONDA_FROM_NES = dict(idle="C0", idle2="C2", idle3="04", guard="08", guard_low="42|", jab_tell="40", jab_mid="16",
                       jab="18", hook_tell="54|", hook_mid="48", hook="3E|", slip="4A", hit_l="22", hit_r="1E",
-                      hit_body="1C", hit_back="1A", dazed="C8", kd_stagger="30|", kd_fall="32|", kd_down="34|",
-                      kd_kneel="36|", taunt="3A", arm_pop="3C", tell1="0A", tell2="D0", tell3="CE", tell4="80",
-                      tell5="82")
+                      hit_body="1C", hit_back="1A", dazed="C8", kd_stagger="26", kd_fall="28", kd_down="2A",
+                      kd_kneel="2C", taunt="3A", arm_pop="3C", tell1="0A", tell2="D0", tell3="CE", tell4="80",
+                      tell5="82", kd2_stagger="30|", kd2_fall="32|", kd2_down="34|", kd2_kneel="36|")
+# Don Flamenco (opponent 3, in Joe's bank): his uppercut 10-12-3C-CC-16-18-40 (states 05, 07, 08: the arm raised
+# high is his tell), his hook 0A-16-18-1A (state 15), his bob 82-86 (state 18), his "Ole!" 3A, 3E.
+DON_FRAMES = {
+    "C0": "idle", "C4": "idle2", "C2": "idle3", "00": "idle", "02": "idle2", "04": "idle3", "06": "idle", "0C": "idle",
+    "08": "guard", "12": "guard", "14": "guard", "80": "guard", "0A": "guard_low",
+    "10": "jab_tell", "3C": "tell1", "CC": "tell2", "40": "jab", "82": "tell4", "86": "tell5",
+    "16": "hook_tell", "18": "hook_mid", "1A": "hook", "C6": "slip",
+    "1C": "hit_body", "1E": "hit_r", "20": "hit_r", "22|": "hit_l", "24": "hit_back", "C8": "dazed", "CA": "dazed",
+    "26": "kd_stagger", "28": "kd_fall", "2A": "kd_down", "2C": "kd_kneel", "2E": "kd_kneel",
+    "30": "kd2_stagger", "30|": "kd2_stagger", "32": "kd2_fall", "32|": "kd2_fall", "34": "kd2_down", "34|": "kd2_down",
+    "36": "kd2_kneel", "36|": "kd2_kneel", "38": "kd2_kneel", "38|": "kd2_kneel",              # (his other way down)
+    "3A": "taunt", "3E": "tell3",
+}
+DON_FROM_NES = dict(idle="C0", idle2="C4", idle3="C2", guard="08", guard_low="0A", jab_tell="10", jab_mid="18",
+                    jab="40", hook_tell="16", hook_mid="18", hook="1A", slip="C6", hit_l="22|", hit_r="1E",
+                    hit_body="1C", hit_back="24", dazed="C8", kd_stagger="26", kd_fall="28", kd_down="2A",
+                    kd_kneel="2C", taunt="3A", arm_pop="3E", tell1="3C", tell2="CC", tell3="3E", tell4="82",
+                    tell5="86", kd2_stagger="30", kd2_fall="32", kd2_down="34", kd2_kneel="36|")
+# King Hippo (opponent 4, bank 1): his jab 12-C6-16 (states 05, 15), his big swing 14|-C6-3C|-3C (state 16), his
+# mouth open as he winds up (24, 3A; both arms 20, 22: the opening), his shout CC (19); down, he sits (28, 80-88).
+HIPPO_FRAMES = {
+    "C0": "idle", "C4": "idle2", "C8": "idle3", "CA": "idle2", "00": "idle", "10": "guard",
+    "12": "jab_tell", "C6": "jab_mid", "16": "jab", "14|": "hook_tell", "3C|": "hook_mid", "3C": "hook",
+    "24": "tell1", "24|": "tell2", "3A": "tell3", "20": "tell4", "22": "tell5", "CC": "taunt",
+    "26": "hit_back", "30|": "hit_l", "30": "hit_r",
+    "28": "kd_fall", "80": "kd_down", "82": "kd_down", "86": "kd_kneel", "88": "kd_kneel",
+}
+HIPPO_FROM_NES = dict(idle="C0", idle2="C4", idle3="C8", guard="10", guard_low="00", jab_tell="12", jab_mid="C6",
+                      jab="16", hook_tell="14|", hook_mid="3C|", hook="3C", slip="C6", hit_l="30|", hit_r="26",
+                      hit_body="26", hit_back="26", dazed="30|", kd_stagger="26", kd_fall="28", kd_down="80",
+                      kd_kneel="86", taunt="CC", arm_pop="20", tell1="24", tell2="24|", tell3="3A", tell4="20",
+                      tell5="22", kd2_stagger="26", kd2_fall="28", kd2_down="82", kd2_kneel="88")
 # The rivals after Joe, from their NES fights: opponent number, fighter bank (and offset), frames, and the game's
 # nth fight (where their tiles are measured).
 NES_RIVALS = {
     "kaiser": dict(name="Von Kaiser", opp=1, bank=2, offset=0x00, frames=KAISER_FRAMES, canon=KAISER_FROM_NES, nth=1),
     "honda": dict(name="Piston Honda", opp=2, bank=5, offset=0x30, frames=HONDA_FRAMES, canon=HONDA_FROM_NES, nth=2),
+    "don": dict(name="Don Flamenco", opp=3, bank=0, offset=0x10, frames=DON_FRAMES, canon=DON_FROM_NES, nth=3),
+    "hippo": dict(name="King Hippo", opp=4, bank=1, offset=0x00, frames=HIPPO_FRAMES, canon=HIPPO_FROM_NES, nth=4),
 }
 FIGHTERS = {0: (NES_FRAMES, JOE_FROM_NES), **{r["opp"]: (r["frames"], r["canon"]) for r in NES_RIVALS.values()}}
 
@@ -976,12 +1048,25 @@ def rival_art(key, s, colors, pposes, max_share=24):
 def fit_cgb(raw, shared, pals, colors, pposes, max_share=16, nth=0):
     """A rival's Game Boy Color poses (its second tile bank): unshared if they fit, else shared as little as
     fits. -> (poses, how, report)."""
-    for n in range(max_share + 1):
-        cgb = raw if n == 0 else share_rival_tiles(raw, n)
-        ok, report = budget(shared, pals, colors, pposes, cgb, nth)
-        if ok:
-            return cgb, "unshared" if n == 0 else f"within {n} pixels", report
-    sys.exit("The rival's Game Boy Color poses don't fit.")
+    tried = {}
+    def attempt(n):                     # (sharing more never needs more tiles: the least that fits, by halving)
+        if n not in tried:
+            cgb = raw if n == 0 else share_rival_tiles(raw, n)
+            tried[n] = (cgb,) + tuple(budget(shared, pals, colors, pposes, cgb, nth))
+        return tried[n]
+    if attempt(0)[1]:
+        return raw, "unshared", tried[0][2]
+    lo, hi = 0, max_share
+    if not attempt(hi)[1]:
+        sys.exit("The rival's Game Boy Color poses don't fit.")
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if attempt(mid)[1]:
+            hi = mid
+        else:
+            lo = mid
+    cgb, ok, report = attempt(hi)
+    return cgb, f"within {hi} pixels", report
 
 
 def fit_rival(poses, pals, colors, pposes, max_share=16, nth=0):
@@ -1004,7 +1089,7 @@ def fit_rival(poses, pals, colors, pposes, max_share=16, nth=0):
     sys.exit("The rival's poses don't fit his fight's tiles.")
 
 
-def write_js(poses, pals, colors, pposes, note, faces, mac_pal, places=None, rivals=None, joe_cgb=None):
+def write_js(poses, pals, colors, pposes, note, faces, mac_pal, places=None, rivals=None, joe_cgb=None, mac_cgb=None):
     L = ["// Little Mac and Glass Joe from Punch-Out!! (NES), for local testing only. Written by tools/punchout_art/build.py",
          f"// ({note}). Not original art: keep it out of commits and builds you share.", "",
          "// Rival palettes s, g, h (slot 0 is the mat, replaced at load).",
@@ -1015,6 +1100,8 @@ def write_js(poses, pals, colors, pposes, note, faces, mac_pal, places=None, riv
     L += ["};", "", "// Player sprite colors for slots 1-3.", f"export const MAC_COLORS = {json.dumps(colors)};", "",
           "export const MAC_POSES = {"]
     L += [f"  {n}: '{v}'," for n, v in pposes.items()]
+    L += ["};", "", "// The same unshared, for Game Boy Color (its second bank's sprite tiles).", "export const MAC_POSES_CGB = {"]
+    L += [f"  {n}: '{v}'," for n, v in (mac_cgb or pposes).items()]
     L += ["};", "", "// Close-ups, 48x48: pixels are slots; cells are each tile's palette, a digit into PORTRAIT_PALETTES.",
           f"export const TEXT_PALETTE = {json.dumps(TEXT_PALETTE)};", f"export const PORTRAIT_PALETTES = {json.dumps(mac_pal)};",
           "export const PORTRAITS = {"]
@@ -1037,6 +1124,8 @@ def write_js(poses, pals, colors, pposes, note, faces, mac_pal, places=None, riv
           "// The title's logo: Punch-Out!!'s, from its title screen, over its blue mesh (slots: holes, mesh, orange, red).",
           f"export const TITLE_LOGO = {json.dumps(title_logo())};", "",
           *[line for key, art in (rivals or {}).items() for line in _rival_js(key, art)],
+          "// The training scene after the Minor Circuit title: New York scrolling by, Doc and Mac (the game's).",
+          f"export const INTERMISSION = {json.dumps(intermission_art())};", "",
           "// Each fight's crowd color, as the NES game sets it (its background palette 2, color 2).",
           f"export const CROWD_COLORS = {json.dumps(crowd_colors())};", "",
           "// Each circuit's ring, as the NES game colors it: the mat (and the posts' pads), the posts.",
@@ -1063,6 +1152,79 @@ def _rival_js(key, art):
             + ["};", f"export const {up}_NES = {{ bank: '{base64.b64encode(bank).decode()}', offset: {r['offset']},",
                f"  frames: {json.dumps(r['frames'])}, home: [135, 182], scale: {SCALE_JOE},",
                f"  places: {json.dumps(art['places'])} }};", ""])
+
+
+def intermission_art():
+    """The training scene after the Minor Circuit title, from the game: New York at half size (512 NES pixels
+    across: 256, the Game Boy's whole map width, so it scrolls round as the NES's does), six palettes; Doc on his
+    bike and Mac running as sprites, a frame each time the game's change. -> dict for the template."""
+    import nes_play
+    pano, frames = nes_play.montage()
+    img = [[tuple(c) + (255,) for c in row] for row in pano[16:240]]
+    small = scale(img, 0.5)                                       # 256 x 112
+    sky = small[2][0]
+    rows = [[sky] * 256 for _ in range(144 - len(small))] + small   # sky above, to 144
+    px = [[from8(c[:3]) for c in row] for row in rows]
+    tiles = [[px[cy * 8 + y][cx * 8 + x] for y in range(8) for x in range(8)] for cy in range(18) for cx in range(32)]
+    pals = choose_palettes(tiles, 6)
+    slots, cells = [0] * (256 * 144), []
+    for k, tile in enumerate(tiles):
+        best = min(range(len(pals)), key=lambda p: _tile_err(tile, pals[p]))
+        cy, cx = divmod(k, 32)
+        for n, c in enumerate(tile):
+            slots[(cy * 8 + n // 8) * 256 + cx * 8 + n % 8] = min(range(4), key=lambda q: dist(c, pals[best][q]))
+        cells.append(best)
+    # the riders: the area they're in, each frame at half size, split where a gap of columns falls between them
+    def crop(f):
+        return [[f[y][x] for x in range(90, 250)] for y in range(160, 236)]
+    halves = []
+    for f in frames:
+        c = scale([[tuple(p) + (255,) if p else None for p in row] for row in crop(f)], 0.625)   # (a little
+                                                                                       # bigger than the city: they read)
+        halves.append([[(from8(p[:3]) if p else None) for p in row] for row in c])
+    H, W = len(halves[0]), len(halves[0][0])
+    used = [x for x in range(W) if any(h[y][x] for h in halves for y in range(H))]
+    gap = max((b2 for a, b2 in zip(used, used[1:]) if b2 - a > 2), default=None)
+    groups = [[x for x in used if gap is None or x < gap], [x for x in used if gap is not None and x >= gap]]
+    actors = []
+    for xs in [g for g in groups if g]:
+        x0, x1 = min(xs), max(xs) + 1
+        ys = [y for y in range(H) if any(h[y][x] for h in halves for x in range(x0, x1))]
+        y0, y1 = min(ys), max(ys) + 1
+        w8, h8 = -(-(x1 - x0) // 8) * 8, -(-(y1 - y0) // 8) * 8
+        actors.append({"x": round(90 * 0.625) + x0 - 14, "y": 144 - 16 - h8, "w": w8, "h": h8,
+                       "frames": [[[h[y0 + y][x0 + x] if y0 + y < y1 and x0 + x < x1 else None for x in range(w8)]
+                                   for y in range(h8)] for h in halves]})
+    colors = {}                         # three sprite palettes (3 colors each): the riders' commonest, by tile
+    tiles_s = []
+    for a in actors:
+        for fr in a["frames"]:
+            for ty in range(0, a["h"], 8):
+                for tx in range(0, a["w"], 8):
+                    t = [fr[ty + y][tx + x] for y in range(8) for x in range(8) if fr[ty + y][tx + x]]
+                    if t: tiles_s.append(t)
+    black = [0, 0, 0]                   # their sprite palettes, from the game's colors: black (the outlines) and
+    spals = [[black, [29, 11, 22], [29, 22, 21]],       # Mac's pink and skin; Doc's red jacket and face;
+             [black, [18, 4, 4], [11, 0, 6]],           # the bike's green and blue (three: the fight's five
+             [black, [0, 14, 5], [6, 6, 29]]]           # sprite palettes are kept)
+    out_actors = []
+    for a in actors:
+        fl = []
+        for fr in a["frames"]:
+            pix, cl = [], []
+            for ty in range(0, a["h"], 8):
+                for tx in range(0, a["w"], 8):
+                    t = [fr[ty + y][tx + x] for y in range(8) for x in range(8) if fr[ty + y][tx + x]]
+                    cl.append(min(range(len(spals)), key=lambda p: sum(min(dist(c, q) for q in spals[p]) for c in t)) if t else 0)
+            for y in range(a["h"]):
+                for x in range(a["w"]):
+                    c = fr[y][x]
+                    p = spals[cl[(y // 8) * (a["w"] // 8) + x // 8]]
+                    pix.append(0 if c is None else 1 + min(range(3), key=lambda q: dist(c, p[q])))
+            fl.append({"pixels": "".join(map(str, pix)), "cells": "".join(map(str, cl))})
+        out_actors.append({"x": a["x"], "y": a["y"], "w": a["w"], "h": a["h"], "frames": fl})
+    return {"w": 256, "h": 144, "pixels": "".join(map(str, slots)), "cells": "".join(map(str, cells)),
+            "palettes": pals, "actors": out_actors, "objPalettes": spals}
 
 
 def crowd_colors():
@@ -1102,6 +1264,9 @@ def budget(poses, pals, colors, pposes, cgb=None, nth=0):
     for other in fights:                # (the others plain screens meanwhile: only this one is measured)
         if other["fight"] is not ft:
             other["fight"] = None
+    for sc in p["scenes"]:              # (cutscenes aside, their sprite palettes too)
+        sc.pop("cutscene", None)
+    p["palettes"]["obj"] = p["palettes"]["obj"][:8]
     ft.pop("nes", None)                 # the budget is tiles: the NES logic (and a stale copy of it) aside
     ft["rival"]["poses"] = poses
     ft["rival"].pop("cgbPoses", None)
@@ -1150,7 +1315,7 @@ def main():
     a.add_argument("--mac", type=float, default=0.7, help="Mac's scale from NES size (default 0.7, as Joe's: all of him, reaching punches too)")
     a.add_argument("--max-share", type=int, default=10, help="most pixels a tile may change to share another (default 10)")
     a.add_argument("--joe-sheet", type=Path, help="use this edited 64x80-frame sheet instead of the rip")
-    a.add_argument("--joe-nes", action="store_true", help="Joe's poses drawn from the game's own frames (shared down to fit)")
+    a.add_argument("--joe-rip", dest="joe_nes", action="store_false", help="Joe's poses from the rip sheet instead of the game's own frames (as the rivals after him)")
     a.add_argument("--mac-sheet", type=Path, help="use this edited 24x48-frame sheet instead of the rip")
     args = a.parse_args()
     write_example(strict=False)         # from the current editor code, so the budget below measures what it builds
@@ -1173,7 +1338,8 @@ def main():
     print(f"Joe: {joe_sheet}  ({moved} tiles had a color moved)\nMac: {mac_sheet}  ({pmoved} pixels moved)")
     # Share near-duplicate tiles, only as much as it takes to fit: for each fighter, the smallest pixel
     # difference that works (the player's limit first, with the rival sharing as much as allowed).
-    rival = {args.max_share: share_rival_tiles(poses, args.max_share)}   # (for measuring the player's)
+    share = max(args.max_share, 24) if args.joe_nes else args.max_share   # (the game's frames: as far as the rivals')
+    rival = {args.max_share: share_rival_tiles(poses, share)}   # (for measuring the player's)
     player = {n: share_player_tiles(pposes, n) for n in range(args.max_share + 1)}
     global SCALE_JOE, SCALE_MAC
     SCALE_JOE, SCALE_MAC = args.joe, args.mac
@@ -1184,10 +1350,12 @@ def main():
     def first(test):
         return next((n for n in range(args.max_share + 1) if test(n)), args.max_share)
     plim = first(lambda n: "player's poses" not in budget(rival[args.max_share], pals, colors, player[n])[1])
+    mac_cgb = share_player_tiles(pposes, 3)   # (Color: all of him, but a tile of a stray pixel or three: a sprite
+                                              # each, and the 40 on screen are shared with the rival's head)
     pposes = player[plim]
     raw = poses
-    poses, how, report = fit_rival(poses, pals, colors, pposes, args.max_share)
-    joe_cgb, cgb_how, cgb_report = fit_cgb(raw, poses, pals, colors, pposes, args.max_share)
+    poses, how, report = fit_rival(poses, pals, colors, pposes, share)
+    joe_cgb, cgb_how, cgb_report = fit_cgb(raw, poses, pals, colors, pposes, share)
     print(f"Joe on Color: {cgb_report}; tiles {cgb_how}")
     ok, report = budget(poses, pals, colors, pposes)
     print(f"{'fits' if ok else 'DOES NOT FIT'}: {report}" + f"; tiles shared {how} (Joe), within {plim} pixels (Mac)")
@@ -1201,7 +1369,7 @@ def main():
     places = joe_places(joe_sheet, args.joe, shapes)
     print("Joe's frames placed as the NES draws them:", len(places), "moved")
     rivals = {key: rival_art(key, args.joe, colors, pposes) for key in NES_RIVALS}
-    write_js(poses, pals, colors, pposes, note, faces, mac_pal, places, rivals, joe_cgb)
+    write_js(poses, pals, colors, pposes, note, faces, mac_pal, places, rivals, joe_cgb, mac_cgb)
     write_example()
     print("wrote", OUT_JS.relative_to(ROOT), "- reopen New > Examples > Joe vs Mac in the editor")
 

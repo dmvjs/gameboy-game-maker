@@ -121,10 +121,14 @@ wFtSweatT: db               ; frames the sweat beads keep flying
 wFtSweat: ds 3 * 4          ; per bead: x, y, x speed, y speed
 wFtSwapWant: db             ; 0: attack poses' tiles in video memory, 1: the knockdown set
 wFtSwapHave: db
-wFtSwapPos: db              ; tiles copied so far toward the wanted set
+wFtSwapPos: dw              ; tiles copied so far toward the wanted set
+wFtSwapSizes: ds 6          ; each set's tiles (dw)
 wFtSwapGoing: db            ; the set those are of (wanted changes midway: it starts over)
 wFtSwapSets: ds 6           ; the three sets' tiles (in wFtBankSwap)
-wFtSwapVbk: db              ; the video memory bank the swap area is in (Color's finer poses: 1)
+wFtSwapVbk: db              ; the run being copied: its video memory bank
+wFtSwapRuns: ds 16          ; the swap area's runs: tiles, where (dw), video memory bank; (0 tiles: no more)
+wFtCopyTo: dw               ; (FtSwapSetup's)
+wFtCopyN: db
 wFtRefX: db                 ; the referee's screen x (signed); off the left edge when he's not needed
 wFtRefPose: db
 wFtRefShown: db             ; the pose shown (its tiles in his slot wFtRefSlot)
@@ -154,9 +158,14 @@ wFtLoseScene: db
 wFtCornerScene: db
 wFtBankMapsCgb: db          ; Color's finer poses: their map rows' bank, their tiles' (0: none, the original's)
 wFtBankSwapCgb: db
+wFtBankHeads: db            ; his top rows as sprites (a rope row: he stands in front of it), their bank (0: none)
 wFtFightEnd:
 wRvNesX: db                 ; NES rival: his offset from his place (pixels right, down)
 wRvNesY: db
+wFtHeadX: db                ; (his top rows' sprites: OAM x of his area's left, this frame)
+wFtHeadIn: db               ; (and in this frame's yet)
+wFtTwinkleX: db             ; a star just earned: where it twinkles (OAM x, y), from the NES's ($0344, $0345)
+wFtTwinkleY: db
 wPlNesY: db                 ; NES Mac: pixels down his frame sits (bit 7: knocked-down colors)
 wRvPlaceX: db               ; and his pose's own offset from it (each NES frame sits where the NES draws it)
 wRvPlaceY: db
@@ -172,6 +181,9 @@ wFtSelectUsed: db           ; the corner's Select refill is once per match
 
 SECTION "Fight OAM", WRAM0, ALIGN[8]
 wFtOAM: ds 256              ; 40 sprites go to OAM; a busy frame's extras land in the spare room and aren't shown
+IF DEF(FT_ROPE)
+wFtOAM2: ds 256             ; (a rope row: the screen's lower part's own 40, copied in at FT_DMA_LINE mid-frame; the
+ENDC                        ; upper part's, his top rows over the ropes, in wFtOAM from VBlank)
 
 SECTION "Code: Fight", ROM0
 
@@ -198,6 +210,12 @@ FightLoad:
     dec b
     jr nz, .clear
 .keep:
+IF DEF(FT_NES)
+    ld a, $30               ; (back from the corner: his colors normal again, as the NES's corner leaves them, MacPal)
+    ld [wNes + $048D], a
+    ld a, $8F
+    ld [wNes + $048E], a
+ENDC
     ld hl, OAMDMACode
     ld de, hOAMDMA
     ld b, OAMDMACodeEnd - OAMDMACode
@@ -239,6 +257,27 @@ FightLoad:
     ld a, b
     or c
     jr nz, .tiles
+IF DEF(FT_PL_CGB)
+    ldh a, [hIsCGB]         ; Color: the player's own poses' tiles, unshared, into bank 1's sprite tiles
+    and a
+    jr z, .plDone
+    ld a, 1
+    ldh [rVBK], a
+    ld hl, PlayerCgbTiles
+    ld de, $8000
+    ld bc, FT_PL_CGB_TILES * 16
+.plTiles:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec bc
+    ld a, b
+    or c
+    jr nz, .plTiles
+    xor a
+    ldh [rVBK], a
+.plDone:
+ENDC
     xor a                   ; the referee standing, his tiles in
     call FtRefFirst
     ld a, $FF               ; no rare pose of the player's in yet
@@ -263,6 +302,7 @@ ENDC
     ld [wFtSwapWant], a
     ld [wFtSwapHave], a
     ld [wFtSwapPos], a
+    ld [wFtSwapPos + 1], a
     ld [wFtSwapGoing], a
     ld [wFtCount], a
     ld a, [wFtResume]
@@ -298,6 +338,34 @@ ENDC
     call FtNextOp
 .ready:
 IF DEF(FT_NES)
+IF DEF(FT_ROPE)
+    ld hl, FtRopeTiles      ; the bottom rope's row, in its own map row (shown over his area's first row)
+    ld de, $9800 + FT_ROPE_ROW * 32
+    ld b, 32
+.rope:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .rope
+    ldh a, [hIsCGB]
+    and a
+    jr z, .ropeDone
+    ld a, 1
+    ldh [rVBK], a
+    ld hl, FtRopeAttr
+    ld de, $9800 + FT_ROPE_ROW * 32
+    ld b, 32
+.ropeAttr:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .ropeAttr
+    xor a
+    ldh [rVBK], a
+.ropeDone:
+ENDC
     ld hl, FtTailTiles      ; the background below him, for his band's end when he's raised
     ld de, $9800 + FT_TAIL_ROW * 32
     ld b, FT_TAIL_ROWS * 32
@@ -386,7 +454,11 @@ ENDC
     ldh [hFtFlashShown], a
     ld a, FT_BAND_BOTTOM
     ldh [hFtBandBottom], a
+IF DEF(FT_ROPE)
+    ld a, FT_ROPE_LINE      ; the bottom rope's row over his area's first, then his band: interrupts there
+ELSE
     ld a, FT_BAND_TOP       ; the rival's band scrolls on its own: an interrupt at its top and bottom lines
+ENDC
     ldh [hFtBandTop], a
 IF DEF(FT_NES)
     ld a, [wFtBankNes]  ; where the round puts him (his corner), from the first frame shown
@@ -444,19 +516,24 @@ FtStat:
     jr nz, .drawing
     ldh a, [hFtBandOn]
     and a
-    jr z, .top
+    jp z, .top
     cp 3
-    jr z, .band
+    jp z, .band
+IF DEF(FT_ROPE)
+    cp 4
+    jp z, .dma
+ENDC
     dec a
-    jr nz, .bottom
+    jp nz, .bottom
+.end:
     ldh a, [hFtBandY]       ; his band's end: raised (scrolled down), the background below him down to its
     and a                   ; usual end
-    jr z, .bottom
+    jp z, .bottom
     bit 7, a
-    jr nz, .bottom
+    jp nz, .bottom
     ldh a, [rLY]            ; (only if that end is still to come: his height can change mid-frame, and a
     cp FT_BAND_BOTTOM       ; missed end would leave the tail's scroll on to the bottom, wrapping to the HUD)
-    jr nc, .bottom
+    jp nc, .bottom
     ldh a, [hFtScx]
     ldh [rSCX], a
     ld a, FT_TAIL_SCY
@@ -467,13 +544,28 @@ FtStat:
     ldh [hFtBandOn], a
     ldh a, [rLY]            ; that end reached while this was set up (late, behind another interrupt): its
     cp FT_BAND_BOTTOM       ; line has gone by without a match, so end the tail now
-    jr nc, .bottom
+    jp nc, .bottom
     pop af
     reti
 .top:
+IF DEF(FT_ROPE)
+    ldh a, [hFtScx]         ; the bottom rope's row (its own map row) over his area's first, his band after
+    ldh [rSCX], a
+    ld a, FT_ROPE_SCY
+    ldh [rSCY], a
+    ld a, FT_BAND_TOP
+    ldh [rLYC], a
+    ld a, 3
+    ldh [hFtBandOn], a
+    ldh a, [rLY]            ; (late, its line gone by while something held this off: on now, not next frame)
+    cp FT_BAND_TOP
+    jp nc, .band
+    pop af
+    reti
+ENDC
     ldh a, [hFtBandGap]     ; moved down: the lines his band has left, plain mat (the screen's last row)
     and a                   ; till it starts (unscrolled, they'd show his top rows again over him)
-    jr z, .band
+    jp z, .band
     ldh [rLYC], a
     ld a, FT_GAP_SCY
     ldh [rSCY], a
@@ -486,6 +578,33 @@ FtStat:
     ldh [rSCX], a
     ldh a, [hFtBandY]
     ldh [rSCY], a
+IF DEF(FT_ROPE)
+    ld a, FT_DMA_LINE       ; then the lower part's sprites, where none are
+    ldh [rLYC], a
+    ld a, 4
+    ldh [hFtBandOn], a
+    ldh a, [rLY]            ; (late: now)
+    cp FT_DMA_LINE
+    jp nc, .dma
+    pop af
+    reti
+.dma:                       ; mid-frame: the lower part's 40 sprites in (his top rows' have all been drawn)
+    ld a, HIGH(wFtOAM2)
+    call hOAMDMA
+    ldh a, [hFtBandBottom]
+    ldh [rLYC], a
+    ld a, 1
+    ldh [hFtBandOn], a
+    push bc                 ; (late, his band's end gone by: its end now; an interrupt keeps what it uses)
+    ldh a, [hFtBandBottom]
+    ld b, a
+    ldh a, [rLY]
+    cp b
+    pop bc
+    jp nc, .end
+    pop af
+    reti
+ENDC
     ldh a, [hFtBandBottom]
     ldh [rLYC], a
     ld a, 1
@@ -510,6 +629,11 @@ FtVBlank:
     call hOAMDMA
     ldh a, [hFtScx]
     ldh [rSCX], a
+    xor a                   ; (the frame's splits from the top, whatever the last one missed)
+    ldh [rSCY], a
+    ldh [hFtBandOn], a
+    ldh a, [hFtBandTop]
+    ldh [rLYC], a
     ldh a, [hFtFlash]       ; Color: the rival flashes white when a punch lands
     and a
     jr z, .noFlash
@@ -524,7 +648,11 @@ FtVBlank:
     cp [hl]
     jr z, .pose
     ld [hl], a
+IF DEF(FT_ROPE)
+    call FtFlashPalettes    ; (and his pose too: his top rows' sprites show the one asked for)
+ELSE
     jp FtFlashPalettes
+ENDC
 .pose:
     call FtCrowdDraw
     ld a, [wRvPose]
@@ -576,6 +704,14 @@ FtVBlank:
 
 ; A = the player's pose to draw: his pose, or (a rare one whose tiles aren't in yet: asked for) his last other.
 FtPlShown:
+IF DEF(FT_PL_CGB)
+    ldh a, [hIsCGB]         ; (Color: every pose's tiles are in)
+    and a
+    jr z, .dmg
+    ld a, [wPlPose]
+    ret
+.dmg:
+ENDC
     ld a, [wPlPose]
     ld e, a
     ld d, 0
@@ -876,8 +1012,39 @@ FtSwapSetup:
     ld [hl+], a
     ld a, HIGH(FtSwapSet2)
     ld [hl], a
+    ld hl, wFtSwapRuns      ; the original's swap area: its two runs (FtFights), in bank 0
+    ld a, [wFtSwapACount]
+    ld [hl+], a
+    ld a, [wFtSwapVramA]
+    ld [hl+], a
+    ld a, [wFtSwapVramA + 1]
+    ld [hl+], a
     xor a
-    ld [wFtSwapVbk], a
+    ld [hl+], a
+    ld a, [wFtSwapACount]
+    ld b, a
+    ld a, [wFtSwapCount]
+    sub b
+    ld [hl+], a
+    ld a, [wFtSwapVramB]
+    ld [hl+], a
+    ld a, [wFtSwapVramB + 1]
+    ld [hl+], a
+    xor a
+    ld b, 9
+.zero:
+    ld [hl+], a
+    dec b
+    jr nz, .zero
+    ld hl, wFtSwapSizes     ; each set the area's tiles
+    ld b, 3
+.sizes:
+    ld a, [wFtSwapCount]
+    ld [hl+], a
+    xor a
+    ld [hl+], a
+    dec b
+    jr nz, .sizes
     ldh a, [hIsCGB]
     and a
     ret z
@@ -887,15 +1054,18 @@ FtSwapSetup:
     ld [wFtBankSwap], a
     ld [$2000], a
     ld hl, FT_CGB_HEAD
-    ld de, wFtSwapCount     ; tiles, first run's, the runs (wFtSwapCount... wFtSwapVramB are in that order)
-    ld b, 6
+    ld de, wFtSwapSizes     ; each set's tiles, then the runs (up to four, in both banks), the sets, his
+    ld b, 6                 ; always-there runs
+    call .bytes
+    ld de, wFtSwapRuns
+    ld b, 16
     call .bytes
     ld de, wFtSwapSets
     ld b, 6
     call .bytes
-    ld a, 1
-    ld [wFtSwapVbk], a
     ld a, [hl+]             ; his always-there tiles, run by run
+    and a
+    jr z, .set
     ld b, a
 .run:
     push bc
@@ -903,29 +1073,37 @@ FtSwapSetup:
     pop bc
     dec b
     jr nz, .run
-    ld a, 1                 ; the attack set into bank 1's swap area, its two runs
-    ldh [rVBK], a
-    ld a, [wFtSwapSets]
+.set:
+    ld a, [wFtSwapSets]     ; the attack set into the swap area, run by run
     ld e, a
     ld a, [wFtSwapSets + 1]
     ld d, a
-    ld a, [wFtSwapACount]
-    call .times16
-    ld hl, wFtSwapVramA
+    ld hl, wFtSwapRuns
+    ld a, 4
+    ld [wFtCopyN], a
+.setRun:
     ld a, [hl+]
-    ld h, [hl]
-    ld l, a
-    call FtCopy
-    ld a, [wFtSwapACount]
-    ld b, a
-    ld a, [wFtSwapCount]
-    sub b
+    and a
+    jr z, .setsIn
     call .times16
-    ld hl, wFtSwapVramB
     ld a, [hl+]
-    ld h, [hl]
+    ld [wFtCopyTo], a
+    ld a, [hl+]
+    ld [wFtCopyTo + 1], a
+    ld a, [hl+]
+    ldh [rVBK], a
+    push hl
+    ld a, [wFtCopyTo]
     ld l, a
-    call FtCopy
+    ld a, [wFtCopyTo + 1]
+    ld h, a
+    call FtCopy             ; (the source runs on)
+    pop hl
+    ld a, [wFtCopyN]
+    dec a
+    ld [wFtCopyN], a
+    jr nz, .setRun
+.setsIn:
     xor a
     ldh [rVBK], a
     jp FtDrawPose           ; (A = 0: idle, in its tiles)
@@ -995,14 +1173,19 @@ FtSwapStep:
     ld [hl], a              ; a set that isn't the one under way: from its first tile, and no set whole meanwhile
     xor a
     ld [wFtSwapPos], a
+    ld [wFtSwapPos + 1], a
     dec a
     ld [wFtSwapHave], a
 .going:
     ld a, [wFtSwapPos]      ; (the first tiles: the set that was there is going)
-    and a
+    ld hl, wFtSwapPos + 1
+    or [hl]
     jr nz, .bank
     dec a
     ld [wFtSwapHave], a
+    xor a
+    ld [wFtSwapPos], a      ; (zeroed both: the line above)
+    ld [wFtSwapPos + 1], a
 .bank:
     ld a, [wFtBankSwap]      ; the swap tiles have a bank of their own
     ld [$2000], a
@@ -1023,76 +1206,110 @@ FtSwapStep:
     ld a, [hl+]
     ld h, [hl]
     ld l, a
-.src:
-    ld a, [wFtSwapPos]
+    ld a, [wFtSwapPos]      ; HL = source + pos * 16
     ld c, a
-    ld b, 0
-    REPT 4                  ; HL = source + pos * 16
+    ld a, [wFtSwapPos + 1]
+    ld b, a
+    REPT 4
         sla c
         rl b
     ENDR
     add hl, bc
-    ; how many tiles this VBlank: the per-frame amount, no further than the end of the set or of this run
+    ; how many tiles this VBlank: the per-frame amount, no further than the end of the tile's run
     ldh a, [hIsCGB]
     and a
-    ld b, FT_SWAP_PER_FRAME_CGB
+    ld a, FT_SWAP_PER_FRAME_CGB
     jr nz, .limit
-    ld b, FT_SWAP_PER_FRAME
+    ld a, FT_SWAP_PER_FRAME
 .limit:
-    ld a, [wFtSwapACount]
-    ld e, a                 ; E = the first run's tiles
+    ld [wFtCopyN], a
+    push hl                 ; (the source)
+    ld hl, wFtSwapRuns
     ld a, [wFtSwapPos]
     ld c, a
-    cp e
-    ld a, [wFtSwapCount]
-    jr nc, .end
-    ld a, e
-.end:
-    sub c                   ; tiles left in this run
-    cp b
-    jr nc, .n
+    ld a, [wFtSwapPos + 1]
     ld b, a
-.n:                         ; B = tiles to copy now
-    ld a, [wFtSwapACount]
+.find:                      ; the run the next tile's in (BC: its place past the runs before)
+    ld a, b
+    and a
+    jr nz, .past
+    ld a, c
+    cp [hl]
+    jr c, .inRun
+.past:
+    ld a, c
+    sub [hl]
+    ld c, a
+    jr nc, .next
+    dec b
+.next:
+    inc hl
+    inc hl
+    inc hl
+    inc hl
+    jr .find
+.inRun:                     ; C = its place in the run
+    push hl                 ; no further than the end of the wanted set (its size less the tiles in)
+    ld a, [wFtSwapWant]
+    add a
+    add LOW(wFtSwapSizes)
+    ld l, a
+    adc HIGH(wFtSwapSizes)
+    sub l
+    ld h, a
+    ld a, [wFtSwapPos]
+    ld b, a
+    ld a, [hl+]
+    sub b
+    ld b, a
+    ld a, [wFtSwapPos + 1]
     ld e, a
-    ld a, c                 ; DE = destination of tile pos
-    cp e
-    jr nc, .runB
-    ld e, a
-    ld d, 0
-    REPT 4
-        sla e
-        rl d
+    ld a, [hl]
+    sbc e                   ; (left > 255: no limit from it)
+    pop hl
+    jr nz, .runLeft
+    ld a, [wFtCopyN]
+    cp b
+    jr nc, .runLeft2
+.runLeft:
+    ld a, [wFtCopyN]
+    ld b, a
+.runLeft2:
+    ld a, [hl+]             ; tiles left in the run
+    sub c
+    cp b
+    jr nc, .lim
+    ld b, a
+.lim:
+    push bc                 ; (B: tiles to copy now)
+    ld b, 0
+    REPT 4                  ; DE = the run's start + place * 16
+        sla c
+        rl b
     ENDR
-    ld a, [wFtSwapVramA]
-    add e
+    ld a, [hl+]
+    add c
     ld e, a
-    ld a, [wFtSwapVramA + 1]
-    adc d
+    ld a, [hl+]
+    adc b
     ld d, a
-    jr .copy
-.runB:
-    sub e
-    ld e, a
-    ld d, 0
-    REPT 4
-        sla e
-        rl d
-    ENDR
-    ld a, [wFtSwapVramB]
-    add e
-    ld e, a
-    ld a, [wFtSwapVramB + 1]
-    adc d
-    ld d, a
+    ld a, [hl]
+    ld [wFtSwapVbk], a
+    pop bc
+    pop hl
 .copy:
     ld a, [wFtSwapPos]
     add b
     ld [wFtSwapPos], a
+    jr nc, .copied
+    ld a, [wFtSwapPos + 1]
+    inc a
+    ld [wFtSwapPos + 1], a
+.copied:
     ldh a, [hIsCGB]
     and a
     jr z, .byCPU
-    ld a, [wFtSwapVbk]      ; Color: the whole run in one GDMA (into bank 1, for finer poses)
+    ld a, [wFtSwapVbk]      ; Color: the whole run in one GDMA (in its video memory bank)
     ldh [rVBK], a
     ld a, h
     ldh [rHDMA1], a
@@ -1116,17 +1333,28 @@ FtSwapStep:
     ENDR
     dec b
     jp nz, .byCPU
-.moved:
-    ld a, [wFtSwapCount]
-    ld b, a
+.moved:                     ; the wanted set's tiles all in?
+    ld a, [wFtSwapWant]
+    add a
+    add LOW(wFtSwapSizes)
+    ld l, a
+    adc HIGH(wFtSwapSizes)
+    sub l
+    ld h, a
     ld a, [wFtSwapPos]
-    cp b
+    cp [hl]
+    jr nz, .more
+    inc hl
+    ld a, [wFtSwapPos + 1]
+    cp [hl]
     jr z, .done
+.more:
     or 1                    ; NZ: worked
     ret
 .done:
     xor a
     ld [wFtSwapPos], a
+    ld [wFtSwapPos + 1], a
     ld a, [wFtSwapWant]
     ld [wFtSwapHave], a
     or 1
@@ -1291,12 +1519,21 @@ IF DEF(FT_NES)
     ld a, FT_NES_DOWN_MAX
     jr .y
 .up:
+IF DEF(FT_ROPE)
+    cp -FT_NES_UP_MAX       ; as far up as the NES puts him (over the ropes and crowd: his top rows are sprites)
+    jr nc, .y
+    ld a, -FT_NES_UP_MAX
+    jr .y
+ENDC
     ld c, a                 ; standing, as far as his band rises (his head's at the top of the frame);
-    ld a, [wRvPose]         ; down, his low poses can rise inside it too
+    ld a, [wRvPose]         ; down, his low poses can rise inside it too (either way down: the second's last)
+    cp RP_KD2_STAGGER
+    jr nc, .low
     cp RP_KD_STAGGER
     jr c, .standing
     cp RP_KD_KNEEL + 1
     jr nc, .standing
+.low:
     ld e, a                 ; (as far as his pose's blank rows on top: his band can't rise past the HUD)
     ld d, 0
     ld hl, RivalPoseRise
@@ -1449,6 +1686,9 @@ ENDC
     ld a, FT_BAND_BOTTOM    ; the band goes with him: down, all of it; up, its top only as far as
     add c                   ; FT_HEADROOM, its end where the background below him takes over
     ldh [hFtBandBottom], a
+IF DEF(FT_ROPE)
+    ret                     ; (a rope row: his band's top stays put; what's above it of him is sprites)
+ENDC
     ld a, c
     and a
     jr z, .level
@@ -2980,6 +3220,19 @@ FtPlayerDown:
     jp FtFrame
 
 ; A = scene to go to after a pause.
+; The fight's display ends: back to VBlank-only, no scroll split. LoadScene calls it, the screen faded out
+; (till then his band stays where he is, not back to the middle).
+FtStop::
+    di
+    ld a, 1
+    ldh [rIE], a
+    xor a
+    ldh [rSTAT], a
+    ldh [hFtActive], a
+    ldh [rSCX], a
+    ldh [rSCY], a
+    ret
+
 FtFinish:
     ld [wFtResult], a
     ld a, [wFtResume]       ; off to the corner: no bells and celebrations
@@ -3027,14 +3280,7 @@ FtEndPause:
     ld hl, wFtTimer
     dec [hl]
     jp nz, FtFrame
-    di                      ; back to VBlank-only, no scroll split
-    ld a, 1
-    ldh [rIE], a
-    xor a
-    ldh [rSTAT], a
-    ldh [hFtActive], a
-    ldh [rSCX], a
-    ldh [rSCY], a
+    ; (his band keeps its scroll through the fade: FtStop, as the next scene loads)
     call FtResultScene
     jp StartTransition
 
@@ -3331,7 +3577,11 @@ FtStars:
     cp SET_KNOCKDOWN
     ret nz
 .show:
-    ld a, [wRvPose]         ; his head's height in this pose
+    ld a, [wRvPose]         ; his head's height in this pose (his other way down: as the first)
+    cp RP_KD2_STAGGER
+    jr c, .firstWay
+    sub RP_KD2_STAGGER - RP_KD_STAGGER
+.firstWay:
     sub RP_KD_STAGGER
     jr nc, .kd
     xor a
@@ -3385,6 +3635,142 @@ FtStars:
     dec c
     jr nz, .star
     ret
+
+IF DEF(FT_TWINKLE_TILE)
+; A star just earned: it twinkles beside his head, where the NES's does, while its count runs ($0343: 20
+; frames). HL = the next OAM entry.
+FtTwinkle:
+IF DEF(FT_ROPE)
+    ld b, a
+    ld a, [wFtTwinkleY]     ; which list: the upper if it ends before FT_DMA_LINE, the lower if it starts after
+    cp FT_DMA_LINE + 16 - 8 + 1
+    ld a, 0
+    rla                     ; (carry: it ends above)
+    xor 1                   ; A = 1 if it doesn't end above (the lower's)
+    cp b
+    ret nz
+ENDC
+    ld a, [wNes + $0343]
+    and a
+    ret z
+    bit 7, a
+    ret nz
+    and 4                   ; on 4 frames, off 4 (the NES's turns between its sparkles)
+    ret z
+    ld a, [wFtTwinkleY]
+    ld [hl+], a
+    ld a, [wFtTwinkleX]
+    ld [hl+], a
+    ld a, FT_TWINKLE_TILE
+    ld [hl+], a
+    ld a, FT_SAY_ATTR
+    ld [hl+], a
+    ret
+ENDC
+
+IF DEF(FT_ROPE)
+; His rows above his band, as the NES's sprites stand in front of its ropes and crowd: sprites of his top rows'
+; tiles (kept where sprites reach them), where his band would show them: the pose VBlank draws next, his band's
+; offsets this frame. HL = the next OAM entry.
+FtHeadSprites:
+    ld a, [wFtBankHeads]
+    ld [$2000], a
+    push hl
+    ld a, [wRvPose]
+    add a
+    ld e, a
+    ld d, 0
+    ldh a, [hIsCGB]         ; (Color: its own, after the original's)
+    and a
+    jr z, .table
+    ld a, e
+    add RP_COUNT * 2
+    ld e, a
+.table:
+    ld hl, $4000
+    add hl, de
+    ld a, [hl+]
+    ld d, [hl]
+    ld e, a
+    pop hl
+    ld a, [de]
+    inc de
+    and a
+    jr z, .done
+    ld b, a
+    ldh a, [hFtBandX]       ; his area's left, top on screen (as OAM x, y): scrolled with his band
+    cpl
+    inc a
+    add FT_HEAD_X0
+    ld [wFtHeadX], a
+    ldh a, [hFtBandY]
+    cpl
+    inc a
+    add FT_HEAD_Y0
+    ld c, a
+.sprite:
+    ld a, l
+    cp 160
+    jr nc, .done            ; (no room left)
+    ld a, [de]              ; dy
+    inc de
+    add c
+    cp FT_HEAD_LIMIT        ; his band shows this row
+    jr nc, .skip
+    ld [hl+], a
+    ld a, [wFtHeadX]
+    push bc
+    ld b, a
+    ld a, [de]              ; dx
+    add b
+    pop bc
+    cp 168                  ; off the right edge (his corner): no sprite spent on it
+    jr c, .onScreen
+    dec hl
+    jr .skip
+.onScreen:
+    ld [hl+], a
+    inc de
+    ld a, [de]              ; tile
+    inc de
+    ld [hl+], a
+    ld a, [de]              ; attributes
+    inc de
+    ld [hl+], a
+    dec b
+    jr nz, .sprite
+    jr .done
+.skip:
+    inc de
+    inc de
+    inc de
+    dec b
+    jr nz, .sprite
+.done:
+    ld a, [wFtBankData]
+    ld [$2000], a
+    ret
+ENDC
+
+IF DEF(FT_SIDE_TILE)
+; The ring's side ropes, down off the posts to the screen's edges: their ends below the crowd's rows (fixed: the
+; lines there scroll with his band). HL = the next OAM entry.
+FtSideRopes:
+    ld de, FtSideRopeOAM
+    ld b, 4 * 4
+.copy:
+    ld a, [de]
+    inc de
+    ld [hl+], a
+    dec b
+    jr nz, .copy
+    ret
+FtSideRopeOAM:
+    db FT_SIDE_Y, 8, FT_SIDE_TILE, FT_SIDE_ATTR | $80           ; (behind his band's colors: over the mat only)
+    db FT_SIDE_Y + 8, 8, FT_SIDE_TILE + 1, FT_SIDE_ATTR | $80
+    db FT_SIDE_Y, 160, FT_SIDE_TILE, FT_SIDE_ATTR | $A0
+    db FT_SIDE_Y + 8, 160, FT_SIDE_TILE + 1, FT_SIDE_ATTR | $A0
+ENDC
 
 StarOrbit:                  ; an ellipse: dx, dy in 16 steps
     db 0, -4,  5, -4,  9, -3,  12, -1,  13, 1,  12, 3,  9, 5,  5, 6
@@ -3459,13 +3845,24 @@ ENDC
     ret
 
 FtBuildOAM:
+IF DEF(FT_ROPE)
+    ld hl, wFtOAM2          ; (Mac, the referee: the screen's lower part's list)
+ELSE
     ld hl, wFtOAM
+ENDC
     call FtPlShown
     add a
     ld e, a
     ld d, 0
     push hl
     ld hl, PlayerPoses
+IF DEF(FT_PL_CGB)
+    ldh a, [hIsCGB]         ; Color: his own, finer
+    and a
+    jr z, .dmgPoses
+    ld hl, PlayerPosesCgb
+.dmgPoses:
+ENDC
     add hl, de
     ld a, [hl+]
     ld d, [hl]
@@ -3556,6 +3953,12 @@ ENDC
 .refStart:
 IF FT_FX_STARS
     call FtStars
+ENDC
+IF DEF(FT_TWINKLE_TILE)
+IF DEF(FT_ROPE)
+    ld a, 1                 ; (in the lower list if it's under the line where that list comes in)
+ENDC
+    call FtTwinkle
 ENDC
 IF FT_FX_SWEAT
     call FtSweatSprites
@@ -3672,6 +4075,22 @@ ENDC
     ld b, FT_BUBBLE_RIGHT
     call .put
 .clear:                     ; hide the rest
+IF DEF(FT_ROPE)
+    call .hideRest          ; the lower list done; the upper: his top rows over the ropes (and the star if there)
+    ld hl, wFtOAM
+    call FtHeadSprites
+IF DEF(FT_SIDE_TILE)
+    ldh a, [hIsCGB]         ; Color: the ring's side ropes' ends, past the crowd's rows, behind him (on the
+    and a                   ; original the mat under them is the ropes' own shade)
+    call nz, FtSideRopes
+ENDC
+IF DEF(FT_TWINKLE_TILE)
+    xor a
+    call FtTwinkle
+ENDC
+.hideRest:
+ENDC
+.hide:
     ld a, l
     cp 160
     ret nc
@@ -3680,7 +4099,7 @@ ENDC
     inc l
     inc l
     inc l
-    jr .clear
+    jr .hide
 .put:                       ; the next piece of the bubble: tile B at wFtSayX, then step right
     ld a, FT_SAY_Y + 16
     ld [hl+], a
@@ -3881,14 +4300,7 @@ FtNesEnd:
     ld hl, wFtTimer
     dec [hl]
     jp nz, FtFrame
-    di                      ; back to VBlank-only, no scroll split
-    ld a, 1
-    ldh [rIE], a
-    xor a
-    ldh [rSTAT], a
-    ldh [hFtActive], a
-    ldh [rSCX], a
-    ldh [rSCY], a
+    ; (his band keeps its scroll through the fade: FtStop, as the next scene loads)
 IF DEF(FT_NES_SOUND)
     ld a, $80               ; the crowd stops; what's playing (the win or loss music) plays out over the
     ld [wNes + $F3], a      ; next scene (SfxUpdate -> NesSoundAfter)
@@ -3974,6 +4386,24 @@ FtNesShow:
     ld a, [wRvPlaceY]
     add [hl]
     ld [wRvNesY], a
+IF DEF(FT_TWINKLE_TILE)
+    ld a, [wNes + $0344]    ; a star just earned: the NES's spot for it (beside his head), as ours
+    ld l, a
+    ld h, 0
+    ld de, NesOffsetX
+    add hl, de
+    ld a, [hl]
+    add FT_TWINKLE_X0
+    ld [wFtTwinkleX], a
+    ld a, [wNes + $0345]
+    ld l, a
+    ld h, 0
+    ld de, NesOffsetY
+    add hl, de
+    ld a, [hl]
+    add FT_TWINKLE_Y0
+    ld [wFtTwinkleY], a
+ENDC
     ret
 
 ; Per set being swapped in: the pose in video memory throughout that shows meanwhile (getting up: dazed; going

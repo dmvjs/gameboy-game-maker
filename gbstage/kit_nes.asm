@@ -2758,6 +2758,15 @@ NesSfxWake:                 ; (A kept)
     pop af
     ret
 
+; An NES music (A) outside the fight, the same way.
+NesMusic::
+    push af
+    ld a, $FF
+    call NesSfxWake
+    pop af
+    ld [wNes + $F2], a
+    ret
+
 ; An NES DMC sample (A: 1 the crowd) outside the fight, the same way.
 NesDmc::
     push af

@@ -99,6 +99,7 @@ SECTION "Stack", WRAM0
     ds 64
 wStackTop:
 wSavedSP: dw
+wLoadSrc: dw                ; (a map copied in pieces: where it's got to)
 
 SECTION "Code: Start", ROM0
 Start:
@@ -109,6 +110,8 @@ Start:
     inc a
 .notCGB:
     ldh [hIsCGB], a
+    xor a                   ; (not loading with the display on: HRAM is random at power-on)
+    ldh [hLoadOn], a
     ld sp, wStackTop
 .waitVBlank:                ; the LCD may only be switched off during VBlank
     ldh a, [rLY]
@@ -200,9 +203,23 @@ SECTION "Code: Scenes", ROM0
 ; Load scene A with the screen off. Tiles, map and palette map go by DMA on Game Boy Color.
 LoadScene:
     ldh [hScene], a
+    xor a                   ; (not loading with the display on, unless a plain screen turns it so)
+    ldh [hLoadOn], a
     ldh a, [rLCDC]
     add a                   ; screen already off (at boot)? bit 7 -> carry
     jr nc, .screenOff
+    ldh a, [hScene]         ; a plain screen: the display stays on (black, faded out), interrupts off
+    add LOW(SceneScreenOn)
+    ld l, a
+    adc HIGH(SceneScreenOn)
+    sub l
+    ld h, a
+    ld a, [hl]
+    and a
+    jr z, .waitVBlank
+    ld a, 1                 ; (interrupts are off outside a fight: nothing comes between)
+    ldh [hLoadOn], a
+    jr .screenOff
 .waitVBlank:
     ldh a, [rLY]
     cp 144
@@ -232,11 +249,18 @@ LoadScene:
     ld a, FADE_FRAMES
     ldh [hTimer], a
     SET_UPDATE FadeIn
+    call VWait              ; (palettes: written in VBlank when the screen stayed on)
     call UploadPalettes
     ldh a, [hScrollY]
     ldh [rSCY], a
     ld a, LCDC_ON
     ldh [rLCDC], a
+    ldh a, [hLoadOn]
+    and a
+    jr z, .loaded
+    xor a
+    ldh [hLoadOn], a
+.loaded:
     ret
 
 JumpHL:
@@ -244,6 +268,24 @@ JumpHL:
 
 SceneLoads:
     dw Scene0Load, Scene1Load
+
+SceneScreenOn:              ; 1: loads with the display on
+    db 1, 1
+
+; Loading with the display on: wait for the next VBlank's start (VRAM and OAM are free till it ends). Off: none.
+VWait:
+    ldh a, [hLoadOn]
+    and a
+    ret z
+.leave:
+    ldh a, [rLY]
+    cp 144
+    jr nc, .leave
+.wait:
+    ldh a, [rLY]
+    cp 144
+    jr c, .wait
+    ret
 
 
 Scene0Load:
@@ -271,7 +313,8 @@ Scene1Load:
     ldh [hScrollY], a
     ret
 
-; Fill the map rows below the screen (18-31) with tile D, palette E on Game Boy Color. Screen off.
+; Fill the map rows below the screen (18-31) with tile D, palette E on Game Boy Color. Screen off, or on (a
+; VBlank's worth at a time).
 SlideFill:
     ld hl, $9800 + MAP_H * 32
     ld bc, (32 - MAP_H) * 32
@@ -288,10 +331,30 @@ SlideFill:
     xor a
     ldh [rVBK], a
     ret
-.fill:
+.fill:                      ; BC bytes (a multiple of 32) of D from HL
+    push de
+    call VWait
+    pop de
+    ld a, b                 ; 128 at most at a time
+    and a
+    ld e, 128
+    jr nz, .run
+    ld a, c
+    cp 128
+    jr nc, .run
+    ld e, a
+.run:
+    ld a, c
+    sub e
+    ld c, a
+    jr nc, .runs
+    dec b
+.runs:
     ld a, d
+.byte:
     ld [hl+], a
-    dec bc
+    dec e
+    jr nz, .byte
     ld a, b
     or c
     jr nz, .fill
@@ -299,6 +362,59 @@ SlideFill:
 
 ; Copy C tiles (1-128) from HL to DE.
 CopyTiles:
+    ldh a, [hLoadOn]        ; the display on: a VBlank's worth at a time (Color 64 by DMA, the original 12)
+    and a
+    jr z, CopyTilesNow
+.chunk:
+    ldh a, [hIsCGB]
+    and a
+    ld b, 12
+    jr z, .n
+    ld b, 64
+.n:
+    ld a, c
+    cp b
+    jr nc, .some
+    ld b, a
+.some:                      ; B = tiles now
+    push bc
+    push hl
+    push de
+    call VWait
+    pop de
+    pop hl
+    pop bc
+    push bc
+    push hl
+    push de
+    ld c, b
+    call CopyTilesNow
+    pop de
+    pop hl
+    pop bc
+    ld a, c                 ; on past them
+    sub b
+    ld c, a
+    push bc
+    ld c, b
+    ld b, 0
+    REPT 4
+        sla c
+        rl b
+    ENDR
+    add hl, bc
+    ld a, e
+    add c
+    ld e, a
+    ld a, d
+    adc b
+    ld d, a
+    pop bc
+    ld a, c
+    and a
+    jr nz, .chunk
+    ret
+CopyTilesNow:
     ldh a, [hIsCGB]
     and a
     jr z, .byCPU
@@ -333,6 +449,7 @@ CopyTiles:
 
 ; Copy a 32-wide padded map from HL to $9800 (in the current VRAM bank).
 CopyMap:
+    call VWait
     ldh a, [hIsCGB]
     and a
     jr z, .byCPU
@@ -348,6 +465,60 @@ CopyMap:
     ldh [rHDMA5], a
     ret
 .byCPU:
+    ldh a, [hLoadOn]        ; the display on: six rows a VBlank
+    and a
+    jr z, .whole
+    ld de, $9800
+    ld c, MAP_H / 6
+.chunk:
+    push bc
+    push hl
+    push de
+    call VWait
+    pop de
+    pop hl
+    ld b, 6
+    call .rows
+    pop bc
+    dec c
+    jr nz, .chunk
+    ret
+.rows:                      ; B rows from HL to DE (32 wide both): HL, DE past them after
+    ld [wSavedSP], sp
+    ld sp, hl
+    ld h, d
+    ld l, e
+.chunkRow:
+    REPT MAP_W / 2
+        pop de
+        ld a, e
+        ld [hl+], a
+        ld a, d
+        ld [hl+], a
+    ENDR
+    add sp, 32 - MAP_W
+    ld de, 32 - MAP_W
+    add hl, de
+    dec b
+    jr nz, .chunkRow
+    ld d, h
+    ld e, l
+    ld hl, sp + 0
+    ld a, l
+    ld [wLoadSrc], a
+    ld a, h
+    ld [wLoadSrc + 1], a
+    ld hl, wSavedSP
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    ld sp, hl
+    ld a, [wLoadSrc]
+    ld l, a
+    ld a, [wLoadSrc + 1]
+    ld h, a
+    ret
+.whole:
     ld [wSavedSP], sp
     ld sp, hl
     ld hl, $9800
@@ -1166,6 +1337,7 @@ hNextScene: db
 hSfxTranspose: db       ; semitones up for the next PlaySfx
 hFadeStep: db
 hPalDirty: db
+hLoadOn: db             ; loading with the display on (VWait)
 hCounter: db
 hPatchJump: ds 3         ; JP to the pending map patch
 hPatchSrc: dw

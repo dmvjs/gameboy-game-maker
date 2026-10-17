@@ -17,6 +17,10 @@ SFX = {
     "menu_confirm":  ("pulse1", 3, 1, 0, [(2, 12, 0, "C6"), (2, 12, 0, "E6"), (2, 12, 0, "G6"), (6, 12, 2, "C7")]),
     "menu_back":     ("pulse1", 3, 2, 0, [(2, 10, 0, "G5"), (5, 10, 2, "C5")]),
     "option_change": ("pulse2", 1, 1, 0, [(2, 9, 1, "A5"), (2, 6, 1, "E6")]),
+    "pass_digit":    ("pulse2", 1, 2, 0, [(2, 9, 1, "C6")]),                  # a pass key digit changed
+    "pass_next":     ("pulse2", 1, 2, 0, [(2, 9, 1, "G5"), (2, 6, 1, "C6")]),  # on to the next
+    "type":          ("pulse2", 1, 2, 0, [(1, 7, 1, "A5")]),                  # a letter typed (Punch-Out!!'s Doc)
+    "type_alt":      ("pulse2", 1, 2, 0, [(1, 7, 1, "E6")]),                  # (and the rival)
     "press_start":   ("pulse1", 4, 2, 0, [(2, 13, 0, "C5"), (2, 13, 0, "E5"), (2, 13, 0, "G5"), (2, 13, 0, "C6"),
                                           (2, 13, 0, "E6"), (2, 13, 0, "G6"), (10, 13, 3, "C7")]),
     # the puzzle
@@ -94,6 +98,8 @@ def symbol(name):
 # Which kit uses which effects; a ROM only carries the groups it needs.
 GROUPS = {
     "menu": ["menu_move", "menu_confirm", "menu_back", "option_change", "press_start"],
+    "pass": ["pass_digit", "pass_next"],
+    "typed": ["type", "type_alt"],
     "puzzle": ["move", "move_held", "rotate", "land", "clear", "virus", "win", "lose"],
     "fight": ["punch", "hit", "block", "dodge", "tell", "rival_swing", "player_hit", "star_get", "star_wind",
               "star_punch", "knockdown", "count", "bell", "ko", "taunt", "pop", "click", "win", "lose"],

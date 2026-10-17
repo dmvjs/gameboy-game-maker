@@ -124,6 +124,11 @@ wSwTarget: dw
 wGbVol: ds 4
 wGbFreq: ds 6               ; pulse 1, pulse 2, wave (low, high each)
 wGbDuty: ds 2
+wFadePace: ds 2             ; per pulse: the GB's own envelope fading it (its pace, 0: none), the volume that
+wFadeVol: ds 2              ; fade is at by now, frames into its step, and frames since its volume last changed
+wFadeTick: ds 2
+wFadeGap: ds 2
+wFadeEnv: db                ; (the envelope pace a restart writes)
 wGbNoise: db
 wGbPer: ds 4                ; the pulse timers last converted
 wGbPerFreq: ds 4            ; and their GB frequencies
@@ -2509,6 +2514,130 @@ GbFreq:
     ret
 
 ; Pulse E to the GB's pulse E: a volume change or a fresh note restarts it; a pitch change just retunes.
+; Pulse E's fade, a frame on: frames since its volume changed; the GB's envelope, if fading it, a step down
+; every pace frames (pace/64 s: near enough). Keeps BC, DE, HL.
+PulseFadeTick:
+    push hl
+    ld hl, wFadeGap
+    add hl, de
+    inc [hl]
+    jr nz, .gap
+    dec [hl]
+.gap:
+    ld hl, wFadePace
+    add hl, de
+    ld a, [hl]
+    and a
+    jr z, .done
+    push bc
+    ld b, a
+    ld hl, wFadeTick
+    add hl, de
+    inc [hl]
+    ld a, [hl]
+    cp b
+    jr c, .held
+    ld [hl], 0
+    ld hl, wFadeVol
+    add hl, de
+    ld a, [hl]
+    and a
+    jr z, .held
+    dec [hl]
+.held:
+    pop bc
+.done:
+    pop hl
+    ret
+
+; Pulse E's volume changing to B alone ([HL] what the GB has): Z if the GB's own fade is already there (within a
+; step: no restart); Z and carry if it's a step from what the GB has (held: inaudible, a restart's click isn't);
+; else NZ with wFadeEnv the restart's envelope: a fade at this step's pace when it's one step down soon after the
+; last (the NES's envelopes), else flat. Keeps BC, DE, HL.
+PulseFade:
+    push hl
+    push bc
+    ld c, [hl]              ; C = the volume before
+    ld hl, wFadePace
+    add hl, de
+    ld a, [hl]
+    and a
+    jr z, .guess
+    ld hl, wFadeVol
+    add hl, de
+    ld a, b
+    sub [hl]
+    inc a
+    cp 3                    ; within a step of the fade
+    jr nc, .guess
+    ld hl, wFadeGap
+    add hl, de
+    ld [hl], 0
+    pop bc
+    pop hl
+    xor a                   ; Z: there already
+    ret
+.guess:
+    ld a, b
+    and a
+    jr z, .decide           ; (off: as it's written)
+    ld a, c
+    sub b                   ; before - now
+    cp 1
+    jr z, .down
+    cp $FF
+    jr nz, .decide          ; more than a step: a restart
+.hold:                      ; a step: held (Z, carry), the GB left as it was
+    pop bc
+    pop hl
+    xor a
+    scf
+    ret
+.down:                      ; a step down: a fade if it's soon after the last change (the NES's envelopes), else held
+    ld hl, wFadeGap
+    add hl, de
+    ld a, [hl]
+    and a
+    jr z, .hold
+    cp 8
+    jr nc, .hold
+.decide:
+    ld hl, wFadeGap
+    add hl, de
+    ld a, [hl]
+    ld [hl], 0
+    ld h, a                 ; H = frames since the last change
+    xor a
+    ld l, a
+    ld a, b
+    and a
+    jr z, .flat             ; (off: flat)
+    inc a
+    cp c
+    jr nz, .flat            ; not one step down
+    ld a, h
+    and a
+    jr z, .flat
+    cp 8
+    jr nc, .flat
+    ld l, a                 ; a fade at that pace
+.flat:
+    ld a, l
+    ld [wFadeEnv], a
+    ld hl, wFadePace
+    add hl, de
+    ld [hl], a
+    ld hl, wFadeVol
+    add hl, de
+    ld [hl], b
+    ld hl, wFadeTick
+    add hl, de
+    ld [hl], 0
+    pop bc
+    pop hl
+    or 1                    ; NZ: restart
+    ret
+
 PulseOut:
     call PulseMuted
     ld b, 0
@@ -2597,6 +2726,7 @@ PulseOut:
 .regs:
     ld d, 0
     push hl
+    call PulseFadeTick
     ld hl, wApuStart
     add hl, de
     ld a, [hl]
@@ -2604,10 +2734,26 @@ PulseOut:
     ld hl, wGbVol
     add hl, de
     and a
-    jr nz, .restart
+    jr nz, .note
     ld a, [hl]
     cp b
     jr z, .retune
+    call PulseFade          ; the volume alone: the GB's fade has it (no restart: each one clicks), it's held
+    jr nz, .restart         ; (a step: no one hears it, everyone hears the click), or a restart
+    jr c, .retune
+    ld [hl], b
+    jr .retune
+.note:                      ; a new note: as written, flat
+    xor a
+    ld [wFadeEnv], a
+    push hl
+    ld hl, wFadePace
+    add hl, de
+    ld [hl], a
+    ld hl, wFadeGap
+    add hl, de
+    ld [hl], a
+    pop hl
 .restart:
     ld [hl], b
     ld a, e
@@ -2625,10 +2771,17 @@ PulseOut:
     ld [hl], a
     ld a, b
     swap a
+    and a
+    jr z, .off
+    push hl                 ; (a fade: down a step every pace/64 s)
+    ld hl, wFadeEnv
+    or [hl]
+    pop hl
+.off:
     ldh [c], a              ; volume (0: off)
     inc c
     pop hl
-    and a
+    and $F0
     ret z
     ld a, l
     ldh [c], a

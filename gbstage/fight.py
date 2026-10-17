@@ -6,23 +6,35 @@ sprites. The numbers here are shared by the project checks, the code generator a
 """
 
 REGION_W, REGION_H = 8, 10                      # rival area, in tiles
+# With a rope row (Punch-Out!!'s ring: the fighters stand in front of the ropes and crowd), his rows above his
+# band's top are sprites over them: his top HEAD_ROWS of tiles (HEAD_ROWS_TALL for the poses the NES walks him
+# in and steps him back with: up over the crowd), kept in tiles sprites can reach.
+HEAD_ROWS, HEAD_ROWS_TALL = 4, 7
+HEAD_TALL = {"idle", "idle2", "idle3", "taunt", "tell1", "tell2", "tell3", "tell4", "tell5",   # (and knocked down:
+             "kd_stagger", "kd_fall", "kd_down", "kd_kneel", "kd2_stagger", "kd2_fall", "kd2_down", "kd2_kneel"}   # back up into the crowd)
+
+
+def head_rows(pose):
+    return HEAD_ROWS_TALL if pose in HEAD_TALL else HEAD_ROWS
 RIVAL_POSES = ["idle", "idle2", "guard", "hit_l", "hit_r", "hit_body", "dazed",
                "jab_tell", "jab_mid", "jab", "hook_tell", "hook_mid", "hook", "slip", "idle3", "hit_back",
                "kd_stagger", "kd_fall", "kd_down", "kd_kneel",
                "taunt", "arm_pop", "guard_low",
-               "tell1", "tell2", "tell3", "tell4", "tell5"]  # a fighter's own wind-up frames (Honda's gloves rolling)
+               "tell1", "tell2", "tell3", "tell4", "tell5",  # a fighter's own wind-up frames (Honda's gloves rolling)
+               "kd2_stagger", "kd2_fall", "kd2_down", "kd2_kneel"]  # his other way down (the NES drops him either way)
 # Pose sets share one area of video memory: the attack set is there normally; the knockdown set replaces it
 # while he's down, the special set while he taunts or pops an arm. Poses in no set are always there.
 POSE_SETS = {"attack": ["jab_tell", "hook_tell", "tell1", "tell2", "tell3", "tell4", "tell5",   # (tells first: shared
                                                                                               # tiles keep theirs)
                         "idle2", "idle3", "guard", "guard_low", "hit_back", "jab_mid", "jab", "hook_mid", "hook", "slip"],
-             "knockdown": ["kd_stagger", "kd_fall", "kd_down", "kd_kneel"],
+             "knockdown": ["kd_stagger", "kd_fall", "kd_down", "kd_kneel", "kd2_stagger", "kd2_fall", "kd2_down", "kd2_kneel"],
              "special": ["taunt", "arm_pop"]}
 KD_POSES = POSE_SETS["knockdown"]
 # Older projects: newer poses borrow one they already have.
 POSE_FALLBACK = {"idle2": "idle", "idle3": "idle", "hit_back": "hit_l", "slip": "idle", "jab_mid": "jab_tell", "hook_mid": "hook_tell", "kd_stagger": "hit_body", "kd_fall": "fall",
                  "kd_down": "down", "kd_kneel": "fall", "arm_pop": "hit_body", "guard_low": "guard",
-                 "tell1": "jab_tell", "tell2": "jab_tell", "tell3": "jab_tell", "tell4": "jab_tell", "tell5": "jab_tell"}
+                 "tell1": "jab_tell", "tell2": "jab_tell", "tell3": "jab_tell", "tell4": "jab_tell", "tell5": "jab_tell",
+                 "kd2_stagger": "kd_stagger", "kd2_fall": "kd_fall", "kd2_down": "kd_down", "kd2_kneel": "kd_kneel"}
 PLAYER_POSES = ["idle", "jab", "jab_high", "dodge", "block", "hit", "star", "down", "win"]
 PLAYER_W, PLAYER_H = 24, 48                     # player pose size in pixels (3x6 sprites, empty ones skipped)
 PLAYER_X = 80 - PLAYER_W // 2 - 8               # a little left of center, so the rival shows past him
@@ -37,6 +49,8 @@ BUBBLE_ENDS = [["..222222", ".2222222", "22222222", "22222222", "22222222", "222
                ["222222..", "2222222.", "22222222", "22222233", "22222223", "22222222", "2222223.", "333333.."]]
 SPARK_TILE = ["3.......", ".3...3..", "..3.32..", "...322..", "..3222..", ".32222..", "...22222", "....2222"]
 DROP_TILE = ["...3....", "..323...", ".32223..", ".32223..", "..333...", "........", "........", "........"]
+NES_ANCHOR = (35, 77)       # where the NES's place ($B0, $B1: its home) sits in a pose's 64x80 frame (the art's)
+TWINKLE_TILE = ["...2....", "...2....", ".2.2.2..", "..232...", "2223222.", "..232...", ".2.2.2..", "...2...."]   # a star just earned (by the HUD's)
 STAR_TILE = ["...1....", "...1....", ".11311..", "1133311.", ".11311..", "...1....", "...1....", "........"]             # sprite text: the referee's count, "KO!", "FIGHT!"
 REF_POSES = ["stand", "count", "wave"]
 REF_W, REF_H = 24, 32

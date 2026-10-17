@@ -238,3 +238,50 @@ def vs_screen(opponent):
     cache.parent.mkdir(exist_ok=True)
     pickle.dump(img, open(cache, "wb"))
     return img
+
+
+MONTAGE_CACHE = HERE / "out" / "nes-montage.pkl"
+
+
+def montage():
+    """The training scene after the Minor Circuit title (Mac running, Doc on his bike past New York): the
+    background's two screens side by side (RGB rows, 512 wide), and the sprites each time they change (RGB rows
+    with None where none). Played to: Piston Honda beaten, his title screen gone by."""
+    if MONTAGE_CACHE.exists():
+        return pickle.load(open(MONTAGE_CACHE, "rb"))
+    b = fight(2)
+    n, ended = 0, None
+    while n < 60000:
+        st = b.ram[0x00]
+        if ended is None:
+            btn = [UP | A, 0, UP | BTN_B, 0][(n // 5) % 4]
+            if b.ram[0x05] == 2: btn = A if n & 2 else 0
+            if st != 1 and n % 60 < 3: btn = START
+            if b.ram[0x05] == 0:
+                for a in (0x398, 0x399):
+                    if b.ram[a] > 2: b.ram[a] = 2
+            if st in (0xFC, 0xFE): ended = n
+        else:
+            k = n - ended
+            btn = START if k % 240 < 3 and 500 < k < 800 else 0
+            if k == 1300: break
+        b.frame(btn); n += 1
+    sx, ct = b.scroll_x, b.ctrl
+    pano = [[None] * 512 for _ in range(240)]
+    for half in (0, 1):
+        b.scroll_x, b.ctrl = 0, (ct & ~1) | half
+        img = b.render(sprites=False)
+        for y in range(240):
+            pano[y][half * 256:half * 256 + 256] = img[y]
+    b.scroll_x, b.ctrl = sx, ct
+    frames, seen = [], set()
+    for _ in range(96):
+        b.frame(0)
+        key = tuple(b.oam[k * 4 + 1] for k in range(64))
+        if key not in seen:
+            seen.add(key)
+            frames.append(sprites_only(b))
+    got = (pano, frames)
+    MONTAGE_CACHE.parent.mkdir(exist_ok=True)
+    pickle.dump(got, open(MONTAGE_CACHE, "wb"))
+    return got

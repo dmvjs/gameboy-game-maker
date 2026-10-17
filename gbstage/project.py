@@ -19,7 +19,7 @@ from pathlib import Path
 
 W, H, CELL = 160, 144, 8
 CW, CH = W // CELL, H // CELL
-MAX_BG_PALETTES = 48                 # in a project; each scene uses 8 at most (the hardware holds 8)
+MAX_BG_PALETTES = 128                # in a project; each scene uses 8 at most (the hardware holds 8)
 SCENE_BG_PALETTES = 8
 MAX_OBJ_PALETTES = 8
 MAX_TILES = 256
@@ -139,8 +139,8 @@ def validate(data):
                 errors.append(f"{kind} {n + 1} needs exactly 4 colors with channels 0-31.")
 
     scenes_in = data.get("scenes") or []
-    if not 1 <= len(scenes_in) <= 32:
-        errors.append("A project needs between 1 and 32 scenes.")
+    if not 1 <= len(scenes_in) <= 120:            # (scene tables are indexed by its number doubled: under 128)
+        errors.append("A project needs between 1 and 120 scenes.")
     scene_count = len(scenes_in)
     scenes = []
     for i, s in enumerate(scenes_in):
@@ -155,6 +155,12 @@ def validate(data):
         puzzle = _puzzle((s or {}).get("puzzle"), where, i, scene_count, len(bg), cell_pal, errors)
         fight = _fight((s or {}).get("fight"), where, i, scene_count, len(bg), len(obj), errors)
         pass_key = _pass_key((s or {}).get("passKey"), where, i, scene_count, errors)
+        cutscene = _cutscene((s or {}).get("cutscene"), where, len(bg), len(obj), errors)
+        typed = _typed((s or {}).get("typed"), where, errors)
+        if typed and not press:
+            errors.append(f"{where}: typed text is for a press-start screen (Start goes on once it's written)."); typed = None
+        if cutscene and not press:
+            errors.append(f"{where}: a cutscene is a press-start screen (Start goes on, once its box is written)."); cutscene = None
         if sum(bool(x) for x in (menu, press, options, puzzle, fight, pass_key)) > 1:
             errors.append(f"{where}: a scene can be a menu, a press-start screen, an options screen, a puzzle grid, "
                           "a fight or a pass key, only one.")
@@ -185,7 +191,8 @@ def validate(data):
             errors.append(f"{where}: nesDmc is an NES sample number, 0-7."); dmc = 0
         scenes.append({"name": name, "pixels": pixels, "cell_pal": cell_pal, "menu": menu, "press": press, "nes_dmc": dmc,
                        "options": options, "puzzle": puzzle, "fight": fight, "back": back, "texts": texts,
-                       "slide": slide, **({"pass_key": pass_key} if pass_key else {})})
+                       "slide": slide, **({"pass_key": pass_key} if pass_key else {}),
+                       **({"cutscene": cutscene} if cutscene else {}), **({"typed": typed} if typed else {})})
 
     start = data.get("start", 0)
     if not (isinstance(start, int) and 0 <= start < max(1, scene_count)):
@@ -301,13 +308,29 @@ def _menu(menu, where, index, scene_count, errors):
         if not (isinstance(target, int) and 0 <= target < scene_count and target != index):
             errors.append(f"{where}: menu item {n + 1} goes to a scene that doesn't exist."); ok = False
         out.append({"label": label, "target": target})
+    pk = menu.get("passKey")                # Punch-Out!!'s: the key shown under its item while it's chosen
+    if pk is not None and ok:
+        item, label = pk.get("item"), str(pk.get("label", "PASS KEY")).upper()
+        ly, ky, pslot = pk.get("labelY"), pk.get("y"), pk.get("textSlot", slot)
+        codes = pk.get("codes") or []
+        if not (isinstance(item, int) and 0 <= item < len(out)):
+            errors.append(f"{where}: the pass key's item doesn't exist."); ok = False
+        elif not (isinstance(ly, int) and isinstance(ky, int) and 0 <= ly < CH and 0 <= ky < CH and ly != ky
+                  and len(label) <= CW and set(label) <= set(FONT)):
+            errors.append(f"{where}: the pass key's rows must be on screen (its label in the font, {CW} at most)."); ok = False
+        elif not all(isinstance(c, dict) and re.fullmatch(r"[0-9]{10}", str(c.get("key", "")))
+                     and isinstance(c.get("target"), int) and 0 <= c["target"] < scene_count for c in codes):
+            errors.append(f"{where}: each pass key code is ten digits and a scene."); ok = False
+        else:
+            pk = {"item": item, "label": label, "label_y": ly, "y": ky, "text_slot": pslot,
+                  "codes": [{"key": [int(d) for d in c["key"]], "target": c["target"]} for c in codes]}
     if not ok:
         return None
     blinks = menu.get("blinks", 3)
     return {"x": x, "y": y, "spacing": spacing, "text_slot": slot, "items": out,
             "cursor_bob": menu.get("cursorAnimation", "bob") == "bob",
             "blinks": blinks if isinstance(blinks, int) and 0 <= blinks <= 8 else 3,
-            "select_moves": menu.get("selectMoves") is True}
+            "select_moves": menu.get("selectMoves") is True, **({"pass_key": pk} if pk else {})}
 
 
 MAX_CONFIRM_SPRITES = 30                          # OAM entries 2-31 (the cursor and slider marker take 0 and 1)
@@ -377,6 +400,53 @@ def _pass_key(pk, where, index, scene_count, errors):
     return {"x": x, "y": y, "text_slot": slot, "target": target, "cells": [y * CW + x + k for k in PASS_OFFSETS]}
 
 
+def _cutscene(cs, where, n_bg, n_obj, errors):
+    """A press-start screen that plays a scene (Punch-Out!!'s training run): a picture 256 wide (the whole map:
+    it scrolls round), scrolling at speed pixels every 4 frames (evenly: 3 is 1, 1, 1, 0) until its box comes up,
+    stopping where endX puts it then (or in bands, each from its line down: its speed in 256ths of a pixel a
+    frame and its endX, Punch-Out!!'s parallax); sprite actors each cycling frames (on after the stop); the box comes up
+    after some frames and writes its lines a letter at a time (Start goes on once it's done); NES music."""
+    if cs is None:
+        return None
+    try:
+        px, cells = cs["pixels"], cs["cells"]
+        assert isinstance(px, str) and len(px) == 256 * H and set(px) <= set("0123")
+        assert isinstance(cells, list) and len(cells) == 32 * CH and all(isinstance(c, int) and 0 <= c < n_bg for c in cells)
+        actors = []
+        for a in cs.get("actors") or []:
+            w, h = a["w"], a["h"]
+            assert w % 8 == 0 and h % 8 == 0 and 0 < w <= 32 and 0 < h <= 32
+            frames = []
+            for f in a["frames"]:
+                assert len(f["pixels"]) == w * h and set(f["pixels"]) <= set("0123")
+                assert len(f["cells"]) == (w // 8) * (h // 8) and all(0 <= c < n_obj for c in f["cells"])
+                frames.append({"pixels": [int(v) for v in f["pixels"]], "cells": list(f["cells"])})
+            assert 1 <= len(frames) <= 16
+            actors.append({"x": int(a["x"]), "y": int(a["y"]), "w": w, "h": h, "every": int(a.get("every", 6)), "frames": frames})
+        box = cs.get("box")
+        if box:
+            lines = [str(l).upper() for l in box["lines"]]
+            assert all(set(l) <= set(FONT) for l in lines) and 1 <= len(lines) <= 4
+            width = max(len(l) for l in lines) + 2
+            assert 0 <= box["x"] and box["x"] + width <= CW and 0 <= box["y"] and box["y"] + len(lines) + 2 <= CH
+            assert isinstance(box["palette"], int) and 0 <= box["palette"] < n_bg
+            box = {"x": box["x"], "y": box["y"], "lines": lines, "width": width, "palette": box["palette"],
+                   "text_slot": int(box.get("textSlot", 1)), "bg_slot": int(box.get("bgSlot", 3)),
+                   "after": int(box.get("after", 300)), "every": int(box.get("every", 2))}
+        speed = int(cs.get("speed", 3))
+        music = int(cs.get("music", 0))
+        end_x = int(cs.get("endX", 0))
+        assert 0 <= speed <= 8 and 0 <= music <= 0x3F and 0 <= end_x < 256
+        bands = [{"y": int(b["y"]), "speed": int(b["speed"]), "end_x": int(b.get("endX", 0))} for b in cs.get("bands") or []]
+        assert len(bands) <= 12 and all(0 <= b["y"] < H and 0 <= b["speed"] <= 1024 and 0 <= b["end_x"] < 256 for b in bands)
+        assert all(a["y"] < b["y"] for a, b in zip(bands, bands[1:]))
+    except (KeyError, TypeError, ValueError, AssertionError):
+        errors.append(f"{where}: the cutscene is damaged (a 256x{H} picture, its cells' palettes, actors, its box).")
+        return None
+    return {"pixels": [int(v) for v in px], "cells": cells, "actors": actors, "box": box, "speed": speed, "music": music, "end_x": end_x,
+            "bands": bands or [{"y": 0, "speed": speed * 64, "end_x": end_x}]}
+
+
 def _press_start(press, pressed, where, index, scene_count, errors):
     if press is None:
         return None
@@ -404,15 +474,17 @@ def _press_start(press, pressed, where, index, scene_count, errors):
     if prompt is not None:
         label = str(prompt.get("label") or "").upper() if isinstance(prompt, dict) else ""
         px, py, slot = (prompt.get(k) for k in ("x", "y", "textSlot")) if isinstance(prompt, dict) else (None,) * 3
-        bad = sorted({c for c in label if c not in FONT})
-        if not label or bad:
+        rows = label.split("\n")                    # (a line each: Punch-Out!!'s PUSH / START!)
+        bad = sorted({c for c in label if c not in FONT and c != "\n"})
+        if not all(rows) or bad:
             errors.append(f"{where}: the prompt needs a label using the font's characters."); ok = False
-        elif not (isinstance(px, int) and isinstance(py, int) and 0 <= px and px + len(label) <= CW and 0 <= py < CH):
+        elif not (isinstance(px, int) and isinstance(py, int) and 0 <= px and px + max(map(len, rows)) <= CW
+                  and 0 <= py and py + len(rows) <= CH):
             errors.append(f"{where}: the prompt runs off screen."); ok = False
         elif not (isinstance(slot, int) and 0 <= slot <= 3):
             errors.append(f"{where}: the prompt text slot must be 1-4."); ok = False
-        elif area is not None and ok and (area["y"] <= py < area["y"] + area["h"]) and (
-                px < area["x"] + area["w"] and area["x"] < px + len(label)):
+        elif area is not None and ok and (area["y"] <= py + len(rows) - 1 and py < area["y"] + area["h"]) and (
+                px < area["x"] + area["w"] and area["x"] < px + max(map(len, rows))):
             errors.append(f"{where}: the prompt and the flash area overlap; move one of them."); ok = False
         if ok:
             prompt = {"label": label, "x": px, "y": py, "text_slot": slot, "blink": bool(prompt.get("blink", True))}
@@ -425,11 +497,75 @@ def _press_start(press, pressed, where, index, scene_count, errors):
     quiet = press.get("quiet", False)       # no sound on the press (the NES game's own music stopped, as its screens do)
     if not isinstance(quiet, bool):
         errors.append(f"{where}: the press's quiet is true or false."); ok = False
+    card = _round_card(press.get("card"), where, errors)
+    if press.get("card") is not None and card is None:
+        ok = False
     if not ok:
         return None
     return {"target": target, "flashes": flashes, "prompt": prompt, "nes_dmc": dmc, "hold": hold, "quiet": quiet,
+            **({"card": card} if card else {}),
             "area": dict(area) if area else None,
             "pressed": [ord(c) - 48 for c in pressed] if area else None}
+
+
+def _round_card(card, where, errors):
+    """Punch-Out!!'s round card, under a press-start screen: after Start the screen scrolls up (4 pixels a frame)
+    and it comes up from below, then holds before the next scene. Its variants (pick "first", or "round": the
+    corner before round 2 the first) each a label (its top row, centred) and a 12x16 dot matrix ("#" lit) under it
+    past a row's gap; the grid's palette (slot 0 the lit dot, 2 the unlit cell, 3 black), the label's palette and
+    slot; hold frames."""
+    if card is None:
+        return None
+    bad = lambda msg: errors.append(f"{where}: the round card: {msg}")
+    if not isinstance(card, dict):
+        bad("its settings are damaged."); return None
+    variants, pick = card.get("variants"), card.get("pick", "first")
+    if pick not in ("first", "round") or not (isinstance(variants, list) and 1 <= len(variants) <= 4):
+        bad('it needs 1-4 variants, picked "first" or by "round".'); return None
+    out = []
+    for v in variants:
+        label = str((v or {}).get("label") or "").upper()
+        dots = (v or {}).get("dots")
+        if not label or len(label) > CW or any(c not in FONT for c in label):
+            bad("a label is 1-20 of the font's characters."); return None
+        if not (isinstance(dots, list) and len(dots) == 16 and all(isinstance(r, str) and len(r) == 12 for r in dots)):
+            bad("a digit is 16 rows of 12 dots."); return None
+        out.append({"label": label, "dots": [[ch == "#" for ch in r] for r in dots]})
+    pal, tpal, slot, hold = card.get("palette"), card.get("textPalette"), card.get("textSlot", 1), card.get("hold", 100)
+    if not all(isinstance(v, int) for v in (pal, tpal, slot, hold)) or slot not in (0, 1, 2, 3) or not 1 <= hold <= 255:
+        bad("its palettes, text slot (1-4) and hold (1-255 frames) are needed."); return None
+    return {"pick": pick, "variants": out, "palette": pal, "text_palette": tpal, "text_slot": slot, "hold": hold}
+
+
+CARD_UNLIT = tuple(3 if x == 0 or y == 0 else 2 for y in range(8) for x in range(8))     # a dark cell, its grid
+CARD_LIT = tuple(3 if x == 0 or y == 0 or (x in (1, 7) and y in (1, 7)) else 0          # a lit dot, rounded
+                 for y in range(8) for x in range(8))
+
+
+def _compose_card(scene, tile_of):
+    """The round card's rows per variant: 18 rows of (tile, palette) for the screen's 20 cells: the label on the
+    top row, a row's gap, the 12x16 grid centred under it."""
+    card = scene["press"]["card"]
+    blank = tile_of(tuple([3] * 64))
+    unlit, lit = tile_of(CARD_UNLIT), tile_of(CARD_LIT)
+    glyph = {}
+    out = []
+    for v in card["variants"]:
+        rows = [[(blank, card["text_palette"])] * CW for _ in range(CH)]
+        x0 = (CW - len(v["label"])) // 2
+        for k, ch in enumerate(v["label"]):
+            if ch not in glyph:
+                key = [3] * 64
+                for x, y in text_ink(ch, 0, 0):
+                    key[y * CELL + x] = card["text_slot"]
+                glyph[ch] = tile_of(tuple(key))
+            rows[0][x0 + k] = (glyph[ch], card["text_palette"])
+        gx = (CW - 12) // 2
+        for r, line in enumerate(v["dots"]):
+            for c, on in enumerate(line):
+                rows[2 + r][gx + c] = (lit if on else unlit, card["palette"])
+        out.append(rows)
+    scene["card_rows"] = out
 
 
 def _puzzle(pz, where, index, scene_count, n_palettes, cell_pal, errors):
@@ -553,6 +689,13 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
             errors.append(f'{where}: the player\'s "{name}" pose is missing or damaged.')
             continue
         pposes[name] = [ord(c) - 48 for c in px]
+    pcgb = {}                                   # (optional) Color's own, unshared: in its second tile bank
+    for name in kit.PLAYER_POSES if pl.get("cgbPoses") else ():
+        px = (pl.get("cgbPoses") or {}).get(name)
+        if not (isinstance(px, str) and len(px) == kit.PLAYER_W * kit.PLAYER_H and set(px) <= set("0123")):
+            errors.append(f'{where}: the player\'s Game Boy Color "{name}" pose is missing or damaged.')
+            continue
+        pcgb[name] = [ord(c) - 48 for c in px]
     ref = ft.get("referee") or {}
     rposes_ref = {}
     shirt = ref.get("shirtPalette")             # (optional) a second palette: pixels 4 are drawn in it
@@ -583,6 +726,17 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
         for key, spot in hud.items():
             if any(spot["y"] * CW + spot["x"] + k in rcells for k in range(widths[key])):
                 errors.append(f"{where}: the HUD's {key} overlaps the rival's area.")
+    rope = ft.get("ropeRow")                    # (optional) Punch-Out!!'s bottom rope, behind his head: the row his
+    if rope is not None:                        # area starts at shows it; his rows over it are sprites
+        px, cells = (rope.get("pixels"), rope.get("cells")) if isinstance(rope, dict) else (None, None)
+        if not (isinstance(px, str) and len(px) == W * CELL and set(px) <= set("0123")
+                and isinstance(cells, list) and len(cells) == CW and all(isinstance(c, int) and 0 <= c < n_bg for c in cells)):
+            errors.append(f"{where}: the rope row is a 160x8 strip and its 20 cells' palettes."); rope = None
+        else:
+            rope = {"pixels": [ord(c) - 48 for c in px], "cells": list(cells)}
+    side = ft.get("sideRope")                   # (optional, Color) the ring's side ropes' ends below the crowd's
+    if side is not None and not (isinstance(side, str) and len(side) == 8 * 16 and set(side) <= set("0123")):   # rows:
+        errors.append(f"{where}: the side rope is an 8x16 sprite."); side = None              # 8x16, left (mirrored right)
     crowd = ft.get("crowdRow", 0)
     if not (isinstance(crowd, int) and 0 <= crowd < CH):
         errors.append(f"{where}: the crowd row (where cameras flash) must be on screen.")
@@ -631,9 +785,10 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
             **({"cgb_poses": cgb_poses} if cgb_poses else {}),
             "player": {"palette": pl.get("palette"), "tired_palette": pl.get("tiredPalette", pl.get("palette")),
                        "down_palette": pl.get("downPalette", pl.get("palette")),
-                       "poses": pposes}, "hud": hud,
+                       "poses": pposes, **({"cgb_poses": pcgb} if pcgb else {})}, "hud": hud,
             "referee": {"palette": ref.get("palette"), "shirt_palette": shirt, "poses": rposes_ref},
             "text_slot": slots[0], "bar_slot": slots[1], "crowd_row": crowd, "opening": opening, "loop": loop, "timed": timed,
+            **({"rope_row": rope} if rope else {}), **({"side_rope": [ord(c) - 48 for c in side]} if side else {}),
             "win": ft["win"], "lose": ft["lose"], "corner": corner, "win_tko": win_tko,
             "effects": {k: fx.get(k, True) for k in kit.EFFECTS}, "nes": nes}
 
@@ -889,6 +1044,92 @@ def _texts(texts, where, errors):
     return out
 
 
+TYPED_SOUNDS = (None, "type", "type_alt")   # (Punch-Out!!'s: Doc's letters, the rival's)
+
+
+def _typed(typed, where, errors):
+    """Text that writes itself a letter at a time, as Punch-Out!!'s corner: groups of variants (pick "round": a
+    group per round, the corner after round 1 the first; "random": the one group), one of a group's at random.
+    A variant is steps: its box (x, y, w, h) cleared if asked, its lines typed in from its corner (leading spaces
+    skipped), each letter with its sound, then a pause in frames. The prompt shows once it's all written."""
+    if typed is None:
+        return None
+    bad = lambda msg: errors.append(f"{where}: typed text: {msg}")
+    if not isinstance(typed, dict):
+        bad("the settings are damaged."); return None
+    every, pick, groups = typed.get("every", 4), typed.get("pick", "random"), typed.get("groups")
+    if not (isinstance(every, int) and 1 <= every <= 30):
+        bad("every is 1-30 frames a letter."); return None
+    if pick not in ("random", "round"):
+        bad('pick is "random" or "round".'); return None
+    if not (isinstance(groups, list) and 1 <= len(groups) <= 8 and all(isinstance(g, list) and 1 <= len(g) <= 16 for g in groups)):
+        bad("it needs 1-8 groups of 1-16 variants."); return None
+    out = []
+    for group in groups:
+        variants = []
+        for variant in group:
+            if not (isinstance(variant, list) and 1 <= len(variant) <= 8):
+                bad("a variant is 1-8 steps."); return None
+            steps = []
+            for st in variant:
+                st = st if isinstance(st, dict) else {}
+                x, y, w, h = (st.get(k) for k in ("x", "y", "w", "h"))
+                lines = st.get("lines") or []
+                if not all(isinstance(v, int) for v in (x, y, w, h)) or not (0 <= x and 0 <= y and w >= 1 and h >= 1
+                                                                            and x + w <= CW and y + h <= CH):
+                    bad("a step's box is off screen."); return None
+                lines = [str(l).upper() for l in lines]
+                if len(lines) > h or any(len(l) > w for l in lines):
+                    bad(f"{lines} doesn't fit its {w}x{h} box."); return None
+                if any(c not in FONT for l in lines for c in l):
+                    bad(f"{lines} uses characters the font doesn't have."); return None
+                slot, sound, pause = st.get("textSlot", 0), st.get("sound"), st.get("pause", 0)
+                if slot not in (0, 1, 2, 3) or sound not in TYPED_SOUNDS or not (isinstance(pause, int) and 0 <= pause <= 255):
+                    bad("a step's textSlot is 1-4, its sound type or type_alt, its pause 0-255 frames."); return None
+                steps.append({"x": x, "y": y, "w": w, "h": h, "lines": lines, "text_slot": slot, "sound": sound,
+                              "pause": pause, "clear": bool(st.get("clear", False))})
+            variants.append(steps)
+        out.append(variants)
+    return {"every": every, "pick": pick, "groups": out}
+
+
+def _compose_typed(scene, composed, tile_of):
+    """Typed text's scripts: per group, per variant, its ops: ("clear", [(cell, tile)]) a row back to the scene's,
+    ("sound", name), ("letter", cell, tile), ("space",), ("pause", frames). The prompt starts hidden."""
+    ty = scene["typed"]
+    scripts = []
+    for group in ty["groups"]:
+        per = []
+        for variant in group:
+            ops = []
+            for st in variant:
+                if st["clear"]:
+                    for r in range(st["h"]):
+                        cells = [(st["y"] + r) * CW + st["x"] + k for k in range(st["w"])]
+                        ops.append(("clear", [(c, scene["cell_tiles"][c]) for c in cells]))
+                ops.append(("sound", st["sound"]))
+                for n, line in enumerate(st["lines"]):
+                    lead = len(line) - len(line.lstrip(" "))
+                    for k, ch in enumerate(line):
+                        if k < lead:
+                            continue
+                        if ch == " ":
+                            ops.append(("space",))
+                            continue
+                        c = (st["y"] + n) * CW + st["x"] + k
+                        img = list(composed)
+                        for x, y in text_ink(ch, st["x"] + k, st["y"] + n):
+                            img[y * W + x] = st["text_slot"]
+                        ops.append(("letter", c, tile_of(cell_key(img, c))))
+                if st["pause"]:
+                    ops.append(("pause", st["pause"]))
+            per.append(ops)
+        scripts.append(per)
+    scene["typed_scripts"] = scripts
+    for c, _, hidden in scene["prompt_cells"]:
+        scene["cell_tiles"][c] = hidden
+
+
 def text_ink(label, x, y):
     """Pixel positions covered by a label drawn with the built-in font at tile (x, y)."""
     ink = []
@@ -922,11 +1163,72 @@ def cell_key(pixels, c):
     return tuple(pixels[(y0 + y) * W + x0 + x] for y in range(CELL) for x in range(CELL))
 
 
+def _compose_cutscene(scene):
+    """A cutscene's tiles: its picture's (32 cells across), its box (each cell blank as the sky behind it, its
+    background, its letters), its actors' sprite tiles (each frame's, shared) and per frame their sprites."""
+    cs = scene["cutscene"]
+    tiles, index = [], {}
+    def tile_of(key):
+        if key not in index:
+            index[key] = len(tiles)
+            tiles.append(key)
+        return index[key]
+    px = cs["pixels"]
+    cell_key32 = lambda c: tuple(px[((c // 32) * CELL + y) * 256 + (c % 32) * CELL + x] for y in range(CELL) for x in range(CELL))
+    scene["cell_tiles"] = [tile_of(cell_key32(c)) for c in range(32 * CH)]
+    scene["cell_pal"] = list(cs["cells"])
+    box = cs["box"]
+    scene["cut_box"], scene["cut_typed"] = [], []
+    if box:
+        blank = tile_of(tuple([0] * 64))
+        fill = tile_of(tuple([box["bg_slot"]] * 64))
+        for r in range(len(box["lines"]) + 2):
+            for k in range(box["width"]):
+                c = (box["y"] + r) * 32 + box["x"] + k
+                scene["cell_tiles"][c] = blank          # (the box's palette: its slot 0 the sky's color)
+                scene["cell_pal"][c] = box["palette"]
+                scene["cut_box"].append((c, fill))
+        for n, line in enumerate(box["lines"]):
+            for k, ch in enumerate(line):
+                if ch == " ":
+                    continue
+                img = [box["bg_slot"]] * (CELL * CELL * CW * 2)
+                key = [box["bg_slot"]] * 64
+                for x, y in text_ink(ch, 0, 0):
+                    key[y * CELL + x] = box["text_slot"]
+                c = (box["y"] + 1 + n) * 32 + box["x"] + 1 + k
+                scene["cut_typed"].append((c, tile_of(tuple(key))))
+    obj, oindex, frames = [], {}, []
+    for a in cs["actors"]:
+        per = []
+        for f in a["frames"]:
+            sprites = []
+            for ty in range(a["h"] // 8):
+                for tx in range(a["w"] // 8):
+                    key = tuple(f["pixels"][(ty * 8 + y) * a["w"] + tx * 8 + x] for y in range(8) for x in range(8))
+                    if not any(key):
+                        continue
+                    if key not in oindex:
+                        oindex[key] = len(obj)
+                        obj.append(key)
+                    sprites.append((ty * 8, tx * 8, oindex[key], f["cells"][ty * (a["w"] // 8) + tx]))
+            per.append(sprites)
+        frames.append(per)
+    scene["cut_obj"], scene["cut_frames"] = obj, frames
+    scene["tiles"] = tiles
+    scene["composed"] = list(scene["pixels"])
+    for key in ("prompt_cells", "area_cells", "option_strips", "item_cells"):
+        scene[key] = []
+    return scene
+
+
 def compose(scene):
     """Bake menu text into the scene and build its tile set (with blink variants).
 
     Adds: composed (pixels with text), tiles (unique 64-slot tuples), cell_tiles (tile per cell),
     item_cells (per item: [(cell, shown tile, hidden tile)])."""
+    if scene.get("cutscene"):
+        return _compose_cutscene(scene)
     composed = list(scene["pixels"])
     for t in scene.get("texts") or []:
         for x, y in text_ink(t["label"], t["x"], t["y"]):
@@ -971,8 +1273,9 @@ def compose(scene):
     press = scene.get("press")
     if press and press["prompt"]:
         pr = press["prompt"]
-        for x, y in text_ink(pr["label"], pr["x"], pr["y"]):
-            composed[y * W + x] = pr["text_slot"]
+        for k, row in enumerate(pr["label"].split("\n")):
+            for x, y in text_ink(row, pr["x"], pr["y"] + k):
+                composed[y * W + x] = pr["text_slot"]
     pk = scene.get("pass_key")
     if pk:
         for c in pk["cells"]:
@@ -1039,8 +1342,12 @@ def compose(scene):
         scene["option_strips"] = strips
     if press and press["prompt"]:
         pr = press["prompt"]
-        cells = [pr["y"] * CW + pr["x"] + i for i in range(len(pr["label"]))]
+        cells = [(pr["y"] + k) * CW + pr["x"] + i for k, row in enumerate(pr["label"].split("\n")) for i in range(len(row))]
         scene["prompt_cells"] = [(c, scene["cell_tiles"][c], tile_of(cell_key(scene["pixels"], c))) for c in cells]
+    if scene.get("typed"):
+        _compose_typed(scene, composed, tile_of)
+    if press and press.get("card"):
+        _compose_card(scene, tile_of)
     if press and press["area"]:
         a = press["area"]
         for row in range(a["y"], a["y"] + a["h"]):
@@ -1048,6 +1355,27 @@ def compose(scene):
             scene["area_cells"].append([(c, scene["cell_tiles"][c], tile_of(cell_key(press["pressed"], c))) for c in cells])
     if ft:
         _fight_compose_tiles(scene, tile_of)
+    if menu and menu.get("pass_key"):     # its key's tiles: the label, a dash or digit per place (3-3-4), and
+        pk = menu["pass_key"]               # what's there without it
+        def drawn(text, cx, cy):
+            img = list(scene["pixels"])
+            for x, y in text_ink(text, cx, cy):
+                img[y * W + x] = pk["text_slot"]
+            return img
+        lx = (CW - len(pk["label"])) // 2
+        label_cells = [pk["label_y"] * CW + lx + k for k in range(len(pk["label"]))]
+        kx = (CW - 12) // 2
+        places = [kx + k for k in (0, 1, 2, 4, 5, 6, 8, 9, 10, 11)]
+        row = [pk["y"] * CW + kx + k for k in range(12)]
+        shown = drawn(pk["label"], lx, pk["label_y"])
+        dashes = drawn("--- --- ----", kx, pk["y"])
+        rows = [pk["label_y"] * CW + x for x in range(CW)] + [pk["y"] * CW + x for x in range(CW)]   # (whole rows: the
+                                                                                                    # credit goes)
+        pk["show"] = [(c, tile_of(cell_key(shown if c // CW == pk["label_y"] else dashes, c))) for c in rows]
+        pk["hide"] = [(c, scene["cell_tiles"][c]) for c in rows]
+        pk["cells"] = [pk["y"] * CW + x for x in places]
+        pk["digits"] = [[tile_of(cell_key(drawn("0123456789-"[v], x, pk["y"]), pk["y"] * CW + x)) for v in range(11)]
+                        for x in places]
     scene["item_cells"] = []
     if menu:
         for n, item in enumerate(menu["items"]):
@@ -1209,6 +1537,9 @@ def _fight_compose_tiles(scene, tile_of):
             scene[key] = kit.OBJ_FIRST_TILE + len(obj) - 1
         else:
             scene[key] = 0
+    if ft.get("nes"):                                   # Punch-Out!!'s star just earned, twinkling by the HUD's
+        obj.append(tuple(int(ch) if ch != "." else 0 for row in kit.TWINKLE_TILE for ch in row))
+        scene["fight_twinkle_tile"] = kit.OBJ_FIRST_TILE + len(obj) - 1
     # the loaded areas, at the top of the sprite tiles: the referee's two, the player's rare poses' below them
     ref_n = max([len(t) for _, t in refs.values()] + [0])
     pl_n = max([len(t) for _, t in rare.values()] + [0])
@@ -1222,16 +1553,60 @@ def _fight_compose_tiles(scene, tile_of):
     scene["fight_ref_sprites"] = {pose: fix(refs[pose][0]) for pose in kit.REF_POSES}
     scene["fight_ref_tiles"] = {pose: refs[pose][1] for pose in kit.REF_POSES}
     scene["fight_rare_tiles"] = {pose: rare[pose][1] for pose in kit.PLAYER_RARE}
+    pc = ft["player"].get("cgb_poses")
+    if pc:                                      # Color: the player's own poses, unshared, all in its second bank's
+        ctiles, cindex = [], {}                 # sprite-only tiles ($8000: Color's bank 1, attribute bit 3)
+        def cgb_tile(key):
+            flipped = tuple(key[y * 8 + 7 - x] for y in range(8) for x in range(8))
+            if key in cindex:
+                return cindex[key], 0
+            if flipped in cindex:
+                return cindex[flipped], 0x20
+            cindex[key] = len(ctiles)
+            ctiles.append(key)
+            return cindex[key], 0
+        csprites = {}
+        for pose in kit.PLAYER_POSES:
+            out = []
+            for by in range(kit.PLAYER_H // 8):
+                for bx in range(kit.PLAYER_W // 8):
+                    key = tuple(pc[pose][(by * 8 + y) * kit.PLAYER_W + bx * 8 + x] for y in range(8) for x in range(8))
+                    if any(key):
+                        t, flip = cgb_tile(key)
+                        out.append((by * 8, bx * 8, t, pal | flip | 0x08))
+            csprites[pose] = out
+        side = ft.get("side_rope")              # (and the side ropes' ends: their two tiles with his)
+        if side:
+            scene["fight_side_tile"] = len(ctiles)
+            for half in (0, 1):
+                ctiles.append(tuple(side[(half * 8 + y) * 8 + x] for y in range(8) for x in range(8)))
+        if len(ctiles) > 128:
+            raise ProjectError([f'Scene "{scene["name"]}": the player\'s Game Boy Color poses need {len(ctiles)} tiles; '
+                                'the limit is 128. Share more of their tiles.'])
+        scene["fight_pl_cgb"] = {"tiles": ctiles, "sprites": csprites}
     scene["fight_slots"] = {"ref": ref_at, "ref_tiles": ref_n, "pl": pl_at, "pl_tiles": pl_n,
                             "used": kit.OBJ_FIRST_TILE + len(obj) + pl_n + 2 * ref_n}
     # a camera flash in the crowd: a white burst (slot 1) on the darkest slot
     burst = ["...#....", ".#.#.#..", "..###...", "#######.", "..###...", ".#.#.#..", "...#....", "........"]
     scene["fight_flash_tile"] = tile_of(tuple(0 if ch == "#" else 3 for row in burst for ch in row))
+    rope = ft.get("rope_row")
+    if rope:                                    # the rope row's tiles, always in video memory (its own map row)
+        scene["fight_rope_tiles"] = [tile_of(tuple(rope["pixels"][y * W + c * CELL + x] for y in range(CELL) for x in range(CELL)))
+                                     for c in range(CW)]
+
+
+def _head_keys(keys, pose, blank):
+    """A pose's tiles in its top rows (kit.head_rows: the ones that can show over the ropes, as sprites), but the
+    mat's."""
+    from . import fight as kit
+    return [k for k in keys[pose][:kit.head_rows(pose) * kit.REGION_W] if k != blank]
 
 
 def _fight_swap(scene):
     """Lay out video memory: tiles every frame may need first, then one shared area that holds one pose set at
-    a time (attack, knockdown or special). The ROM swaps sets into that area as the fight needs them."""
+    a time (attack, knockdown or special). The ROM swaps sets into that area as the fight needs them. With a rope
+    row, his top rows' tiles go where sprites can reach them too (slots 128-255): each set's at the end of its part
+    of the area, the always-there poses' just past it."""
     from . import fight as kit
     tiles, maps = scene["tiles"], scene["fight_maps"]
     in_set = {p for poses in kit.POSE_SETS.values() for p in poses}
@@ -1243,38 +1618,68 @@ def _fight_swap(scene):
             img[i] = v
         keys[pose] = [cell_key(img, c) for c, _ in cells]
         scene["fight_attrs"][pose] = [pal for _, pal in cells]
-    always = [tiles[t] for t in scene["cell_tiles"]] + [tiles[t] for t in scene["fight_lut"]] + [tiles[scene["fight_flash_tile"]]]
+    rope = scene["fight"].get("rope_row")
+    region = {(scene["fight"]["y"] + r) * CW + scene["fight"]["x"] + c for r in range(kit.REGION_H) for c in range(kit.REGION_W)}
+    blank = tiles[scene["cell_tiles"][min(region)]] if rope else None   # (his area's background: the mat)
+    scene_keys = [tiles[t] for t in scene["cell_tiles"]] + [tiles[t] for t in scene["fight_lut"]] + [tiles[scene["fight_flash_tile"]]]
+    scene_keys += [tiles[t] for t in scene.get("fight_rope_tiles", [])]
+    always = list(scene_keys)
     for pose, k in keys.items():
         if pose not in in_set:
             always += k
+    high = []                                           # the always-there poses' top rows (sprites reach them)
+    if rope:                                            # (the screen's own tiles: his area's aside, his pose's)
+        sk = {tiles[t] for c, t in enumerate(scene["cell_tiles"]) if c not in region}
+        sk |= {tiles[t] for t in scene["fight_lut"]} | {tiles[scene["fight_flash_tile"]]}
+        sk |= {tiles[t] for t in scene.get("fight_rope_tiles", [])}
+        for pose in keys:
+            if pose not in in_set:
+                high += [k for k in _head_keys(keys, pose, blank) if k not in sk and k not in high]
     base, base_index = [], {}
     for key in always:
-        if key not in base_index:
+        if key not in base_index and key not in high:
             base_index[key] = len(base)
             base.append(key)
     first = len(base)
-    sets = {}
+    sets, heads = {}, {}
     for name, poses in kit.POSE_SETS.items():
         own = []
         for pose in poses:
             for key in keys[pose]:
-                if key not in base_index and key not in own:
+                if key not in base_index and key not in high and key not in own:
                     own.append(key)
+        hk = []
+        if rope:
+            for pose in poses:
+                hk += [k for k in _head_keys(keys, pose, blank) if k in own and k not in hk]
+        rest = [k for k in own if k not in hk]
+        reach = max(0, 128 - first)                     # (positions past it are at slot 128 on)
+        own = rest[:reach] + [tuple([0] * 64)] * max(0, reach - len(rest)) + hk + rest[reach:] if hk else own
         sets[name] = own
+        heads[name] = hk
     size = max(len(own) for own in sets.values())
+    if rope and first + size + len(high) > 256:
+        raise ProjectError([f'Scene "{scene["name"]}" uses {first + size + len(high)} different 8x8 tiles (his top rows '
+                            "where sprites can reach them); the limit is 256. Share more of his tiles."])
+    high_index = {key: first + size + n for n, key in enumerate(high)}
     for name, poses in kit.POSE_SETS.items():
-        slot = {key: first + n for n, key in enumerate(sets[name])}
+        slot = {}
+        for n, key in enumerate(sets[name]):
+            slot.setdefault(key, first + n)
         for pose in poses:
-            maps[pose] = [base_index.get(key, slot.get(key)) for key in keys[pose]]
+            maps[pose] = [base_index.get(key, high_index.get(key, slot.get(key))) for key in keys[pose]]
     for pose in maps:
         if pose not in in_set:
-            maps[pose] = [base_index[key] for key in keys[pose]]
+            maps[pose] = [base_index.get(key, high_index.get(key)) for key in keys[pose]]
     empty = tuple([0] * 64)
     padded = {name: own + [empty] * (size - len(own)) for name, own in sets.items()}
-    scene["tiles"] = base + padded["attack"]              # the attack set is loaded with the scene
-    scene["cell_tiles"] = [base_index[tiles[t]] for t in scene["cell_tiles"]]
+    scene["tiles"] = base + padded["attack"] + high       # the attack set is loaded with the scene
+    scene["cell_tiles"] = [base_index.get(tiles[t], high_index.get(tiles[t])) for t in scene["cell_tiles"]]
     scene["fight_lut"] = [base_index[tiles[t]] for t in scene["fight_lut"]]
     scene["fight_flash_tile"] = base_index[tiles[scene["fight_flash_tile"]]]
+    if rope:
+        scene["fight_rope_tiles"] = [base_index[tiles[t]] for t in scene["fight_rope_tiles"]]
+        scene["fight_blank"] = base_index[blank]
     scene["fight_swap"] = {"first": first, "count": size, "sets": [padded[n] for n in ("attack", "knockdown", "special")],
                            "sizes": {n: len(own) for n, own in sets.items()}}
 
@@ -1309,24 +1714,89 @@ def _fight_cgb(scene):
                     own.append(k)
         sets[name] = own
     size = max(len(own) for own in sets.values())
-    room0 = 256 - sw["first"]
-    perm0, perm1 = perm[:room0], perm[room0:]
-    if size + len(perm1) > 256:
+    ft = scene["fight"]                 # bank 0's slots the screen itself needs: the cells outside his area (and
+    region = {(ft["y"] + r) * CW + ft["x"] + c for r in range(kit.REGION_H) for c in range(kit.REGION_W)}
+    keep = {0} | {t for c, t in enumerate(scene["cell_tiles"]) if c not in region}   # tile 0, the rows' padding),
+    keep |= set(scene["fight_lut"]) | {scene["fight_flash_tile"]} | set(scene.get("fight_rope_tiles", []))   # the
+    free0 = [t for t in range(256) if t not in keep]  # HUD's, the camera flash's, the rope row's; the rest his: the
+    rope = ft.get("rope_row")                          # original's poses go (Color draws its own)
+    blank = cell_key(scene["composed"], min(region)) if rope else None
+    head = set()                        # (with a rope row: his top rows' tiles, where sprites reach: slots 128-255)
+    if rope:
+        for pose in kit.RIVAL_POSES:
+            head |= set(_head_keys(keys, pose, blank))
+    if rope:                            # his always-there ones: their top rows' in bank 0's upper half, then the rest
+        hp = [k for k in perm if k in head]
+        lp = [k for k in perm if k not in head]
+        up0, low0 = [t for t in free0 if t >= 128], [t for t in free0 if t < 128]
+        n1 = max(0, len(hp) - len(up0)) + max(0, len(lp) - len(low0) - max(0, len(up0) - len(hp)))
+        perm0, slots0 = [], []          # (bank 1's top takes what bank 0 can't: always reachable)
+        for k, t in zip(hp, up0):
+            perm0.append(k); slots0.append(t)
+        rest0 = low0 + up0[len(hp):]
+        for k, t in zip(lp, rest0):
+            perm0.append(k); slots0.append(t)
+        perm1 = [k for k in perm if k not in perm0]
+        used0 = set(slots0)
+        left0 = [t for t in free0 if t not in used0]
+    else:
+        perm0, perm1 = perm[:len(free0)], perm[len(free0):]
+        slots0 = free0[:len(perm0)]
+        left0 = free0[len(perm0):]      # the swap area: bank 1 (past any always-there overflow at its end), then
+    blocks = []                         # bank 0's two longest runs of slots still free (split where 128 moves)
+    for t in left0:
+        if blocks and blocks[-1][-1] == t - 1 and t != 128:
+            blocks[-1].append(t)
+        else:
+            blocks.append([t])
+    blocks = sorted(blocks, key=len, reverse=True)[:2]
+    set_slots = [(t, 1) for t in range(256 - len(perm1))] + [(t, 0) for blk in blocks for t in blk]
+    if rope:                            # (the slots sprites reach first: a set's top rows' tiles at its start, so a
+        set_slots = ([st for st in set_slots if st[0] >= 128 and st[1] == 1]      # small set copies short)
+                     + [st for st in set_slots if st[0] < 128 and st[1] == 1] + [st for st in set_slots if st[1] == 0])
+    if size > len(set_slots):
         raise ProjectError([f'Scene "{scene["name"]}": the rival\'s Game Boy Color poses need {len(perm) + size} tiles '
-                            f"of their own; there's room for {room0 + 256}. Share more of their tiles."])
-    slot = {k: (sw["first"] + n, 0) for n, k in enumerate(perm0)}
-    slot.update({k: (size + n, 1) for n, k in enumerate(perm1)})
+                            f"of their own; there's room for {len(perm) + len(set_slots)}. Share more of their tiles."])
+    if rope:                            # each set: its top rows' tiles in the area's slots sprites reach, the rest
+        for name in sets:               # in the others (its copy as short as that allows)
+            own = sets[name]
+            hk, rk = [k for k in own if k in head], [k for k in own if k not in head]
+            reach = [n for n, (t, _) in enumerate(set_slots) if t >= 128]
+            other = [n for n, (t, _) in enumerate(set_slots) if t < 128]
+            if len(hk) > len(reach):
+                raise ProjectError([f'Scene "{scene["name"]}": the rival\'s Game Boy Color top rows need {len(hk)} tiles '
+                                    f"sprites can reach; there's room for {len(reach)}. Share more of their tiles."])
+            at = dict(zip(reach, hk))
+            spare = other + reach[len(hk):]
+            spare.sort()
+            at.update(zip(spare, rk))
+            length = max(at) + 1 if at else 0
+            sets[name] = [at.get(n, tuple([0] * 64)) for n in range(length)]
+        size = max(len(own) for own in sets.values())
+    set_slots = set_slots[:size]
+    runs = []                           # the swap area's runs: (first slot, count, bank)
+    for t, b in set_slots:
+        if runs and runs[-1][2] == b and runs[-1][0] + runs[-1][1] == t and t != 128:
+            runs[-1][1] += 1
+        else:
+            runs.append([t, 1, b])
+    slot = {k: (slots0[n], 0) for n, k in enumerate(perm0)}
+    slot.update({k: (256 - len(perm1) + n, 1) for n, k in enumerate(perm1)})
     maps, battrs = {}, {}
     set_of = {pose: name for name, poses in kit.POSE_SETS.items() for pose in poses}
     for pose in kit.RIVAL_POSES:
-        own = {k: (n, 1) for n, k in enumerate(sets[set_of[pose]])} if pose in set_of else {}
+        own = {}
+        if pose in set_of:
+            for n, k in enumerate(sets[set_of[pose]]):
+                own.setdefault(k, set_slots[n])
         at = [slot.get(k) or own[k] for k in keys[pose]]
         maps[pose] = [t for t, _ in at]
         battrs[pose] = [b for _, b in at]
     empty = tuple([0] * 64)
     scene["fight_cgb"] = {"maps": maps, "attrs": attrs, "banks": battrs, "size": size,
-                          "sets": [sets[n] + [empty] * (size - len(sets[n])) for n in ("attack", "knockdown", "special")],
-                          "perm0": perm0, "perm0_first": sw["first"], "perm1": perm1, "perm1_first": size,
+                          "sets": [sets[n] for n in ("attack", "knockdown", "special")],   # (each copies only its own)
+                          "perm0": perm0, "perm0_slots": slots0, "perm1": perm1, "perm1_first": 256 - len(perm1),
+                          "runs": [tuple(r) for r in runs],
                           "sizes": {n: len(own) for n, own in sets.items()}}
 
 

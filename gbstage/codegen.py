@@ -30,7 +30,9 @@ KIT_NES_SOUND = __import__("pathlib").Path(__file__).with_name("kit_nes_sound.as
 
 
 # The template's effects as Punch-Out!!'s (its SQ1 effect numbers): what plays when a project has its engine.
-NES_SFX = {"menu_move": 0x14, "menu_back": 0x14, "option_change": 0x12, "menu_confirm": 0x01, "press_start": 0x01,
+NES_SFX = {"pass_digit": 0x0B, "pass_next": 0x09,   # (Punch-Out!!'s pass key: a digit changed, on to the next)
+           "type": 0x0A, "type_alt": 0x0B,          # (its typed words: Doc's, the rival's)
+           "menu_move": 0xFF, "menu_back": 0x14,     # (moving between its title's items: no sound, $FF) "option_change": 0x12, "menu_confirm": 0x01, "press_start": 0x01,
            "bell": 0x0C, "count": 0x10, "knockdown": 0x02, "ko": 0x0E, "punch": 0x06, "hit": 0x03, "block": 0x04,
            "dodge": 0x11, "star_wind": 0x16}
 
@@ -57,6 +59,12 @@ def _dmc_tables(nes):
             m = sum(c) / len(c)
             vols.append(max(1, min(15, round(math.sqrt(sum((x - m) ** 2 for x in c) / len(c)) / 2))))
             crossings += sum(1 for i in range(1, len(c)) if (c[i] - m) * (c[i - 1] - m) < 0)
+        held, steady = vols[0], []                              # a wobble of one step held: each change of
+        for v in vols:                                          # the GB's noise volume restarts it, a click
+            if abs(v - held) >= 2:
+                held = v
+            steady.append(held)
+        vols = steady
         target = 2 * crossings / (len(seq) / rate)             # white noise crosses at about half its clock
         best = min(((s, r) for s in range(14) for r in range(8)),
                    key=lambda sr: abs(math.log(524288 / (0.5 if sr[1] == 0 else sr[1]) / 2 ** (sr[0] + 1) / target)))
@@ -163,6 +171,10 @@ def cursor_x(menu):
 def sfx_groups(scenes):
     """The sound effect groups a game's scenes need (menus always: every interactive screen beeps)."""
     groups = ["menu"]
+    if any((s["menu"] or {}).get("pass_key") for s in scenes):
+        groups.append("pass")
+    if any(s.get("typed") or (s.get("cutscene") or {}).get("box") for s in scenes):
+        groups.append("typed")
     if any(s.get("puzzle") for s in scenes):
         groups.append("puzzle")
     if any(s.get("fight") for s in scenes):
@@ -304,9 +316,9 @@ Scene{i}Tiles:              ; "{s['name']}": {len(s['tiles'])} unique tiles
 SECTION "Data: Scene {i} maps", ROM0, ALIGN[4]    ; rows padded to 32 tiles so DMA can copy them whole
 Scene{i}Map:"""
     return head + f"""
-{_db(_pad_rows(s['cell_tiles'], bool(s.get('fight'))), 32)}
+{_db(s['cell_tiles'] if s.get('cutscene') else _pad_rows(s['cell_tiles'], bool(s.get('fight'))), 32)}
 Scene{i}Attr:               ; palette number per tile (Game Boy Color only)
-{_db(_pad_rows(s['cell_pal'], bool(s.get('fight'))), 32)}
+{_db(s['cell_pal'] if s.get('cutscene') else _pad_rows(s['cell_pal'], bool(s.get('fight'))), 32)}
 """
 
 
@@ -318,15 +330,19 @@ def hw_palettes(s):
     "pal_slots" (palette -> slot) and "pal_used" (the project palettes it uploads). Palettes 0-7 keep their
     own slot, so a project with 8 or fewer builds exactly as before."""
     fight = s.get("fight")
-    used = sorted(set(s["cell_pal"]) | (set(fight["palettes"].values()) if fight else set()))   # (a fight: his
-    if all(g < 8 for g in used):                                                    # palettes, every pose's)
-        return s
+    card = (s.get("press") or {}).get("card")       # (a round card's two: up with the scene, its rows drawn later)
+    extra = {card["palette"], card["text_palette"]} if card else set()
+    used = sorted(set(s["cell_pal"]) | (set(fight["palettes"].values()) if fight else set()) | extra)   # (a fight:
+    if all(g < 8 for g in used):                                                    # his palettes, every pose's)
+        return s if extra <= set(s["cell_pal"]) else dict(s, pal_used=used)
     slots = {g: g for g in used if g < 8}
     free = [k for k in range(8) if k not in slots.values()]
     for g in used:
         if g >= 8:
             slots[g] = free.pop(0)
     out = dict(s, cell_pal=[slots[g] for g in s["cell_pal"]], pal_slots=slots, pal_used=used)
+    if card:
+        out["card_rows"] = [[[(t, slots[g]) for t, g in row] for row in rows] for rows in s["card_rows"]]
     if fight:                           # his poses' cells too
         out["fight_attrs"] = {pose: [slots[g] for g in cells] for pose, cells in s["fight_attrs"].items()}
         if s.get("fight_cgb"):
@@ -427,12 +443,207 @@ BgPalettes:                 ; RGB555
 SLIDE_DEFS = f"""DEF SLIDE_START EQU {CH * 8}          ; SCY: the scene's top 32 rows at the bottom of the screen
 DEF SLIDE_STEP EQU 1            ; pixels per frame: {256 - CH * 8} frames to slide all the way up
 """
+CARD_HOLD_CHECK = """    ld a, [wCardOn]         ; a round card up: its scroll is its own
+    and a
+    jr nz, .still
+"""
 SLIDE_STEP_CODE = """    ldh a, [hScrollY]       ; sliding in: climb (wraps to 0, the resting place)
     and a
     jr z, .still
     add SLIDE_STEP
     ldh [hScrollY], a
 .still:
+"""
+SCREEN_ON_CHECK = """    ldh a, [hScene]         ; a plain screen: the display stays on (black, faded out), interrupts off
+    add LOW(SceneScreenOn)
+    ld l, a
+    adc HIGH(SceneScreenOn)
+    sub l
+    ld h, a
+    ld a, [hl]
+    and a
+    jr z, .waitVBlank
+    ld a, 1                 ; (interrupts are off outside a fight: nothing comes between)
+    ldh [hLoadOn], a
+    jr .screenOff
+"""
+SCREEN_ON_END = """    ldh a, [hLoadOn]
+    and a
+    jr z, .loaded
+    xor a
+    ldh [hLoadOn], a
+.loaded:
+"""
+VWAIT_CODE = """
+; Loading with the display on: wait for the next VBlank's start (VRAM and OAM are free till it ends). Off: none.
+VWait:
+    ldh a, [hLoadOn]
+    and a
+    ret z
+.leave:
+    ldh a, [rLY]
+    cp 144
+    jr nc, .leave
+.wait:
+    ldh a, [rLY]
+    cp 144
+    jr c, .wait
+    ret
+"""
+COPY_TILES_CHUNKS = """    ldh a, [hLoadOn]        ; the display on: a VBlank's worth at a time (Color 64 by DMA, the original 12)
+    and a
+    jr z, CopyTilesNow
+.chunk:
+    ldh a, [hIsCGB]
+    and a
+    ld b, 12
+    jr z, .n
+    ld b, 64
+.n:
+    ld a, c
+    cp b
+    jr nc, .some
+    ld b, a
+.some:                      ; B = tiles now
+    push bc
+    push hl
+    push de
+    call VWait
+    pop de
+    pop hl
+    pop bc
+    push bc
+    push hl
+    push de
+    ld c, b
+    call CopyTilesNow
+    pop de
+    pop hl
+    pop bc
+    ld a, c                 ; on past them
+    sub b
+    ld c, a
+    push bc
+    ld c, b
+    ld b, 0
+    REPT 4
+        sla c
+        rl b
+    ENDR
+    add hl, bc
+    ld a, e
+    add c
+    ld e, a
+    ld a, d
+    adc b
+    ld d, a
+    pop bc
+    ld a, c
+    and a
+    jr nz, .chunk
+    ret
+"""
+COPY_MAP_CHUNKS = """    ldh a, [hLoadOn]        ; the display on: six rows a VBlank
+    and a
+    jr z, .whole
+    ld de, $9800
+    ld c, MAP_H / 6
+.chunk:
+    push bc
+    push hl
+    push de
+    call VWait
+    pop de
+    pop hl
+    ld b, 6
+    call .rows
+    pop bc
+    dec c
+    jr nz, .chunk
+    ret
+.rows:                      ; B rows from HL to DE (32 wide both): HL, DE past them after
+    ld [wSavedSP], sp
+    ld sp, hl
+    ld h, d
+    ld l, e
+.chunkRow:
+    REPT MAP_W / 2
+        pop de
+        ld a, e
+        ld [hl+], a
+        ld a, d
+        ld [hl+], a
+    ENDR
+    add sp, 32 - MAP_W
+    ld de, 32 - MAP_W
+    add hl, de
+    dec b
+    jr nz, .chunkRow
+    ld d, h
+    ld e, l
+    ld hl, sp + 0
+    ld a, l
+    ld [wLoadSrc], a
+    ld a, h
+    ld [wLoadSrc + 1], a
+    ld hl, wSavedSP
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    ld sp, hl
+    ld a, [wLoadSrc]
+    ld l, a
+    ld a, [wLoadSrc + 1]
+    ld h, a
+    ret
+.whole:
+"""
+SLIDE_FILL_ON = """; Fill the map rows below the screen (18-31) with tile D, palette E on Game Boy Color. Screen off, or on (a
+; VBlank's worth at a time).
+SlideFill:
+    ld hl, $9800 + MAP_H * 32
+    ld bc, (32 - MAP_H) * 32
+    call .fill
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    ld a, 1
+    ldh [rVBK], a
+    ld d, e
+    ld hl, $9800 + MAP_H * 32
+    ld bc, (32 - MAP_H) * 32
+    call .fill
+    xor a
+    ldh [rVBK], a
+    ret
+.fill:                      ; BC bytes (a multiple of 32) of D from HL
+    push de
+    call VWait
+    pop de
+    ld a, b                 ; 128 at most at a time
+    and a
+    ld e, 128
+    jr nz, .run
+    ld a, c
+    cp 128
+    jr nc, .run
+    ld e, a
+.run:
+    ld a, c
+    sub e
+    ld c, a
+    jr nc, .runs
+    dec b
+.runs:
+    ld a, d
+.byte:
+    ld [hl+], a
+    dec e
+    jr nz, .byte
+    ld a, b
+    or c
+    jr nz, .fill
+    ret
 """
 SLIDE_FILL = """; Fill the map rows below the screen (18-31) with tile D, palette E on Game Boy Color. Screen off.
 SlideFill:
@@ -480,6 +691,31 @@ def _scene_load(i, s, sprites, opt_index=None, markers=False):
         lines.append("    call FightLoad")
     if s.get("pass_key"):
         lines.append(f"    call Scene{i}PassLoad")
+    if (s["menu"] or {}).get("pass_key"):
+        lines += ["    xor a                   ; its pass key hidden, forgotten", "    ld [wPkShown], a", "    call PkReset"]
+    if s.get("cutscene"):
+        cs = s["cutscene"]
+        n_obj = len(s["cut_obj"])
+        lines += [f"    ld hl, Scene{i}CutObj   ; its actors' tiles, from sprite tile 2 (by the CPU: 4 a VBlank)",
+                  "    ld de, $8020", f"    ld b, {n_obj}", ".cutTile:", "    push bc", "    ld a, b", "    and 3",
+                  "    call z, VWait" if any(True for _ in [0]) else "", "    ld c, 16", ".cutByte:", "    ld a, [hl+]",
+                  "    ld [de], a", "    inc de", "    dec c", "    jr nz, .cutByte", "    pop bc", "    dec b", "    jr nz, .cutTile"]
+        after = cs["box"]["after"] if cs["box"] else 0
+        lines += [f"    ld hl, Scene{i}CutFrames", "    call CutStart",
+                  f"    ld hl, Scene{i}CutBands   ; each band from where it stops at its endX as the box comes up",
+                  "    ld b, [hl]", "    inc hl", "    ld de, wCutBands", ".cutBand:", "    inc hl", "    inc hl", "    inc hl",
+                  "    ld a, [hl+]", "    ld [de], a", "    inc de", "    ld a, [hl+]", "    ld [de], a", "    inc de",
+                  "    dec b", "    jr nz, .cutBand",
+                  f"    ld a, LOW({after})", "    ld [wCutWait], a",
+                  f"    ld a, HIGH({after})", "    ld [wCutWait + 1], a"]
+        if cs["music"]:
+            lines += ["IF DEF(FT_NES_SOUND)", f"    ld a, ${cs['music']:02X}            ; its NES music", "    call NesMusic", "ENDC"]
+    if s.get("typed"):
+        ty = s["typed"]
+        pick = (["    ld a, [wFtRound]        ; the corner after round 1 the first group", "    sub 2", "    jr nc, .group",
+                 "    xor a", ".group:"] if ty["pick"] == "round" else ["    xor a"])
+        lines += [f"    ld a, {ty['every']}               ; its words: a letter every few frames", "    ld [wTyEvery], a",
+                  *pick, f"    ld hl, Scene{i}Typed", "    call TypeStart"]
     if s.get("nes_dmc"):
         lines += ["IF DEF(FT_NES_SOUND)", f"    ld a, {s['nes_dmc']}             ; its NES sample (the crowd), as the game starts it",
                   "    call NesDmc", "ENDC"]
@@ -509,12 +745,21 @@ def _scene_palettes(i, s, project, sprites):
     """Upload this scene's palettes from the fade row in DE: only the background palettes its tiles
     use, plus the cursor's sprite palette if it has a menu."""
     lines = [f"Scene{i}Palettes:", "    ld h, d", "    ld l, e"]
+    ft = s.get("fight")
+    if ft and ft.get("rope_row"):       # a rival in front of the ropes: his top rows are sprites in his colors
+        lines.append("    push de")
+        for k, g in enumerate(sorted(set(ft["palettes"].values()))):
+            lines += ["    pop de", "    push de", f"    ld hl, {g * 8}", "    add hl, de", f"    ld a, $80 | {(5 + k) * 8}",
+                      "    ldh [rOCPS], a", "    REPT 8", "        ld a, [hl+]", "        ldh [rOCPD], a", "    ENDR"]
+        lines += ["    pop de", "    ld h, d", "    ld l, e"]
     used = s.get("pal_used") or sorted(set(s["cell_pal"]))
     lines += _upload_runs(used, "rBCPS", "rBCPD", slots=s.get("pal_slots"))
     pal = None
     if sprites and (s["menu"] or s["options"]):
         pal = project["cursor"]["palette"]
     obj_pals = [pal] if pal is not None else []
+    if s.get("cutscene"):
+        obj_pals = sorted({c for a in s["cutscene"]["actors"] for f in a["frames"] for c in f["cells"]})
     if s.get("fight"):
         f = s["fight"]
         obj_pals = sorted({f["player"]["palette"], f["player"]["tired_palette"], f["player"]["down_palette"],
@@ -588,8 +833,51 @@ def _press_code(i, s, index_of, corner=False):
         hold = f"    ld a, {p['hold']}\n    ldh [hTimer], a\n    SET_UPDATE Scene{i}Hold\n    ret\n"
         hold_code = (f"Scene{i}Hold:\n    ld hl, hTimer\n    dec [hl]\n    ret nz\n"
                      f"    ld a, {index_of[p['target']]}\n    jp StartTransition\n")
+    typed = ""
+    if s.get("typed"):                      # its words write themselves first; Start waits for them (as Punch-Out!!'s)
+        show = (f"    ld hl, Scene{i}PromptShown  ; then the prompt\n    QUEUE_PATCH Scene{i}PromptPatch\n"
+                if blink else "")
+        typed = f"""    ld a, [wTyDone]
+    and a
+    jr nz, .typed
+    call TypeStep
+    ld a, [wTyDone]
+    and a
+    ret z
+{show}    ret
+.typed:
+"""
+    card_go, card_code = "", ""
+    if p.get("card"):                       # Punch-Out!!'s round card comes up from below, then on
+        c = p["card"]
+        pick = (["    ld a, [wFtRound]        ; (the corner before round 2: the first)", "    sub 2", "    jr nc, .variant",
+                 "    xor a", ".variant:", f"    cp {len(c['variants'])}", "    jr c, .variantOk", f"    ld a, {len(c['variants']) - 1}",
+                 ".variantOk:"] if c["pick"] == "round" else ["    xor a"])
+        card_go = "\n".join(pick + [
+            "    ld l, a                 ; its rows", "    ld h, 0", "    add hl, hl", f"    ld de, Scene{i}CardRows", "    add hl, de",
+            "    ld a, [hl+]", "    ld [wCardRows], a", "    ld a, [hl]", "    ld [wCardRows + 1], a",
+            "    xor a", "    ld [wCardY], a", "    ld [wCardRow], a", f"    ld a, {c['hold']}", "    ld [wCardHold], a",
+            "    ld a, 1", "    ld [wCardOn], a",
+            f"    SET_UPDATE Scene{i}Card", "    ret"]) + "\n"
+        card_code = f"""Scene{i}Card:                ; the screen scrolls up 4 pixels a frame, the card's rows drawn below a row ahead
+    ld a, [wCardY]
+    cp CARD_TOP
+    jr nc, .held
+    add 4
+    ld [wCardY], a
+    ldh [hScrollY], a
+    jp CardStep
+.held:
+    ldh [hScrollY], a       ; (kept there)
+    call CardStep
+    ld hl, wCardHold
+    dec [hl]
+    ret nz
+    ld a, {index_of[p['target']]}
+    jp StartTransition
+"""
     return f"""Scene{i}Update:              ; press-start screen: wait for Start or A
-{select}    ldh a, [hPadNew]
+{select}{typed}    ldh a, [hPadNew]
     and PADF_A | PADF_START
     jr nz, .press
 {idle}
@@ -613,13 +901,51 @@ Scene{i}Press:              ; flip the flash area, then go
     dec [hl]
 {flip}
 .go:
-{hold}    ld a, {index_of[p['target']]}
+{card_go}{hold}    ld a, {index_of[p['target']]}
     jp StartTransition
-{hold_code}"""
+{hold_code}{card_code}"""
+
+
+def _typed_data(i, s):
+    """Typed text's scripts (TypeStep's): per group its variants, each a run of ops."""
+    cell = lambda c: f"${0x9800 + (c // CW) * 32 + c % CW:04X}"
+    snd = {None: 0, "type": "SFX_TYPE + 1", "type_alt": "SFX_TYPE_ALT + 1"}
+    groups = s["typed_scripts"]
+    out = [f"Scene{i}Typed:               ; groups (a round each, or one), each: its variants", f"    db {len(groups)}",
+           "    dw " + ", ".join(f"Scene{i}TyG{g}" for g in range(len(groups)))]
+    for g, variants in enumerate(groups):
+        out += [f"Scene{i}TyG{g}:", f"    db {len(variants)}", "    dw " + ", ".join(f"Scene{i}TyG{g}V{v}" for v in range(len(variants)))]
+        for v, ops in enumerate(variants):
+            out.append(f"Scene{i}TyG{g}V{v}:")
+            for op in ops:
+                if op[0] == "clear":
+                    out.append(f"    db TY_CLEAR, {len(op[1])}, " + ", ".join(f"LOW({cell(c)}), HIGH({cell(c)}), ${t:02X}" for c, t in op[1]))
+                elif op[0] == "letter":
+                    out.append(f"    db TY_LETTER, 1, LOW({cell(op[1])}), HIGH({cell(op[1])}), ${op[2]:02X}")
+                elif op[0] == "space":
+                    out.append("    db TY_SPACE")
+                elif op[0] == "pause":
+                    out.append(f"    db TY_PAUSE, {op[1]}")
+                else:
+                    out.append(f"    db TY_SOUND, {snd[op[1]]}")
+            out.append("    db TY_END")
+    return "\n".join(out)
+
+
+def _card_data(i, s):
+    """A round card's rows per variant: 18 rows of 20 tiles, then their 18 rows of attributes (palettes)."""
+    out = [f"Scene{i}CardRows:", "    dw " + ", ".join(f"Scene{i}Card{v}" for v in range(len(s["card_rows"])))]
+    for v, rows in enumerate(s["card_rows"]):
+        out.append(f"Scene{i}Card{v}:")
+        out += ["    db " + ", ".join(f"${t:02X}" for t, _ in row) for row in rows]
+        out += ["    db " + ", ".join(f"${g & 7:02X}" for _, g in row) for row in rows]
+    return "\n".join(out)
 
 
 def _press_data(i, s):
-    lines = []
+    lines = [_typed_data(i, s)] if s.get("typed") else []
+    if s.get("card_rows"):
+        lines.append(_card_data(i, s))
     if s["prompt_cells"]:
         lines += [f"Scene{i}PromptShown:", "    db " + ", ".join(f"${c[1]:02X}" for c in s["prompt_cells"]),
                   f"Scene{i}PromptHidden:", "    db " + ", ".join(f"${c[2]:02X}" for c in s["prompt_cells"])]
@@ -635,7 +961,8 @@ def _press_patches(i, s):
     p, out = s["press"], []
     if p["prompt"] and p["prompt"]["blink"]:
         pr = p["prompt"]
-        out.append(_patch_routine(f"Scene{i}PromptPatch", [(pr["y"] * 32 + pr["x"], len(pr["label"]))], "prompt"))
+        out.append(_patch_routine(f"Scene{i}PromptPatch", [((pr["y"] + k) * 32 + pr["x"], len(row))
+                                                           for k, row in enumerate(pr["label"].split("\n"))], "prompt"))
     if p["area"]:
         a = p["area"]
         out.append(_patch_routine(f"Scene{i}AreaPatch", [((a["y"] + r) * 32 + a["x"], a["w"]) for r in range(a["h"])],
@@ -1255,7 +1582,45 @@ def _fight_entry(i, s, index_of, suffix):
             f"{f'BANK(NesFighter{suffix})' if ft.get('nes') else '0'}, {(ft.get('nes') or {}).get('offset', 0)}\n"
             f"    db {sw['count']}, {swap_a}\n    dw ${vram_a:04X}, ${vram_b:04X}\n"
             f"    db {s['fight_flash_tile']}, {scene('win')}, {scene('win_tko')}, {scene('lose')}, {scene('corner')}\n"
-            f"    db {f'BANK(CgbMaps{suffix}), BANK(CgbSwap{suffix})' if s.get('fight_cgb') else '0, 0'}")
+            f"    db {f'BANK(CgbMaps{suffix}), BANK(CgbSwap{suffix})' if s.get('fight_cgb') else '0, 0'}\n"
+            f"    db {f'BANK(RivalHeads{suffix})' if ft.get('rope_row') else '0'}")
+
+
+def _heads_data(s, suffix):
+    """A rival's top rows as sprites (a rope row: he stands in front of it), per pose: the original's, then
+    Color's: count, then (dy, dx, tile, attributes) for each of his tiles there (not the mat's; sprites reach
+    tiles 128-255, his top rows' are kept there). Color: his palettes in sprite palettes 5-7, a tile's bank."""
+    from . import fight as kit
+    ft = s["fight"]
+    slot_of = s.get("pal_slots") or {}
+    rival = [slot_of.get(g, g) for g in sorted(set(ft["palettes"].values()))]
+    obj = {hw: 5 + k for k, hw in enumerate(rival)}
+    lists = []
+    for pose in kit.RIVAL_POSES:
+        m, out = s["fight_maps"][pose], []
+        for i in range(kit.head_rows(pose) * kit.REGION_W):
+            t = m[i]
+            if t != s["fight_blank"] and t >= 128:
+                out.append((i // kit.REGION_W * 8, i % kit.REGION_W * 8, t, 0))
+        lists.append(out)
+    cg = s.get("fight_cgb")
+    for pose in kit.RIVAL_POSES:
+        if not cg:
+            lists.append(lists[kit.RIVAL_POSES.index(pose)])
+            continue
+        m, b, a = cg["maps"][pose], cg["banks"][pose], cg["attrs"][pose]
+        keys = [(t, bb) for p in kit.RIVAL_POSES for t, bb in zip(cg["maps"][p], cg["banks"][p])]
+        out = []
+        blank = cg.setdefault("_blank", max(set(keys), key=keys.count))
+        for i in range(kit.head_rows(pose) * kit.REGION_W):
+            if (m[i], b[i]) != blank and m[i] >= 128:
+                out.append((i // kit.REGION_W * 8, i % kit.REGION_W * 8, m[i], obj.get(a[i], 5) | b[i] << 3))
+        lists.append(out)
+    names = [f"RivalHead{suffix}_{k}" for k in range(len(lists))]
+    body = "\n".join(f"{n}:\n    db {len(l)}" + "".join(f"\n    db {dy}, {dx}, {t}, ${at:02X}" for dy, dx, t, at in l)
+                     for n, l in zip(names, lists))
+    return (f"\nSECTION \"Data: Rival heads{suffix}\", ROMX[$4000]\nRivalHeads{suffix}::        ; per pose (the original's, then "
+            f"Color's): his top rows as sprites\n    dw {', '.join(names)}\n{body}\n")
 
 
 def _suffixed(text, suffix):
@@ -1309,6 +1674,24 @@ def _fight_asm(i, s, index_of, project, banked=False, suffix="", shared=True, pa
         sp = s["fight_sprites"][p]
         sprites.append(f"Player_{p}:                 ; {len(sp)} sprites: dy, dx, tile, attributes\n    db {len(sp)}\n"
                        + "\n".join(f"    db {dy}, {dx}, {t}, ${a:02X}" for dy, dx, t, a in sp))
+    twinkle_def = ""
+    if s.get("fight_twinkle_tile"):     # (OAM x, y of the NES's place, its home: the pose frame's anchor in his area)
+        ax, ay = kit.NES_ANCHOR
+        twinkle_def = (f"DEF FT_TWINKLE_TILE EQU {s['fight_twinkle_tile']}\n"
+                       f"DEF FT_TWINKLE_X0 EQU {ft['x'] * 8 + ax + 8}\nDEF FT_TWINKLE_Y0 EQU {ft['y'] * 8 + ay + 16}")
+    pl_cgb, pl_cgb_def = "", ""
+    if s.get("fight_pl_cgb"):           # Color: the player's own poses, unshared (their tiles in bank 1)
+        pc = s["fight_pl_cgb"]
+        pl_cgb = (f"PlayerPosesCgb:\n    dw {', '.join(f'PlayerCgb_{p}' for p in kit.PLAYER_POSES)}\n"
+                  + "\n".join(f"PlayerCgb_{p}:\n    db {len(pc['sprites'][p])}\n"
+                              + "\n".join(f"    db {dy}, {dx}, {t}, ${a:02X}" for dy, dx, t, a in pc["sprites"][p])
+                              for p in kit.PLAYER_POSES)
+                  + "\nPlayerCgbTiles:\n" + _db([b for t in pc["tiles"] for b in encode_tile(list(t))]) + "\n")
+        pl_cgb_def = f"DEF FT_PL_CGB EQU 1\nDEF FT_PL_CGB_TILES EQU {len(pc['tiles'])}"
+        if s.get("fight_side_tile") is not None:   # (the side ropes' ends: Color's, in the referee's shirt's colors)
+            shirt = ft["referee"].get("shirt_palette")
+            pl_cgb_def += (f"\nDEF FT_SIDE_TILE EQU {s['fight_side_tile']}\nDEF FT_SIDE_ATTR EQU {(shirt if shirt is not None else ft['referee']['palette']) | 0x08}"
+                           f"\nDEF FT_SIDE_Y EQU {(ft['y'] + 1) * 8 + 16}")
     ref_sprites = []
     for p in kit.REF_POSES:
         sp = s["fight_ref_sprites"][p]
@@ -1396,6 +1779,30 @@ NesSndFix:                  ; and its tables in the fixed bank, NES $F400-$F8FF
 {_db(_pad_rows(tail_t, True), 32)}
 FtTailAttr:
 {_db(_pad_rows(tail_p, True), 32)}"""
+    rope = ft.get("rope_row")
+    rope_defs, heads_data = "", ""
+    rope_flash = ""                     # (his top rows' sprites flash with him: his palettes in sprite palettes 5-7)
+    if rope:
+        rope_flash = ("    pop hl\n    ld a, $80 | 5 * 8\n    ldh [rOCPS], a\n    ld c, LOW(rOCPD)\n"
+                      f"    ld b, {len(set(ft['palettes'].values())) * 8}\n.objPal:\n    ld a, [hl+]\n    ldh [c], a\n"
+                      "    dec b\n    jr nz, .objPal\n")
+    if rope:                            # Punch-Out!!'s ropes behind him: their row in a map row of its own (the
+        slot_of = s.get("pal_slots") or {}   # band's first row shows it), his rows over it sprites
+        rope_p = [slot_of.get(g, g) for g in rope["cells"]]
+        tail_data += f"""
+FtRopeTiles:                ; the bottom rope's row: shown over his area's first row (its own map row)
+{_db(_pad_rows(s['fight_rope_tiles'], True), 32)}
+FtRopeAttr:
+{_db(_pad_rows(rope_p, True), 32)}"""
+        rope_defs = (f"DEF FT_ROPE EQU 1\nDEF FT_ROPE_ROW EQU 30                              ; its map row (off screen)\n"
+                     f"DEF FT_ROPE_LINE EQU {ft['y'] * 8 - 1}                ; LY where it shows, over his area's first row\n"
+                     f"DEF FT_ROPE_SCY EQU ((30 - {ft['y']}) * 8) & $FF\n"
+                     f"DEF FT_HEAD_X0 EQU {ft['x'] * 8 + 8}                ; OAM x, y of his area's top left (unscrolled)\n"
+                     f"DEF FT_HEAD_Y0 EQU {ft['y'] * 8 + 16}\n"
+                     f"DEF FT_HEAD_LIMIT EQU {(ft['y'] + 1) * 8 + 16}             ; OAM y from which his band draws him\n"
+                     f"DEF FT_DMA_LINE EQU {(ft['y'] + 3) * 8}                 ; LY where the lower part's sprites come in "
+                     "(his top rows' done, the referee's not begun)")
+        heads_data = _heads_data(s, suffix)
     pad = lambda data, k: data + [0] * (max(0, (pads or {}).get(k, len(data)) - len(data)))
     code = f"""; ---- Fight: "{s['name']}" ----
 {nes_defs}
@@ -1411,7 +1818,8 @@ DEF FT_REGION_ROW EQU $9800 + {ft['y'] * 32}     ; the rival's first map row
 DEF FT_CROWD_ROW EQU $9800 + {crowd_y * 32}
 DEF FT_CROWD_W EQU {CW}
 DEF FT_FLASH_TILE EQU {s['fight_flash_tile']}
-DEF FT_BAND_TOP EQU {ft['y'] * 8 - 1}               ; LY where his band's scroll starts (a line early: the change lands in time)
+DEF FT_BAND_TOP EQU {(ft['y'] + (1 if rope else 0)) * 8 - 1}               ; LY where his band's scroll starts (a line early: the change lands in time)
+{rope_defs}
 DEF FT_BAND_BOTTOM EQU {(ft['y'] + kit.REGION_H) * 8 - 1}
 DEF FT_TAIL_ROWS EQU 6                              ; off-screen map rows: the background of his band's last rows,
 DEF FT_TAIL_ROW EQU 24                              ; without him, for when he's shown higher in it
@@ -1439,6 +1847,8 @@ DEF FT_REF_TILES EQU {s['fight_slots']['ref_tiles']}
 DEF FT_PL_SLOT EQU {s['fight_slots']['pl']}                ; the player's rare poses' own tiles (one at a time)
 DEF FT_COUNT_TILE EQU {s['fight_count_tile']}
 DEF FT_PLAYER_W EQU {kit.PLAYER_W}
+{pl_cgb_def}
+{twinkle_def}
 DEF FT_PLAYER_X EQU {kit.PLAYER_X + 8}       ; OAM coordinates of the player's top-left
 DEF FT_PLAYER_Y EQU {144 - kit.PLAYER_H + 16}
 DEF FT_PLAYER_PAL EQU {ft['player']['palette']}
@@ -1482,7 +1892,7 @@ FtFlashPalettes:            ; during VBlank, Color only: the rival's palettes, w
     jr z, .upload
     ld hl, RivalPalFlash
 .upload:
-    ld de, RivalPalSlots
+{"    push hl" + nl if ft.get("rope_row") else ""}    ld de, RivalPalSlots
     ld a, [de]
     inc de
     ld b, a
@@ -1497,7 +1907,7 @@ FtFlashPalettes:            ; during VBlank, Color only: the rival's palettes, w
     ENDR
     dec b
     jr nz, .pal
-    ret
+{rope_flash}    ret
 """
     data = f"""
 SECTION "Data: Rival poses", {"ROMX[$4000]" if banked else "ROM0"}   ; per pose: 10 full map rows, then their palettes
@@ -1545,7 +1955,7 @@ FtHudLUT:                   ; per HUD cell: its tile for each value (digits 0-9,
 PlayerPoses:
     dw {", ".join(f"Player_{p}" for p in kit.PLAYER_POSES)}
 {nl.join(sprites)}
-RefPoses:
+{pl_cgb}RefPoses:
     dw {", ".join(f"Ref_{p}" for p in kit.REF_POSES)}
 {nl.join(ref_sprites)}
 RefTiles:                   ; per pose: its own tiles' address and count, loaded into his area as his pose changes
@@ -1567,11 +1977,16 @@ FtObjTiles:                 ; the player's {len(s['fight_obj']) - len(kit.COUNT_
         sets_b = [tile_bytes(t) for t in cgb["sets"]]                            # reads their headers (FtCgb*)
         p0, p1 = tile_bytes(cgb["perm0"]), tile_bytes(cgb["perm1"])
         vram = lambda t: 0x9000 + 16 * t if t < 128 else 0x8800 + 16 * (t - 128)
-        runs = []                       # (bank, offset, bytes, where): split where tile 128 moves to $8800
-        for b, first, count in ((0, cgb["perm0_first"], len(cgb["perm0"])), (1, cgb["perm1_first"], len(cgb["perm1"]))):
-            for lo, hi in ((first, min(first + count, 128)), (max(first, 128), first + count)):
-                if hi > lo:
-                    runs.append((b, 16 * (lo - first), 16 * (hi - lo), vram(lo)))
+        runs = []                       # (bank, offset, bytes, where): runs of consecutive slots, split where tile
+        slots = [(0, t, n) for n, t in enumerate(cgb["perm0_slots"])] + \
+                [(1, cgb["perm1_first"] + n, n) for n in range(len(cgb["perm1"]))]   # 128 moves to $8800
+        for b, t, n in slots:
+            if runs and runs[-1][0] == b and runs[-1][4] == t and t != 128:
+                bank, off, size, where, nxt = runs[-1]
+                runs[-1] = (bank, off, size + 16, where, t + 1)
+            else:
+                runs.append((b, 16 * n, 16, vram(t), t + 1))
+        runs = [r[:4] for r in runs]
         cgb_rows = lambda pose: (_db(rows(cgb["maps"][pose], tiles), 32) + "\n"
                                  + _db(rows([a | b << 3 for a, b in zip(cgb["attrs"][pose], cgb["banks"][pose])], s["cell_pal"]), 32))
         cgb_data = f"""
@@ -1586,13 +2001,14 @@ SECTION "Data: Rival poses (Color) 2{suffix}", ROMX[$4000]
 {nl.join(f"CgbMap{suffix}_{p}:" + nl + cgb_rows(p) for p in kit.RIVAL_POSES[POSES_PER_BANK - 1:])}
 
 SECTION "Data: Rival tiles (Color){suffix}", ROMX[$4000]
-CgbSwap{suffix}:                ; swap area (bank 1): tiles, first run's; its two runs; the sets; his always-there
-    db {cgb["size"]}, {min(cgb["size"], 128)}   ; tiles: bank 0's, then bank 1's (source, bytes, where)
-    dw $9000, $8800
+CgbSwap{suffix}:                ; each set's tiles; the swap area's runs (tiles, where, bank); the sets; his
+    dw {", ".join(str(len(t)) for t in cgb["sets"])}         ; always-there tiles' runs (source, bytes, where, bank)
+{nl.join(f"    db {n}" + nl + f"    dw ${vram(t):04X}" + nl + f"    db {b}" for t, n, b in cgb["runs"])}
+{nl.join("    db 0, 0, 0, 0" for _ in range(4 - len(cgb["runs"])))}
     dw CgbSwap{suffix}.set0, CgbSwap{suffix}.set1, CgbSwap{suffix}.set2
     db {len(runs)}                    ; then his always-there tiles' runs: source, bytes, where, bank
 {nl.join(f"    dw CgbSwap{suffix}.perm{b} + {off}, {n}, ${dest:04X}" + nl + f"    db {b}" for b, off, n, dest in runs)}
-    ds {-(13 + 7 * len(runs)) % 16}                         ; (GDMA copies from 16-byte boundaries)
+    ds {-(29 + 7 * len(runs)) % 16}                         ; (GDMA copies from 16-byte boundaries)
 {nl.join(f".set{k}:" + nl + _db(b) for k, b in enumerate(sets_b))}
 .perm0:
 {_db(p0)}
@@ -1607,10 +2023,11 @@ Scene{i}Update:
     jp FightUpdate
 {data}
 {cgb_data}
+{heads_data}
 {checks}
 SECTION "Code: Scenes after fight {i}", ROM0
 """
-    return code + data + cgb_data + nes_shared + """
+    return code + data + cgb_data + heads_data + nes_shared + """
 SECTION "Code: Scenes after the fight", ROM0   ; the next scenes' code must not land in the data bank
 """
 
@@ -1648,6 +2065,744 @@ Scene{i}ConfirmOAM:          ; y, x, tile per sprite
     db 0
 Scene{i}ConfirmTiles:
 {_db([b for t in c["tiles"] for b in encode_tile(t)])}
+"""
+
+
+def _pk_menu_code(i, pk):
+    """Punch-Out!!'s pass key, under its menu item while that's chosen: left/right change the digit (the first
+    press shows it, 0), A, B or Start go on to the next (0 again); after the tenth the key is checked: a code
+    plays out as a choice does, to its scene, else the key is forgotten (dashes again). Moving off hides it."""
+    item = pk["item"]
+    return f"""    ldh a, [hSel]           ; the pass key: shown while its item's chosen
+    cp {item}
+    jp z, .pk
+    ld a, [wPkShown]
+    and a
+    jp z, .menu
+    xor a                   ; moved off it: the rows as they were, the key forgotten
+    ld [wPkShown], a
+    call PkReset
+    ld hl, Scene{i}PkHide
+    QUEUE_PATCH PkListPatch
+    jp .menu
+.pk:
+    ld a, [wPkShown]
+    and a
+    jp nz, .pkKeys
+    inc a
+    ld [wPkShown], a
+    call PkReset
+    ld hl, Scene{i}PkShow
+    QUEUE_PATCH PkListPatch
+    jp .menu
+.pkKeys:
+    ldh a, [hPadNew]
+    ld b, a
+    and PADF_LEFT | PADF_RIGHT
+    jp z, .pkNotLR
+    ld a, [wPkEdit]
+    and a
+    jp z, .pkStart
+    call .pkDigit
+    bit PAD_RIGHT, b
+    jp z, .pkLeft
+    inc a
+    cp 10
+    jp c, .pkSet
+    xor a
+    jp .pkSet
+.pkLeft:
+    sub 1
+    jp nc, .pkSet
+    ld a, 9
+.pkSet:
+    ld [hl], a
+    ld a, SFX_PASS_DIGIT
+    call PlaySfx
+    jp .pkShow
+.pkNotLR:
+    ld a, b
+    and PADF_A | PADF_B | PADF_START
+    jp z, .menu
+    ld a, [wPkEdit]
+    and a
+    jp nz, .pkNext
+    bit PAD_START, b        ; (Start before a digit: nothing)
+    jp nz, .cursor
+.pkStart:                   ; the first digit: 0, its blip
+    ld a, 1
+    ld [wPkEdit], a
+    xor a
+    ld [wPkPos], a
+    ld [wPkDigits], a
+    ld a, SFX_PASS_DIGIT
+    call PlaySfx
+    jp .pkShow
+.pkNext:
+    ld a, [wPkPos]
+    inc a
+    ld [wPkPos], a
+    cp 10
+    jp z, .pkCheck
+    call .pkDigit
+    xor a
+    ld [hl], a
+    ld a, SFX_PASS_NEXT
+    call PlaySfx
+    jp .pkShow
+.pkCheck:                   ; the ten digits against each code
+    ld hl, Scene{i}PkCodes
+    ld a, [hl+]
+    and a
+    jp z, .pkWrong
+    ld c, a
+.pkCode:
+    push hl
+    ld de, wPkDigits
+    ld b, 10
+.pkCmp:
+    ld a, [de]
+    cp [hl]
+    jp nz, .pkMiss
+    inc de
+    inc hl
+    dec b
+    jp nz, .pkCmp
+    ld a, [hl]              ; a match: its scene, the choice played out
+    pop hl
+    ld [wPkTarget], a
+    ld a, SFX_MENU_CONFIRM
+    call PlaySfx
+    jp .choose
+.pkMiss:
+    pop hl
+    ld de, 11
+    add hl, de
+    dec c
+    jp nz, .pkCode
+.pkWrong:                   ; no match: forgotten, dashes again
+    call PkReset
+    ld hl, Scene{i}PkShow
+    QUEUE_PATCH PkListPatch
+    jp .cursor
+.pkDigit:                   ; HL -> the digit being set, A = it
+    ld a, [wPkPos]
+    add LOW(wPkDigits)
+    ld l, a
+    adc HIGH(wPkDigits)
+    sub l
+    ld h, a
+    ld a, [hl]
+    ret
+.pkShow:                    ; the digit being set, on screen next VBlank
+    call .pkDigit
+    ld b, a
+    ld a, [wPkPos]
+    ld e, a
+    add a
+    add a
+    add a
+    add e
+    add e
+    add e                   ; 11 tiles a place (0-9, the dash)
+    add b
+    add LOW(Scene{i}PkDigits)
+    ld l, a
+    adc HIGH(Scene{i}PkDigits)
+    sub l
+    ld h, a
+    ld a, [hl]
+    ld [wPkPatch + 3], a
+    ld a, e
+    add a
+    add LOW(Scene{i}PkCells)
+    ld l, a
+    adc HIGH(Scene{i}PkCells)
+    sub l
+    ld h, a
+    ld a, [hl+]
+    ld [wPkPatch + 1], a
+    ld a, [hl]
+    ld [wPkPatch + 2], a
+    ld a, 1
+    ld [wPkPatch], a
+    ld hl, wPkPatch
+    QUEUE_PATCH PkListPatch
+    jp .cursor
+"""
+
+
+def _pk_data(i, pk):
+    """The pass key's tables: its rows shown and hidden (cell address, tile), its places' tiles and cells, the codes."""
+    nl = "\n"
+    cell = lambda c: f"${0x9800 + (c // CW) * 32 + c % CW:04X}"
+    rows = lambda pairs: f"    db {len(pairs)}" + nl + nl.join(f"    db LOW({cell(c)}), HIGH({cell(c)}), ${t:02X}" for c, t in pairs)
+    codes = pk["codes"]
+    return (f"Scene{i}PkShow:" + nl + rows(pk["show"]) + nl + f"Scene{i}PkHide:" + nl + rows(pk["hide"]) + nl
+            + f"Scene{i}PkDigits:            ; per place: its tile showing 0-9, then the dash" + nl
+            + nl.join("    db " + ", ".join(f"${t:02X}" for t in tiles) for tiles in pk["digits"]) + nl
+            + f"Scene{i}PkCells:" + nl + "    dw " + ", ".join(cell(c) for c in pk["cells"]) + nl
+            + f"Scene{i}PkCodes:             ; how many; each: its ten digits, its scene" + nl + f"    db {len(codes)}" + nl
+            + nl.join("    db " + ", ".join(str(d) for d in c["key"]) + f", {c['target']}" for c in codes))
+
+
+PK_CODE = """
+SECTION "Pass key, under a menu item", WRAM0
+wPkDigits: ds 10            ; 0-9; 10 not set (a dash)
+wPkPos: db
+wPkEdit: db                 ; a digit set yet
+wPkShown: db
+wPkTarget: db
+wPkPatch: ds 4
+
+SECTION "Code: Pass key, under a menu item", ROM0
+PkReset:                    ; every place a dash, none set
+    ld hl, wPkDigits
+    ld a, 10
+    ld b, 10
+.dash:
+    ld [hl+], a
+    dec b
+    jr nz, .dash
+    xor a
+    ld [wPkPos], a
+    ld [wPkEdit], a
+    ret
+
+PkListPatch:                ; (VBlank) HL -> how many, then each cell's address and tile
+    ld a, [hl+]
+    ld b, a
+.cell:
+    ld a, [hl+]
+    ld e, a
+    ld a, [hl+]
+    ld d, a
+    ld a, [hl+]
+    ld [de], a
+    dec b
+    jr nz, .cell
+    ret
+"""
+
+
+def _cut_oam(s):
+    """A cutscene's sprites per frame (every actor's at that frame): (y, x, tile, attributes) as OAM takes them."""
+    cs, frames = s["cutscene"], s["cut_frames"]
+    n = max(len(a["frames"]) for a in cs["actors"]) if cs["actors"] else 1
+    out = []
+    for f in range(n):
+        spr = []
+        for a, per in zip(cs["actors"], frames):
+            for dy, dx, t, pal in per[f % len(per)]:
+                spr.append((a["y"] + dy + 16, a["x"] + dx + 8, t + 2, (pal & 7) | ((pal & 1) << 4)))
+        out.append(spr)
+    return out
+
+
+def _cut_code(i, s, index_of):
+    """A cutscene: the picture scrolls (its top rows don't: the box's), the actors cycle, the box comes up and
+    writes itself, then Start goes on."""
+    cs, box = s["cutscene"], s["cutscene"]["box"]
+    every = cs["actors"][0]["every"] if cs["actors"] else 8
+    split = (box["y"] + len(box["lines"]) + 2) * 8 if box else 0
+    box_rows = len(box["lines"]) + 2 if box else 0
+    target = index_of[s["press"]["target"]]
+    box_code = f"""    ldh a, [hCutDone]       ; the box: after its wait, its background, then a letter every few frames
+    and a
+    jp nz, .start
+    ld hl, wCutWait
+    ld a, [hl+]
+    or [hl]
+    jr z, .boxing
+    dec hl
+    ld a, [hl]
+    sub 1
+    ld [hl+], a
+    jp nc, .split
+    dec [hl]
+    jp .split
+.boxing:
+    ldh a, [hCutBox]        ; its background a row a frame (a frame's VBlank holds a row's writes)
+    cp {box_rows}
+    jr nc, .typing
+    inc a
+    ldh [hCutBox], a
+    dec a
+    add a
+    ld l, a
+    ld h, 0
+    ld bc, Scene{i}CutBox
+    add hl, bc
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    QUEUE_PATCH PkListPatch
+    jp .split
+.typing:
+    ld hl, hCutTick
+    dec [hl]
+    jp nz, .split
+    ld [hl], {box['every']}
+    ldh a, [hCutTyped]
+    ld c, a
+    inc a
+    ldh [hCutTyped], a
+    cp {len(s['cut_typed'])}
+    jr c, .letter
+    ld a, 1
+    ldh [hCutDone], a
+.letter:
+    ld b, 0
+    ld h, b
+    ld l, c
+    add hl, hl
+    add hl, bc              ; three bytes a letter
+    ld bc, Scene{i}CutTyped
+    add hl, bc
+    ld de, wCutPatch + 1
+    REPT 3
+        ld a, [hl+]
+        ld [de], a
+        inc de
+    ENDR
+    ld a, 1
+    ld [wCutPatch], a
+    ld hl, wCutPatch
+    QUEUE_PATCH PkListPatch
+    ld a, SFX_TYPE          ; its tick, as the NES's
+    call PlaySfx
+    jp .split
+.start:
+    ldh a, [hPadNew]
+    and PADF_START | PADF_A
+    jp z, .split
+    ld a, {target}
+    jp StartTransition
+""" if box else f"""    ldh a, [hPadNew]
+    and PADF_START | PADF_A
+    jp z, .split
+    ld a, {target}
+    jp StartTransition
+"""
+    return f"""Scene{i}Update:              ; a cutscene: the picture scrolls by, the actors run, its box writes itself
+    ldh a, [hCutBox]        ; the box up: the picture has stopped (as the NES's)
+    and a
+    jr nz, .moved
+    ld hl, Scene{i}CutBands ; each band on by its speed, the picture moving right (as the NES's)
+    ld b, [hl]
+    inc hl
+    ld de, wCutBands
+.advance:
+    inc hl                  ; (its line)
+    ld a, [de]
+    sub [hl]
+    ld [de], a
+    inc hl
+    inc de
+    ld a, [de]
+    sbc [hl]
+    ld [de], a
+    inc hl
+    inc de
+    inc hl                  ; (its start)
+    inc hl
+    dec b
+    jr nz, .advance
+.moved:
+    ld hl, hCutAnim         ; the actors' next frame
+    dec [hl]
+    jr nz, .still
+    ld [hl], {every}
+    ldh a, [hCutFrame]
+    inc a
+    cp {len(_cut_oam(s))}
+    jr c, .frame
+    xor a
+.frame:
+    ldh [hCutFrame], a
+    ld hl, Scene{i}CutFrames
+    call CutFrame
+.still:
+{box_code}.split:                     ; under the box the picture scrolls, each band from its line its own way
+    call SfxUpdate          ; (the sound first: the splits run to the bottom of the screen)
+.vblank:
+    ldh a, [rLY]            ; (out of VBlank first)
+    cp 144
+    jp nc, .split
+    ld hl, Scene{i}CutBands
+    ld b, [hl]
+    inc hl
+    ld de, wCutBands + 1
+.band:
+    ld c, [hl]              ; its line
+    ld a, l
+    add 5
+    ld l, a
+    adc h
+    sub l
+    ld h, a
+.line:
+    ldh a, [rLY]
+    cp c
+    jr c, .line
+    ld a, [de]              ; its scroll (whole pixels)
+    inc de
+    inc de
+    ld c, a
+.hblank:
+    ldh a, [rSTAT]
+    and 3
+    jr nz, .hblank
+    ld a, c
+    ldh [rSCX], a
+    dec b
+    jr nz, .band
+    ret
+"""
+
+
+def _cut_data(i, s):
+    """A cutscene's tables: its actors' tiles, its sprites per frame, its box's background and letters."""
+    nl = "\n"
+    cell = lambda c: f"${0x9800 + (c // 32) * 32 + c % 32:04X}"
+    oam = _cut_oam(s)
+    tile_bytes = [b for t in s["cut_obj"] for b in encode_tile(list(t))]
+    out = [f"Scene{i}CutObj:", _db(tile_bytes) or "", f"Scene{i}CutFrames:            ; per frame: its sprites' count, then each (y, x, tile, attributes)",
+           "    dw " + ", ".join(f"Scene{i}CutFrame{f}" for f in range(len(oam)))]
+    for f, spr in enumerate(oam):
+        out.append(f"Scene{i}CutFrame{f}:")
+        out.append(f"    db {len(spr)}")
+        out += [f"    db {y}, {x}, {t}, ${a:02X}" for y, x, t, a in spr]
+    rows = {}                           # its background by row: a list patch each
+    for c, t in s["cut_box"]:
+        rows.setdefault(c // 32, []).append((c, t))
+    out.append(f"Scene{i}CutBox:")
+    out.append("    dw " + ", ".join(f"Scene{i}CutBox{r}" for r in sorted(rows)) if rows else "")
+    for r in sorted(rows):
+        out.append(f"Scene{i}CutBox{r}:")
+        out.append(f"    db {len(rows[r])}")
+        out += [f"    db LOW({cell(c)}), HIGH({cell(c)}), ${t:02X}" for c, t in rows[r]]
+    cs = s["cutscene"]
+    after = cs["box"]["after"] if cs["box"] else 0
+    split = (cs["box"]["y"] + len(cs["box"]["lines"]) + 2) * 8 if cs["box"] else 0
+    out.append(f"Scene{i}CutBands:             ; per band: its line, speed (8.8, a frame), start (8.8: where it ends up at endX)")
+    out.append(f"    db {len(cs['bands'])}")
+    for k, b in enumerate(cs["bands"]):
+        start = (b["end_x"] * 256 + b["speed"] * after) % 65536 if cs["box"] else b["end_x"] * 256
+        out.append(f"    db {max(b['y'], split) if k == 0 else max(b['y'], split + 1)}")
+        out.append(f"    dw {b['speed']}, ${start:04X}")
+    out.append(f"Scene{i}CutTyped:")
+    out += [f"    db LOW({cell(c)}), HIGH({cell(c)}), ${t:02X}" for c, t in s["cut_typed"]]
+    return nl.join(out)
+
+
+CUT_CODE = """
+SECTION "Cutscene", WRAM0
+wCutWait: dw                ; frames till the box comes up
+wCutBands: ds 2 * 12        ; each band's scroll (8.8)
+wCutOAM: ds 4 * {MAX}       ; the actors' sprites (VBlank puts them in OAM from entry 2)
+wCutPatch: ds 4
+
+SECTION "Code: Cutscene", ROM0
+; HL = the scene's frames table: the first frame's sprites in, the scroll at the start, its VBlank work on.
+CutStart::
+    xor a
+    ldh [hCutX], a
+    ldh [hCutSub], a
+    ldh [hCutFrame], a
+    ldh [hCutDone], a
+    ldh [hCutBox], a
+    ldh [hCutTyped], a
+    inc a
+    ldh [hCutTick], a
+    ldh [hCutAnim], a
+    ld b, 4 * {MAX}         ; (none left over)
+    ld de, wCutOAM
+.clear:
+    xor a
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .clear
+    call CutFrame
+    ld a, 1
+    ldh [hCutOn], a
+    ret
+
+; HL = the frames table; the frame hCutFrame's sprites into wCutOAM.
+CutFrame::
+    ldh a, [hCutFrame]
+    add a
+    ld e, a
+    ld d, 0
+    add hl, de
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    ld a, [hl+]
+    add a
+    add a                   ; bytes
+    ld b, a
+    ld c, a
+    ld de, wCutOAM
+    and a
+    jr z, .rest
+.copy:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .copy
+.rest:                      ; the rest hidden
+    ld a, 4 * {MAX}
+    sub c
+    ret z
+    ld b, a
+    xor a
+.hide:
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .hide
+    ret
+
+; (VBlank) the box's rows unscrolled; the actors' sprites into OAM.
+CutVBlank::
+    xor a
+    ldh [rSCX], a
+    ld hl, wCutOAM
+    ld de, $FE08
+    ld b, 4 * {MAX}
+.oam:
+    ld a, [hl+]
+    ld [de], a
+    inc e
+    dec b
+    jr nz, .oam
+    ret
+"""
+
+
+CARD_CODE = """
+DEF CARD_TOP EQU 144         ; the scroll that shows the card whole
+
+SECTION "Round card", WRAM0
+wCardRows: dw               ; the card's rows (tiles, then attributes)
+wCardRow: db                ; the next to draw
+wCardY: db                  ; the screen's scroll up so far
+wCardHold: db
+wCardDst: dw
+wCardOn: db                 ; up (the slide step leaves the scroll be; cleared as a scene loads)
+
+SECTION "Code: Round card", ROM0
+; A frame of the card: its next row, if the scroll has brought it a row from view, into the map rows below the
+; screen ((18 + row) & 31: past the bottom, round to the top's, gone by then).
+CardStep:
+    ld a, [wCardRow]
+    cp 18
+    ret nc
+    ld c, a
+    add a
+    add a
+    add a
+    ld b, a                 ; B = 8 x row
+    ld a, [wCardY]
+    add 8
+    cp b
+    ret c
+    ld a, c
+    inc a
+    ld [wCardRow], a
+    add 18 - 1
+    and 31
+    ld l, a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    ld de, $9800
+    add hl, de
+    ld a, l
+    ld [wCardDst], a
+    ld a, h
+    ld [wCardDst + 1], a
+    ld a, [wCardRows]
+    ld l, a
+    ld a, [wCardRows + 1]
+    ld h, a
+    ld b, 0
+    ld a, c                 ; + 20 x row
+    add a
+    add a
+    ld c, a
+    add hl, bc
+    add hl, bc
+    add hl, bc
+    add hl, bc
+    add hl, bc
+    QUEUE_PATCH CardRowPatch
+    ret
+
+; (VBlank) HL = a card row's tiles: into the map at wCardDst; Color: its attributes too (18 rows on).
+CardRowPatch:
+    ld a, [wCardDst]
+    ld e, a
+    ld a, [wCardDst + 1]
+    ld d, a
+    push de
+    ld b, 20
+.tile:
+    ld a, [hl+]
+    ld [de], a
+    inc e
+    dec b
+    jr nz, .tile
+    pop de
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    ld bc, 340
+    add hl, bc
+    ld a, 1
+    ldh [rVBK], a
+    ld b, 20
+.attr:
+    ld a, [hl+]
+    ld [de], a
+    inc e
+    dec b
+    jr nz, .attr
+    xor a
+    ldh [rVBK], a
+    ret
+"""
+
+
+TYPE_CODE = """
+DEF TY_END EQU 0
+DEF TY_PAUSE EQU 1          ; frames
+DEF TY_LETTER EQU 2         ; a list patch of one (1, address, tile); its sound, then a letter's wait
+DEF TY_CLEAR EQU 3          ; a list patch (a row back as it was); on next frame
+DEF TY_SPACE EQU 4          ; a letter's wait
+DEF TY_SOUND EQU 5          ; the letters' sound from here: an effect + 1 (0 none)
+
+SECTION "Typed text", WRAM0
+wTyPtr: dw
+wTyWait: db
+wTySound: db
+wTyEvery: db
+wTyDone: db
+
+SECTION "Code: Typed text", ROM0
+; HL = a scene's groups, A = the group (past the last: the last); one of its variants at random to type.
+TypeStart::
+    ld c, a
+    ld a, [hl+]
+    dec a
+    cp c
+    jr c, .last
+    ld a, c
+.last:
+    add a
+    add l
+    ld l, a
+    adc h
+    sub l
+    ld h, a
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    ld b, [hl]              ; its variants: one by the divider's count
+    inc hl
+    ldh a, [$FF04]          ; (DIV)
+.mod:
+    sub b
+    jr nc, .mod
+    add b
+    add a
+    add l
+    ld l, a
+    adc h
+    sub l
+    ld h, a
+    ld a, [hl+]
+    ld [wTyPtr], a
+    ld a, [hl]
+    ld [wTyPtr + 1], a
+    xor a
+    ld [wTyWait], a
+    ld [wTySound], a
+    ld [wTyDone], a
+    ret
+
+; A frame of typing: the next op once the wait is over. (One patch a frame: every op that queues one ends it.)
+TypeStep::
+    ld hl, wTyWait
+    ld a, [hl]
+    and a
+    jr z, .next
+    dec [hl]
+    ret
+.next:
+    ld a, [wTyPtr]
+    ld l, a
+    ld a, [wTyPtr + 1]
+    ld h, a
+.op:
+    ld a, [hl+]
+    and a
+    jr z, .end
+    dec a
+    jr z, .pause
+    dec a
+    jr z, .letter
+    dec a
+    jr z, .clear
+    dec a
+    jr z, .space
+    ld a, [hl+]             ; TY_SOUND
+    ld [wTySound], a
+    jr .op
+.pause:
+    ld a, [hl+]
+    ld [wTyWait], a
+    jr .save
+.letter:
+    QUEUE_PATCH PkListPatch
+    ld de, 4
+    add hl, de
+    ld a, [wTySound]
+    and a
+    jr z, .space
+    dec a
+    call PlaySfx            ; (keeps HL)
+.space:
+    ld a, [wTyEvery]
+    dec a
+    ld [wTyWait], a
+    jr .save
+.clear:
+    QUEUE_PATCH PkListPatch
+    ld a, [hl+]
+    ld e, a
+    add a
+    add e
+    ld e, a
+    ld d, 0
+    add hl, de
+    jr .save
+.end:
+    dec hl
+    ld a, 1
+    ld [wTyDone], a
+.save:
+    ld a, l
+    ld [wTyPtr], a
+    ld a, h
+    ld [wTyPtr + 1], a
+    ret
 """
 
 
@@ -1742,7 +2897,7 @@ ENDC
     ldh [hTimer], a
     ret
 .go:
-{"    ld a, FADE_STEPS        ; the steps left the screen faded: on with the fade from there" + nl + "    ldh [hFadeStep], a" + nl if fade and m["confirm"]["faded"] else ""}    ldh a, [hSel]
+{"    ld a, FADE_STEPS        ; the steps left the screen faded: on with the fade from there" + nl + "    ldh [hFadeStep], a" + nl if fade and m["confirm"]["faded"] else ""}{("    ldh a, [hSel]           ; (the pass key's item: the scene its code goes to)" + nl + f"    cp {m['pass_key']['item']}" + nl + "    jr nz, .item" + nl + "    ld a, [wPkTarget]" + nl + "    jp StartTransition" + nl + ".item:" + nl) if m.get("pass_key") else ""}    ldh a, [hSel]
     add LOW(Scene{i}ItemTarget)
     ld l, a
     adc HIGH(Scene{i}ItemTarget)
@@ -1774,8 +2929,9 @@ ENDC
     or PADF_DOWN
 .noSelect:
 """ if m.get("select_moves") else ""
+    pk = m.get("pass_key")
     return f"""Scene{i}Update:              ; menu: up/down{"/Select" if select else ""} to move, A or Start to choose
-    ldh a, [hPadRepeat]
+{_pk_menu_code(i, pk) + ".menu:" + nl if pk else ""}    ldh a, [hPadRepeat]
     and a
     jr z, .cursor           ; nothing pressed: just animate
 {select}    ld b, a
@@ -1803,12 +2959,12 @@ ENDC
 .up:
     ldh [hSel], a
 .notUp:
-    ldh a, [hPadNew]
+{"    ldh a, [hSel]           ; (the pass key's item: its keys are the key's)" + nl + f"    cp {pk['item']}" + nl + "    jr z, .cursor" + nl if pk else ""}    ldh a, [hPadNew]
     and PADF_A | PADF_START
     jr z, .cursor
     ld a, SFX_MENU_CONFIRM
     call PlaySfx
-{confirm_start}
+{".choose:" + nl if pk else ""}{confirm_start}
 .cursor:                    ; ease toward the chosen item: half the distance each frame
     ldh a, [hSel]
     add LOW(Scene{i}CursorY)
@@ -1902,7 +3058,8 @@ def generate_asm(project):
     if len(puzzles) > 1:
         raise ProjectError(["A project can have one puzzle grid scene for now."])
     fights = [i for i, sc in enumerate(scenes) if sc.get("fight")]
-    slides = any(s.get("slide") for s in scenes)
+    slides = any(s.get("slide") or (s["press"] or {}).get("card") for s in scenes)   # (a round card scrolls too)
+    cards = [i for i, s in enumerate(scenes) if (s["press"] or {}).get("card")]
     repeat = menus or options or bool(puzzles) or passes
     opt_index, opt_rows = {}, []
     for i, sc in enumerate(scenes):
@@ -1913,7 +3070,7 @@ def generate_asm(project):
     if len(set(names)) != len(names):
         dup = sorted({n for n in names if names.count(n) > 1})
         raise ProjectError([f"Two options screens use the same option name ({', '.join(dup)}); rename one."])
-    patches = options or menus or passes or any(s["press"] and (s["press"]["area"] or (s["press"]["prompt"] and s["press"]["prompt"]["blink"]))
+    patches = options or menus or passes or any(s["press"] and (s["press"]["area"] or s.get("typed") or s["press"].get("card") or (s["press"]["prompt"] and s["press"]["prompt"]["blink"]))
                            for s in scenes)
     prompt_blink = any(s["press"] and s["press"]["prompt"] and s["press"]["prompt"]["blink"] for s in scenes)
     interactive = menus or presses or options or passes or bool(puzzles) or bool(fights) or slides or \
@@ -1922,7 +3079,9 @@ def generate_asm(project):
         return _static_asm(project, scenes[0])
 
     cursor_on = (menus or options) and project["cursor"] is not None
-    sprites = cursor_on or bool(fights)
+    cutscenes = [i for i, sc in enumerate(scenes) if sc.get("cutscene")]
+    typed_scenes = [i for i, sc in enumerate(scenes) if sc.get("typed")]
+    sprites = cursor_on or bool(fights) or bool(cutscenes)
     # Past what a plain 32 KB cartridge holds, scene data moves to switchable banks (MBC5).
     data_bytes = sum(len(s["tiles"]) * 16 + MAP_BYTES for s in scenes) + sum(FIGHT_BYTES for s in scenes if s.get("fight")) \
         + sum(0x4800 + (0x4000 if s["fight"]["nes"].get("sound") else 0)
@@ -1948,7 +3107,10 @@ def generate_asm(project):
         hram += ["hUpdateJump: ds 3        ; JP to the current update routine", "hFrame: db", "hPad: db", "hPadNew: db",
                  "hTimer: db", "hNextScene: db", "hSfxTranspose: db       ; semitones up for the next PlaySfx"]
     if fade:
-        hram += ["hFadeStep: db", "hPalDirty: db"]
+        hram += ["hFadeStep: db", "hPalDirty: db", "hLoadOn: db             ; loading with the display on (VWait)"]
+    if cutscenes:
+        hram += ["hCutOn: db              ; a cutscene's VBlank work", "hCutX: db", "hCutSub: db", "hCutAnim: db",
+                 "hCutFrame: db", "hCutDone: db", "hCutBox: db", "hCutTyped: db", "hCutTick: db"]
     if menus or presses:
         hram += ["hCounter: db"]
     if menus:
@@ -1988,6 +3150,10 @@ def generate_asm(project):
     if slides:
         vblank_work.append("""    ldh a, [hScrollY]       ; a scene sliding in: this frame's scroll
     ldh [rSCY], a""")
+    if cutscenes:
+        vblank_work.append("""    ldh a, [hCutOn]         ; a cutscene: its top unscrolled, its actors' sprites
+    and a
+    call nz, CutVBlank""")
     if fights:
         vblank_work.append("""    ldh a, [hFtActive]      ; fight: sprites, the rival's pose, the HUD
     and a
@@ -2086,6 +3252,10 @@ def generate_asm(project):
     if patches:
         boot.append("    ldh [hPatchJump], a     ; ... and for the patch trampoline")
 
+    # Plain screens (press-start, still) load with the display on behind the faded-out palettes: copies wait for
+    # VBlank (VWait) and go in pieces. (Switching the display off flashes white on Game Boy Color.)
+    screen_on = [i for i, s in enumerate(scenes) if fade and not (s["menu"] or s["options"] or s.get("puzzle")
+                                                                or s.get("fight") or s.get("pass_key"))]
     finish = []
     reset = (["ldh [hSel], a"] if menus else []) + (["ldh [hPatchPending], a"] if patches else []) + \
         (["ldh [hPromptHidden], a"] if prompt_blink else [])
@@ -2100,7 +3270,7 @@ def generate_asm(project):
     elif interactive:
         finish.append("    call SetSceneUpdate")
     if cursor_on:
-        finish.append("""    ldh a, [hCursorY]       ; OAM is writable while the screen is off
+        finish.append(("    call VWait" + nl if screen_on else "") + """    ldh a, [hCursorY]       ; OAM is writable while the screen is off
     ld [OAM_CURSOR], a
     ldh a, [hCursorX]
     ld [OAM_CURSOR + 1], a""")
@@ -2113,11 +3283,14 @@ def generate_asm(project):
     fight_pads = {k: max(len(scenes[f]["fight_swap"]["sets"][k]) * 16 for f in fights) for k in range(3)} if fights else {}
     fight_table = "\n".join(_fight_entry(f, scenes[f], index_of, "" if k == 0 else f"_F{k}") for k, f in enumerate(fights))
     scene_code = []
-    for i, s in enumerate(scenes):
+    in_bank = {i: [] for i in range(len(scenes))}   # a banked game: a press-start screen's code and patches go in
+    for i, s in enumerate(scenes):                  # its own data bank, mapped while it runs (ROM0 stays free)
         if s["menu"]:
             scene_code.append(_menu_code(i, s, bool(fade)))
+        elif s.get("cutscene"):
+            (in_bank[i] if banked else scene_code).append(_cut_code(i, s, index_of))
         elif s["press"]:
-            scene_code.append(_press_code(i, s, index_of, corner=any(
+            (in_bank[i] if banked else scene_code).append(_press_code(i, s, index_of, corner=any(
                 f.get("fight") and f["fight"]["corner"] is not None and index_of[f["fight"]["corner"]] == i for f in scenes)))
         elif s["options"]:
             scene_code.append(_options_code(i, s, index_of, opt_index))
@@ -2216,6 +3389,7 @@ SECTION "Stack", WRAM0
     ds {STACK_SIZE}
 wStackTop:
 wSavedSP: dw
+wLoadSrc: dw                ; (a map copied in pieces: where it's got to)
 
 SECTION "Code: Start", ROM0
 Start:
@@ -2226,7 +3400,7 @@ Start:
     inc a
 .notCGB:
     ldh [hIsCGB], a
-    ld sp, wStackTop
+{"    xor a                   ; (not loading with the display on: HRAM is random at power-on)" + nl + "    ldh [hLoadOn], a" + nl if screen_on else ""}    ld sp, wStackTop
 .waitVBlank:                ; the LCD may only be switched off during VBlank
     ldh a, [rLY]
     cp 144
@@ -2278,18 +3452,18 @@ VBlankDone:                 ; everything that must happen during VBlank is done
     ldh [hPadNew], a        ; pressed this frame
     ld a, b
     ldh [hPad], a           ; held
-{REPEAT_CODE if repeat else ""}{SLIDE_STEP_CODE if slides else ""}    call hUpdateJump
-    call SfxUpdate
+{REPEAT_CODE if repeat else ""}{(CARD_HOLD_CHECK if cards else "") + SLIDE_STEP_CODE if slides else ""}    call hUpdateJump
+{"    ldh a, [hCutOn]         ; (a cutscene runs the sound itself, before its mid-frame scroll splits)" + nl + "    and a" + nl + "    jp nz, MainLoop" + nl if cutscenes else ""}    call SfxUpdate
     jp MainLoop
 
 SECTION "Code: Scenes", ROM0
 ; Load scene A with the screen off. Tiles, map and palette map go by DMA on Game Boy Color.
 LoadScene:
     ldh [hScene], a
-    ldh a, [rLCDC]
+{"    xor a                   ; (a cutscene's VBlank work done)" + nl + "    ldh [hCutOn], a" + nl + "    ldh [rSCX], a" + nl if cutscenes else ""}{"    xor a                   ; (not loading with the display on, unless a plain screen turns it so)" + nl + "    ldh [hLoadOn], a" + nl if screen_on else ""}{"    ldh a, [hFtActive]      ; leaving a fight: its scroll split ends now (it held through the fade)" + nl + "    and a" + nl + "    call nz, FtStop" + nl if fights else ""}    ldh a, [rLCDC]
     add a                   ; screen already off (at boot)? bit 7 -> carry
     jr nc, .screenOff
-.waitVBlank:
+{SCREEN_ON_CHECK if screen_on else ""}.waitVBlank:
     ldh a, [rLY]
     cp 144
     jr c, .waitVBlank
@@ -2307,12 +3481,12 @@ LoadScene:
     ld a, [hl+]
     ld h, [hl]
     ld l, a
-{"    xor a                   ; not sliding unless this scene starts one" + nl + "    ldh [hScrollY], a" + nl if slides else ""}{_bank_switch() if banked else ""}    call JumpHL
+{"    xor a                   ; not sliding unless this scene starts one" + nl + "    ldh [hScrollY], a" + nl if slides else ""}{"    ld [wCardOn], a         ; (nor a round card up)" + nl if cards else ""}{_bank_switch() if banked else ""}    call JumpHL
 {nl.join(finish)}
-    call UploadPalettes
+{"    call VWait              ; (palettes: written in VBlank when the screen stayed on)" + nl if screen_on else ""}    call UploadPalettes
 {"    ldh a, [hScrollY]" + nl + "    ldh [rSCY], a" + nl if slides else ""}    ld a, LCDC_ON
     ldh [rLCDC], a
-    ret
+{SCREEN_ON_END if screen_on else ""}    ret
 
 JumpHL:
     jp hl
@@ -2320,11 +3494,13 @@ JumpHL:
 SceneLoads:
     dw {", ".join(f"Scene{i}Load" for i in range(len(scenes)))}
 {"SceneBanks:" + nl + "    db " + ", ".join(f"BANK(Scene{i}Tiles)" for i in range(len(scenes))) if banked else ""}
+{("SceneScreenOn:              ; 1: loads with the display on" + nl + "    db " + ", ".join("1" if i in screen_on else "0" for i in range(len(scenes))) + nl + VWAIT_CODE) if screen_on else ""}
 
-{nl.join(_scene_load(i, s, cursor_on, opt_index, markers) for i, s in enumerate(scenes))}{nl + nl + SLIDE_FILL.rstrip() if slides else ""}
+{nl.join(_scene_load(i, s, cursor_on, opt_index, markers) for i, s in enumerate(scenes))}{nl + nl + (SLIDE_FILL_ON if screen_on else SLIDE_FILL).rstrip() if slides else ""}
 
 ; Copy C tiles (1-128) from HL to DE.
 CopyTiles:
+{COPY_TILES_CHUNKS if screen_on else ""}CopyTilesNow:
     ldh a, [hIsCGB]
     and a
     jr z, .byCPU
@@ -2353,7 +3529,7 @@ CopyTiles:
 
 ; Copy a 32-wide padded map from HL to $9800 (in the current VRAM bank).
 CopyMap:
-    ldh a, [hIsCGB]
+{"    call VWait" + nl if screen_on else ""}    ldh a, [hIsCGB]
     and a
     jr z, .byCPU
     ld a, h
@@ -2368,7 +3544,7 @@ CopyMap:
     ldh [rHDMA5], a
     ret
 .byCPU:
-    ld [wSavedSP], sp
+{COPY_MAP_CHUNKS if screen_on else ""}    ld [wSavedSP], sp
     ld sp, hl
     ld hl, $9800
     ld b, MAP_H
@@ -2521,19 +3697,31 @@ FadeIn:
             patch_data.append(_menu_data(i, s, index_of))
             if s["menu"].get("confirm"):
                 patch_data.append(_confirm_asm(i, s, project))
+            if s["menu"].get("pass_key"):
+                patch_data.append(_pk_data(i, s["menu"]["pass_key"]))
         elif s["options"]:
             for r_i, r in enumerate(s["options"]["rows"]):
                 cells = len(s["option_strips"][r_i][0])
                 patch_code.append(_patch_routine(f"Scene{i}Row{r_i}Patch", [(r["valueY"] * 32 + r["valueX"], cells)],
                                                  f'option "{r["label"]}"'))
             patch_data.append(_options_data(i, s))
+        elif s.get("cutscene"):
+            (in_bank[i] if banked else patch_data).append(_cut_data(i, s))
         elif s["press"]:
             code = _press_patches(i, s)
             if code:
-                patch_code.append(code)
+                (in_bank[i] if banked else patch_code).append(code)
             data = _press_data(i, s)
             if data:
-                patch_data.append(data)
+                (in_bank[i] if banked else patch_data).append(data)
+    if any((sc["menu"] or {}).get("pass_key") for sc in scenes) or cutscenes or typed_scenes:
+        out.append(PK_CODE)             # (its list patch, for the others too)
+    if cutscenes:
+        out.append(CUT_CODE.replace("{MAX}", str(max(len(fr) for i in cutscenes for fr in _cut_oam(scenes[i])))))
+    if typed_scenes:
+        out.append(TYPE_CODE)
+    if cards:
+        out.append(CARD_CODE)
     if patch_code:
         out.append('SECTION "Code: Map patches", ROM0\n' + "\n\n".join(patch_code) + "\n")
     if patch_data:
@@ -2545,7 +3733,8 @@ FadeIn:
         if markers:
             reset += ["    ld a, 1", "    ld [OAM_CURSOR + 6], a  ; slider marker: tile 1", f"    ld a, {project['cursor']['palette']}",
                       "    ld [OAM_CURSOR + 7], a"]
-        out.append('SECTION "Code: OAM", ROM0\nResetOAM:                   ; screen off or VBlank: every sprite hidden\n' + nl.join(reset) + "\n    ret\n")
+        out.append('SECTION "Code: OAM", ROM0\nResetOAM:                   ; screen off or VBlank: every sprite hidden\n'
+                   + ("    call VWait\n" if screen_on else "") + nl.join(reset) + "\n    ret\n")
     if cursor_on:
         out.append(f"""SECTION "Data: Sprites", ROM0
 CursorTile:
@@ -2667,7 +3856,7 @@ OptionDefaults:
     out.append('SECTION "Data: Sound effects", ROM0\n' + sfx_data + "\n")
     if nes_sound:                   # each effect's counterpart in the NES game (an SQ1 effect; 0: none)
         out.append("SfxNes:\n" + _db([NES_SFX.get(n, 0) for n in sfx.effects(project.get("sound", "arcade"), sfx_groups(scenes))]) + "\n")
-    out += [_scene_data(i, s, banked) for i, s in enumerate(scenes)]
+    out += [_scene_data(i, s, banked) + ("\n".join(in_bank[i]) + "\n" if in_bank[i] else "") for i, s in enumerate(scenes)]
     if banked:                      # every bank switch noted (hBank), for what maps a bank of its own and puts back
         hram.append("hBank: db               ; the ROM bank mapped")    # (UploadPalettes): all of them in ROM0
         out = [re.sub(r"^(\s*)ld \[\$2000\], a", r"\1ldh [hBank], a\n\1ld [$2000], a", o, flags=re.M) for o in out]
