@@ -1976,9 +1976,9 @@ DEF rAUDENA EQU $FF26
 ApuLengths:
     db 10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14
     db 12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30
-; GB wave RAM: the NES triangle's 32 steps
+; GB wave RAM: the NES triangle's 32 steps, from its middle (a note starts there: no jump)
 ApuTriangle:
-    db $FE, $DC, $BA, $98, $76, $54, $32, $10, $01, $23, $45, $67, $89, $AB, $CD, $EF
+    db $76, $54, $32, $10, $01, $23, $45, $67, $89, $AB, $CD, $EF, $FE, $DC, $BA, $98
 ; NES noise periods (4 to 4068 CPU cycles) as the GB's noise clock (NR43 shift and divider), nearest
 ApuNoiseClock:
     db $00, $01, $02, $05, $15, $17, $25, $26, $27, $35, $37, $45, $47, $55, $65, $75
@@ -2033,7 +2033,7 @@ ApuQuiet::
     xor a
     ldh [rAUD1ENV], a
     ldh [rAUD2ENV], a
-    ldh [rAUD3LEVEL], a
+    ldh [rAUD3ENA], a          ; (the wave's DAC off: no jump)
     ldh [rAUD4ENV], a
     ret
 
@@ -2889,13 +2889,25 @@ TriangleOut:
     jr c, .vol
 .on:
     ld b, $20
-.vol:
-    ld a, [wGbVol + 2]
+.vol:                       ; (silenced: its DAC off, resting at the middle as the NES's triangle holds still; the
+    ld a, [wGbVol + 2]      ; volume at 0 would jump it to an edge, a thump at every short note)
     cp b
     jr z, .tune
     ld a, b
     ld [wGbVol + 2], a
+    and a
+    jr nz, .start
+    ldh [rAUD3ENA], a
+    ret
+.start:                     ; on again: from the wave's middle, its frequency written with the restart
+    ld a, $80
+    ldh [rAUD3ENA], a
+    ld a, $20
     ldh [rAUD3LEVEL], a
+    ld a, 1
+    ld [wApuStart + 2], a
+    ld a, $FF
+    ld [wGbFreq + 5], a
 .tune:
     inc hl
     call GbFreq
@@ -2911,6 +2923,11 @@ TriangleOut:
     ldh [rAUD3LOW], a
     ld a, h
     ld [wGbFreq + 5], a
+    ld b, a
+    ld a, [wApuStart + 2]
+    rrca                    ; (1: the restart bit)
+    and $80
+    or b
     ldh [rAUD3HIGH], a
     ret
 

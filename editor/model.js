@@ -366,9 +366,9 @@ export function textInk(label, x, y) {
 export const FIGHT_W = 8, FIGHT_H = 10;
 export const FIGHT_POSES = ['idle', 'idle2', 'guard', 'hit_l', 'hit_r', 'hit_body', 'dazed',
                             'jab_tell', 'jab_mid', 'jab', 'hook_tell', 'hook_mid', 'hook', 'slip', 'idle3', 'hit_back',
-                            'kd_stagger', 'kd_fall', 'kd_down', 'kd_kneel', 'taunt', 'arm_pop', 'guard_low',
+                            'kd_stagger', 'kd_fall', 'kd_down', 'kd_kneel', 'kd_rise', 'taunt', 'arm_pop', 'guard_low',
                             'tell1', 'tell2', 'tell3', 'tell4', 'tell5', 'extra1', 'extra2', 'extra3', 'extra4',
-                            'kd2_stagger', 'kd2_fall', 'kd2_down', 'kd2_kneel'];   // (his other way down)   // (a fighter's own wind-up frames)
+                            'kd2_stagger', 'kd2_fall', 'kd2_down', 'kd2_kneel', 'kd2_rise'];   // (his other way down)   // (a fighter's own wind-up frames)
 const FIGHT_HUD = { stars: 1, hearts: 2, points: 6, clock: 4, round: 1, playerBar: 6, rivalBar: 6 };
 
 // Pixel index -> slot for one rival pose, placed in the scene.
@@ -861,7 +861,7 @@ const POSE_FALLBACK = { idle2: 'idle', idle3: 'idle', hit_back: 'hit_l', slip: '
                         kd_down: 'down', kd_kneel: 'fall', arm_pop: 'hit_body', guard_low: 'guard',
                         tell1: 'jab_tell', tell2: 'jab_tell', tell3: 'jab_tell', tell4: 'jab_tell', tell5: 'jab_tell',
                         kd2_stagger: 'kd_stagger', kd2_fall: 'kd_fall', kd2_down: 'kd_down', kd2_kneel: 'kd_kneel',
-                        extra1: 'jab', extra2: 'jab', extra3: 'jab', extra4: 'jab' };   // as in gbstage/fight.py: older projects borrow a pose
+                        extra1: 'jab', extra2: 'jab', extra3: 'jab', extra4: 'jab', kd_rise: 'kd_kneel', kd2_rise: 'kd2_kneel' };   // as in gbstage/fight.py: older projects borrow a pose
 const cloneFight = ft => {
   if (!ft) return ft;
   const out = JSON.parse(JSON.stringify(ft));

@@ -1702,12 +1702,13 @@ def _heads_data(s, suffix):
             lists.append(lists[kit.RIVAL_POSES.index(pose)])
             continue
         m, b, a = cg["maps"][pose], cg["banks"][pose], cg["attrs"][pose]
+        fl = cg.get("flips", {}).get(pose) or [0] * len(m)
         keys = [(t, bb) for p in kit.RIVAL_POSES for t, bb in zip(cg["maps"][p], cg["banks"][p])]
         out = []
         blank = cg.setdefault("_blank", max(set(keys), key=keys.count))
         for i in range(kit.head_rows(pose) * kit.REGION_W):
             if (m[i], b[i]) != blank and m[i] >= 128:
-                out.append((i // kit.REGION_W * 8, i % kit.REGION_W * 8, m[i], obj.get(a[i], 5) | b[i] << 3))
+                out.append((i // kit.REGION_W * 8, i % kit.REGION_W * 8, m[i], obj.get(a[i], 5) | b[i] << 3 | fl[i] << 5))
         lists.append(out)
     names = [f"RivalHead{suffix}_{k}" for k in range(len(lists))]
     body = "\n".join(f"{n}:\n    db {len(l)}" + "".join(f"\n    db {dy}, {dx}, {t}, ${at:02X}" for dy, dx, t, at in l)
@@ -1775,7 +1776,9 @@ def _fight_asm(i, s, index_of, project, banked=False, suffix="", shared=True, pa
     pl_cgb, pl_cgb_def = "", ""
     if s.get("fight_pl_cgb"):           # Color: the player's own poses, unshared (their tiles in bank 1)
         pc = s["fight_pl_cgb"]
-        pl_cgb = (f"PlayerPosesCgb:\n    dw {', '.join(f'PlayerCgb_{p}' for p in kit.PLAYER_POSES)}\n"
+        pl_cgb = (f"PlayerCgbShared:            ; per pose: 1 = Color draws the original's (its tiles loaded as needed)\n"
+                  f"    db {', '.join('1' if p in kit.PLAYER_CGB_SHARED else '0' for p in kit.PLAYER_POSES)}\n"
+                  f"PlayerPosesCgb:\n    dw {', '.join(f'PlayerCgb_{p}' for p in kit.PLAYER_POSES)}\n"
                   + "\n".join(f"PlayerCgb_{p}:\n    db {len(pc['sprites'][p])}\n"
                               + "\n".join(f"    db {dy}, {dx}, {t}, ${a:02X}" for dy, dx, t, a in pc["sprites"][p])
                               for p in kit.PLAYER_POSES)
@@ -1816,6 +1819,11 @@ def _fight_asm(i, s, index_of, project, banked=False, suffix="", shared=True, pa
                     "DEF FT_NES_END EQU 72           ; frames from the winner's call to the fade (the NES's is black 90 frames on)\n"
                     )
         set_of = {p: k for k, (name, ps) in enumerate(kit.POSE_SETS.items()) for p in ps}
+        gem = (ft.get("nes") or {}).get("jewel") or {}
+        order = sorted(set(ft["palettes"].values()))     # (his palettes copied to sprite palettes 5 on, in this order)
+        objp = lambda kind: 5 + order.index(ft["palettes"][kind])
+        jewel_head = (f"{s['fight_jewel_tile']}, {objp('g')}, {objp('h')}" if gem and ft.get("rope_row") else "0, 0, 0")
+        jewel_poses = ", ".join(f"{gem[p][0]}, {gem[p][1]}" if p in gem else "$FF, $FF" for p in kit.RIVAL_POSES)
         nes_data = f"""
 SECTION "NES fighter", ROMX[$4000]
 NesFighter::                ; Punch-Out!!'s fighter bank, as it was at $8000 (see kit_nes.asm)
@@ -1984,7 +1992,10 @@ FtFlashPalettes:            ; during VBlank, Color only: the rival's palettes, w
     and a
     ld hl, RivalPalNormal
     jr z, .upload
+    dec a
     ld hl, RivalPalFlash
+    jr z, .upload
+    ld hl, RivalPalTell     ; (2: his tell)
 .upload:
 {"    push hl" + nl if ft.get("rope_row") else ""}    ld de, RivalPalSlots
     ld a, [de]
@@ -2034,6 +2045,13 @@ RivalPalNormal:
     dw {", ".join(_rgb555(project["palettes"][k]).split(", ")[j] for k in rival_pals for j in range(4))}
 RivalPalFlash:              ; a hit flushes him red; the background and outline stay
     dw {", ".join(_rgb555([c if j in (0, 3) else ([31, 16, 12] if j == 1 else [26, 4, 4]) for j, c in enumerate(project["palettes"][k])]).split(", ")[j] for k in rival_pals for j in range(4))}
+RivalPalTell:               ; his tell, as the NES shows it (Tiger's: his black goes gray); the rest: as normal
+    dw {", ".join(_rgb555([((ft.get("nes") or {}).get("tell") or {}).get("color", c) if j == 3 else c for j, c in enumerate(project["palettes"][k])]).split(", ")[j] for k in rival_pals for j in range(4))}
+RivalJewel:                 ; his turban's gem (Great Tiger's): its tile (0: none), Color palettes (his gloves', in his
+    db {jewel_head}         ; tell his white's), then per pose its middle in his area ($FF: not showing)
+    db {jewel_poses}
+RivalTell:                  ; its NES frame and state ($FF: none)
+    db {((ft.get("nes") or {}).get("tell") or {}).get("frame", 255)}, {((ft.get("nes") or {}).get("tell") or {}).get("state", 255)}
 GetupPlan:                  ; per knockdown: count he gets up at, health then
     db {", ".join(f"{c}, {h}" for c, h in kit.GETUP_PLAN)}
 RivalScript:                ; op, argument
@@ -2057,9 +2075,13 @@ RefTiles:                   ; per pose: its own tiles' address and count, loaded
 {nl.join(f"RefTiles_{p}:" + nl + (_db([b for t in s['fight_ref_tiles'][p] for b in encode_tile(list(t))]) or "") for p in kit.REF_POSES)}
 PlayerRare:                 ; per player pose: 1 if it's loaded as it's needed
     db {", ".join("1" if p in kit.PLAYER_RARE else "0" for p in kit.PLAYER_POSES)}
+PlayerRareHold:             ; per pose: its sequence (the star punch 1, down and up 2): one held while the next loads
+    db {", ".join(str(kit.PLAYER_HOLD.get(p, 0)) for p in kit.PLAYER_POSES)}
 RareTiles:                  ; per player pose: its own tiles' address and count (the rare ones)
 {nl.join(f"    dw RareTiles_{p}" + nl + f"    db {len(s['fight_rare_tiles'][p])}" if p in kit.PLAYER_RARE else "    dw 0" + nl + "    db 0" for p in kit.PLAYER_POSES)}
 {nl.join(f"RareTiles_{p}:" + nl + (_db([b for t in s['fight_rare_tiles'][p] for b in encode_tile(list(t))]) or "") for p in kit.PLAYER_RARE)}
+FtObjBytes:                 ; (this fight's: one has a tile more, Great Tiger's gem)
+    dw {len(s['fight_obj']) * 16}
 FtObjTiles:                 ; the player's {len(s['fight_obj']) - len(kit.COUNT_GLYPHS)} tiles, then the count's glyphs
 {_db(obj_bytes)}
 {nes_data}
@@ -2082,7 +2104,7 @@ FtObjTiles:                 ; the player's {len(s['fight_obj']) - len(kit.COUNT_
                 runs.append((b, 16 * n, 16, vram(t), t + 1))
         runs = [r[:4] for r in runs]
         cgb_rows = lambda pose: (_db(rows(cgb["maps"][pose], tiles), 32) + "\n"
-                                 + _db(rows([a | b << 3 for a, b in zip(cgb["attrs"][pose], cgb["banks"][pose])], s["cell_pal"]), 32))
+                                 + _db(rows([a | b << 3 | f << 5 for a, b, f in zip(cgb["attrs"][pose], cgb["banks"][pose], cgb.get("flips", {}).get(pose) or [0] * len(cgb["banks"][pose]))], s["cell_pal"]), 32))
         cgb_data = f"""
 SECTION "Data: Rival poses (Color){suffix}", ROMX[$4000]
 CgbMaps{suffix}:                ; per pose: its map rows' address, then their bank; each: its rows, their attributes
@@ -2399,6 +2421,8 @@ def _cut_code(i, s, index_of):
     split = (box["y"] + len(box["lines"]) + 2) * 8 if box else 0
     box_rows = len(box["lines"]) + 2 if box else 0
     target = index_of[s["press"]["target"]]
+    hush = ("IF DEF(FT_NES_SOUND)\n    ldh a, [hNesSound]      ; (quiet: its NES song stopped as it goes on)\n    and a\n"
+            "    jr z, .hushed\n    ld a, $80\n    ld [wNes + $F2], a\n.hushed:\nENDC\n") if s["press"].get("quiet") else ""
     box_code = f"""    ldh a, [hCutDone]       ; the box: after its wait, its background, then a letter every few frames
     and a
     jp nz, .start
@@ -2468,12 +2492,12 @@ def _cut_code(i, s, index_of):
     ldh a, [hPadNew]
     and PADF_START | PADF_A
     jp z, .split
-    ld a, {target}
+{hush}    ld a, {target}
     jp StartTransition
 """ if box else f"""    ldh a, [hPadNew]
     and PADF_START | PADF_A
     jp z, .split
-    ld a, {target}
+{hush}    ld a, {target}
     jp StartTransition
 """
     return f"""Scene{i}Update:              ; a cutscene: the picture scrolls by, the actors run, its box writes itself
@@ -3274,17 +3298,23 @@ def generate_asm(project):
     and a
     call nz, FtVBlank""")
     if cursor_on:
-        vblank_work.append("""    ldh a, [hCursorY]       ; a few sprites: write them straight to OAM (cheaper than DMA)
+        vblank_work.append(("""    ldh a, [hFtActive]      ; (a fight's sprites are its own: its first is no cursor)
+    and a
+    jr nz, .noCursor
+""" if fights else "") + """    ldh a, [hCursorY]       ; a few sprites: write them straight to OAM (cheaper than DMA)
     ld [OAM_CURSOR], a
     ldh a, [hCursorX]
-    ld [OAM_CURSOR + 1], a""")
+    ld [OAM_CURSOR + 1], a""" + ("\n.noCursor:" if fights else ""))
     if gloves:
         vblank_work.append("    call GloveOam           ; the menu's gloves (or them away)")
     if markers:
-        vblank_work.append("""    ldh a, [hMarkerY]
+        vblank_work.append(("""    ldh a, [hFtActive]      ; (nor its second a slider's marker)
+    and a
+    jr nz, .noMarker
+""" if fights else "") + """    ldh a, [hMarkerY]
     ld [OAM_CURSOR + 4], a
     ldh a, [hMarkerX]
-    ld [OAM_CURSOR + 5], a""")
+    ld [OAM_CURSOR + 5], a""" + ("\n.noMarker:" if fights else ""))
     if confirms:
         vblank_work.append("""    ldh a, [hConfirmDirty]  ; a menu choice's animation: its sprite and colors
     and a

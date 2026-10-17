@@ -168,10 +168,10 @@ def write_sheet(path, frames, FW, FH, cols=4):
 # ---- editor/importer.js, ported ----
 
 FIGHT_W, FIGHT_H = 8, 10
-FIGHT_POSES = ['idle','idle2','guard','hit_l','hit_r','hit_body','dazed','jab_tell','jab_mid','jab','hook_tell','hook_mid','hook','slip','idle3','hit_back','kd_stagger','kd_fall','kd_down','kd_kneel','taunt','arm_pop','guard_low','tell1','tell2','tell3','tell4','tell5','extra1','extra2','extra3','extra4','kd2_stagger','kd2_fall','kd2_down','kd2_kneel']
+FIGHT_POSES = ['idle','idle2','guard','hit_l','hit_r','hit_body','dazed','jab_tell','jab_mid','jab','hook_tell','hook_mid','hook','slip','idle3','hit_back','kd_stagger','kd_fall','kd_down','kd_kneel','kd_rise','taunt','arm_pop','guard_low','tell1','tell2','tell3','tell4','tell5','extra1','extra2','extra3','extra4','kd2_stagger','kd2_fall','kd2_down','kd2_kneel','kd2_rise']
 TELL_FALLBACK = {**{f'tell{k}': 'jab_tell' for k in range(1, 6)}, **{f'kd2_{p}': f'kd_{p}' for p in ('stagger', 'fall', 'down', 'kneel')},
-                 **{f'extra{k}': 'jab' for k in range(1, 5)}}   # (a fighter without his own)
-PLAYER_POSES = ['idle','jab','jab_high','dodge','block','hit','star','down','win']
+                 **{f'extra{k}': 'jab' for k in range(1, 5)}, 'kd_rise': 'kd_kneel', 'kd2_rise': 'kd2_kneel'}   # (a fighter without his own)
+PLAYER_POSES = ['idle','jab','jab_high','dodge','block','hit','star','down','win','star2','star3','star4','jab_tell','high_tell','knocked','duck']
 RW, RH, PW, PH = 64, 80, 24, 48
 KINDS = 'sgh'
 expand = lambda v: (v << 3) | (v >> 2)
@@ -354,9 +354,13 @@ def merge_closest(poses, count):
         out[name] = {"pixels": "".join(px), "cells": poses[name]["cells"]}
     return out, (max(d for d, k, j in pairs if into.get(k) == j) if into else 0)
 
-PLAYER_ORDER = ["idle", "jab", "block", "dodge", "hit", "jab_high", "star", "down", "win"]   # most seen first
+PLAYER_ORDER = ["idle", "jab", "block", "dodge", "hit", "jab_high", "star", "down", "win", "star2", "star3", "star4",
+                "jab_tell", "high_tell", "knocked", "duck"]   # most seen first
 
-def share_player_tiles(poses, limit):
+STAR_POSES = ("star", "star2", "star3", "star4", "jab_tell", "high_tell", "knocked", "duck")   # (up a moment,
+                                                                                    # loaded as needed: shared more loosely)
+
+def share_player_tiles(poses, limit, star_extra=10):
     flip = lambda k: "".join(k[y * 8 + 7 - x] for y in range(8) for x in range(8))
     empty = "0" * 64
     pool = {empty: _planes(empty)}       # empty tiles are free; a stray pixel or two can become one
@@ -368,8 +372,10 @@ def share_player_tiles(poses, limit):
                 idx = [(by * 8 + y) * PW + bx * 8 + x for y in range(8) for x in range(8)]
                 key = "".join(px[i] for i in idx)
                 best = None
+                lim = limit + star_extra if name in STAR_POSES else limit + 3 if name == "win" else limit   # (his win:
+                                                                    # loaded as needed, its area sized by it)
                 for k, unflip in ((key, lambda t: t), (flip(key), flip)):    # a mirrored tile is free too
-                    got = _nearest(k, pool, limit) if limit else (k if k in pool else None)
+                    got = _nearest(k, pool, lim) if lim else (k if k in pool else None)
                     if got is not None:
                         a, b = _planes(k); c, d = pool[got]; n = bin((a ^ c) | (b ^ d)).count("1")
                         if best is None or n < best[0]: best = (n, unflip(got))
@@ -492,7 +498,7 @@ def write_preview(path, poses, pals, colors, pposes, zoom=3):
     rgb = lambda c: tuple((v << 3) | (v >> 2) for v in c) + (255,)
     mat = rgb(pals[0][0]); n = len(poses); cols = 6
     cw, chh = RW + 4, RH + 4
-    W = cols * cw; H = ((n + cols - 1) // cols) * chh + PH + 8
+    W = max(cols * cw, len(PLAYER_POSES) * (PW + 4)); H = ((n + cols - 1) // cols) * chh + PH + 8
     img = [[(255, 255, 255, 255)] * W for _ in range(H)]
     for k, (name, p) in enumerate(poses.items()):
         ox, oy = (k % cols) * cw, (k // cols) * chh
@@ -534,22 +540,25 @@ NES_FRAMES = {
 # the mirrored (right-hand / rightward) ones. Left punches and leftward dodges are the poses as drawn.
 DISASM_MAC = DISASM_BANK.with_name("PRG_Bank00B.bin")
 MAC_FRAMES = {
-    **{k: "idle" for k in ("00", "01", "58", "54", "12", "13", "1C", "05")},     # (05 is his duck: no pose for it)
+    **{k: "idle" for k in ("00", "01", "58", "54", "12", "13", "1C")}, "05": "duck",     # (05: his duck)
     **{k: "dodge" for k in ("08", "09", "0A", "60", "07")}, **{k: "dodge|" for k in ("0B", "0C", "61", "0D")},  # (the art is 0A)
     **{k: "block" for k in ("5F", "5E", "06", "23", "24")},
-    **{k: "jab" for k in ("0E", "0F", "10", "11")}, **{k: "jab|" for k in ("14", "15", "16")},   # (11, 16: full reach)
-    **{k: "jab_high" for k in ("17", "18", "19")}, **{k: "jab_high|" for k in ("1D", "1E", "1F")},
-    **{f"{k:02X}": "star" for k in range(0x25, 0x2F)},
+    **{k: "jab_tell" for k in ("0E", "0F")}, "14": "jab_tell|",                        # (his jab wound up, then out:
+    **{k: "jab" for k in ("10", "11")}, **{k: "jab|" for k in ("15", "16")},           # 11, 16 its full reach)
+    **{k: "high_tell" for k in ("17", "18")}, **{k: "high_tell|" for k in ("1D", "1E")},   # (to the face: wound up,
+    "19": "jab_high", "1F": "jab_high|",                                               # then up)
+    **{k: "star" for k in ("25", "26", "27", "28")}, "29": "star2", "2A": "star3",     # the star punch: wound up,
+    **{k: "star4" for k in ("2B", "2C", "2D", "2E")},                                  # rising, the uppercut, after
     **{k: "hit" for k in ("2F", "30", "33")}, **{k: "hit|" for k in ("31", "32", "34")},
-    "3A": "hit", "3B": "hit",                               # his knockdown: knocked back, facing us,
+    "3A": "knocked", "3B": "knocked",                       # his knockdown: knocked back, facing us,
     **{f"{k:02X}": "down" for k in range(0x3C, 0x44)},     # then sinking below the screen's edge (40-43: gone),
     **{f"{k:02X}": "idle" for k in range(0x44, 0x48)},     # and back up from behind, rising into view
     "48": "idle",                                           # (its top, $48, is him standing: the intro, and up)
     "55": "win", "56": "win", "57": "win",                  # he's won: turned to the camera, gloves up
     "19": "jab_high", "1A": "jab_high", "1B": "jab_high", "1F": "jab_high|", "20": "jab_high|", "21": "jab_high|",   # his punch to the face, all the way up
-    "35": "hit", **{f"{k:02X}": "down" for k in range(0x36, 0x3A)},           # his other knockdown: back, then sinking
+    "35": "knocked|", **{f"{k:02X}": "down" for k in range(0x36, 0x3A)},      # his other knockdown: back, then sinking
     **{f"{k:02X}": "idle" for k in range(0x49, 0x54)},     # the round's start: up into view from below
-    "04": "block",                                          # (his duck: the block, lower)
+    "04": "duck",                                           # (his duck: crouched, head down)
 }
 # ... where those frames sit (pixels down: the NES draws them lower each frame, cut off at the screen's
 # bottom; 48 is all the way under) and in his knockdown colors, pink (NES $25), green ($2A), dark ($08):
@@ -893,7 +902,9 @@ def title_gloves():
 
 
 # Little Mac's poses from the NES game's own frames (mac_nes.py draws them as bank B does); the rest from the rip.
-MAC_NES = dict(idle=0x00, jab=0x10, jab_high=0x1A, dodge=0x0A, block=0x5F, hit=0x2F, down=0x3C, win=0x55)
+MAC_NES = dict(idle=0x00, jab=0x10, jab_high=0x1A, dodge=0x0A, block=0x5F, hit=0x2F, down=0x3C, win=0x55,
+               star=0x25, star2=0x29, star3=0x2A, star4=0x2B,   # (the star punch: wound up, rising, the uppercut, after)
+               jab_tell=0x0E, high_tell=0x18, knocked=0x3B, duck=0x04)   # (wind-ups, knocked back, ducking)
 # ($18 draws as $10, his body jab; his punch to the face is $19-$1B, arm straight up: taller than the 24x48
 # frame at his scale, so its forearm is shortened, a few rows of it, to fit.)
 MAC_INK = [(0, 0, 0), (90, 205, 78), (247, 206, 195)]       # black, his greens, skin (the rip's, as the palette)
@@ -918,6 +929,11 @@ def mac_from_nes(s):
                 arm = [y for y in range(glove, len(f) // 2) if sum(1 for c in f[y] if c) <= 12]
                 drop = set(arm[k * len(arm) // extra] for k in range(extra)) if len(arm) >= extra else set()
                 f = [row for y, row in enumerate(f) if y not in drop]
+            if pose == "duck":                  # (the render leaves a slit down his back: his tank top's black)
+                for row in f:
+                    on = [x for x, c in enumerate(row) if c]
+                    for x in range(on[0], on[-1] + 1) if on else ():
+                        if not row[x]: row[x] = MAC_INK[0] + (255,)
             small = shrink_lines(f, s)          # (the game's own pixels, kept crisp)
         else:
             small = scale(cut(rip, boxes[MAC[pose]]), s, outline_weight=1.0)
@@ -1103,19 +1119,21 @@ TIGER_FROM_NES = dict(idle="C0", idle2="C4", idle3="48|", guard="08", guard_low=
 # Bald Bull (opponent 6, bank 3): his bob 02/00 then the jab 0E|-0E (state 16), his uppercut 82-80-16-18-1A (15),
 # the Bull Charge: hops back 46-44, charges 48, uppercuts 4A (17); down either way 26-2A-2C or 30-32-34-36-38.
 BULL_FRAMES = {
-    "C0": "idle", "00": "idle", "C6": "idle", "C8": "idle", "C4": "idle2", "04": "idle2", "06": "idle2", "C2": "idle3",
-    "08": "guard", "10": "guard", "12": "guard", "3A": "guard", "CA": "guard", "0A": "guard_low",
+    "C0": "idle", "00": "idle", "C6": "idle", "C8": "dazed", "C4": "idle2", "04": "idle2", "06": "idle2", "C2": "idle3",
+    "08": "guard", "10": "guard", "12": "guard", "3A": "guard", "CA": "dazed", "0A": "guard_low",   # (C8/CA: dazed, up
     "02": "tell1", "82": "tell2", "80": "tell3", "46": "tell4", "44": "tell5", "48": "slip", "4A": "jab_tell",
     "0E|": "jab_mid", "0E": "jab", "16": "hook_tell", "18": "hook_mid", "1A": "hook",
-    "20": "hit_body", "22": "hit_l", "22|": "hit_r", "24": "hit_back", "24|": "dazed", "CC": "taunt", "CE": "arm_pop",
+    "1C": "hit_body", "42|": "hit_body", "20": "extra1", "1E": "extra2",
+    "22": "hit_l", "22|": "hit_r", "24": "hit_back", "24|": "hit_back", "CC": "taunt", "CE": "arm_pop",
     "26": "kd_stagger", "28": "kd_fall", "2A": "kd_down", "2C": "kd_kneel", "2E": "kd_kneel",
     "30": "kd2_stagger", "32": "kd2_fall", "34": "kd2_down", "34|": "kd2_down", "36|": "kd2_kneel", "38|": "kd2_kneel",
 }
 BULL_FROM_NES = dict(idle="C0", idle2="C4", idle3="C2", guard="08", guard_low="0A", jab_tell="4A", jab_mid="0E|",
                      jab="0E", hook_tell="16", hook_mid="18", hook="1A", slip="48", hit_l="22", hit_r="22|",
-                     hit_body="20", hit_back="24", dazed="24", kd_stagger="26", kd_fall="28", kd_down="2A",
+                     hit_body="1C", hit_back="24", dazed="C8", kd_stagger="26", kd_fall="28", kd_down="2A",
                      kd_kneel="2C", taunt="CC", arm_pop="CE", tell1="02", tell2="82", tell3="80", tell4="46",
-                     tell5="44", kd2_stagger="30", kd2_fall="32", kd2_down="34", kd2_kneel="36|")
+                     tell5="44", extra1="20", extra2="1E",
+                     kd2_stagger="30", kd2_fall="32", kd2_down="34", kd2_kneel="36|")
 # Soda Popinski (opponent 8, bank 4): his bob C6-80 then the jab 0E|-0E (state 16), his combo 40-3C-3E either way
 # (15), his rush 4C-4E-50 (18), his drink and laugh 3A, CC, 0C; down 30-32-34-36-38 (the one way captured).
 SODA_FRAMES = {
@@ -1141,7 +1159,7 @@ NES_RIVALS = {
     "honda": dict(name="Piston Honda", opp=2, bank=5, offset=0x30, frames=HONDA_FRAMES, canon=HONDA_FROM_NES, nth=2),
     "don": dict(name="Don Flamenco", opp=3, bank=0, offset=0x10, frames=DON_FRAMES, canon=DON_FROM_NES, nth=3),
     "hippo": dict(name="King Hippo", opp=4, bank=1, offset=0x00, frames=HIPPO_FRAMES, canon=HIPPO_FROM_NES, nth=4),
-    "tiger": dict(name="Great Tiger", opp=5, bank=2, offset=0x10, frames=TIGER_FRAMES, canon=TIGER_FROM_NES, nth=5),
+    "tiger": dict(name="Great Tiger", opp=5, bank=2, offset=0x10, frames=TIGER_FRAMES, canon=TIGER_FROM_NES, nth=5, jewel=True),
     "bull": dict(name="Bald Bull", opp=6, bank=3, offset=0x30, frames=BULL_FRAMES, canon=BULL_FROM_NES, nth=6),
     "soda": dict(name="Soda Popinski", opp=8, bank=4, offset=0x10, frames=SODA_FRAMES, canon=SODA_FROM_NES, nth=8),
     "sandman": dict(name="Mr. Sandman", opp=11, bank=3, offset=0x10, frames=SANDMAN_FRAMES, canon=SANDMAN_FROM_NES, nth=11),
@@ -1149,6 +1167,11 @@ NES_RIVALS = {
     "tyson": dict(name="Mike Tyson", opp=13, bank=5, offset=0x40, frames=TYSON_FRAMES, canon=TYSON_FROM_NES, nth=13, lines=True),
 }
 FIGHTERS = {0: (NES_FRAMES, JOE_FROM_NES), **{r["opp"]: (r["frames"], r["canon"]) for r in NES_RIVALS.values()}}
+for _fm, _canon in FIGHTERS.values():          # up off the knee (2E, his other way 38|): a pose of its own, not
+    for _f, _was, _rise in (("2E", "kd_kneel", "kd_rise"), ("38|", "kd2_kneel", "kd2_rise")):   # the kneel again
+        if _fm.get(_f) == _was:
+            _fm[_f] = _rise
+            _canon.setdefault(_rise, _f)
 
 
 def joe_shapes(opponent=0):
@@ -1188,6 +1211,13 @@ def joe_shapes(opponent=0):
         near = [g for g in pieces if any(abs(x - px) <= 12 for x, _ in g)]
         him = max(near or pieces, key=len)
         out[key] = {(x - px, y - py): img[y][x] for x, y in him}
+    for k in frames_map:                               # a mirrored frame never caught whole: its plain one flipped
+        f, mi = _key(k)
+        if mi and (f, 1) not in out and (f, 0) in out:
+            out[(f, 1)] = {(-x, y): c for (x, y), c in out[(f, 0)].items()}
+    for (f, mirrored), shape in list(out.items()):     # a mirrored frame caught the same as its plain one (the
+        if mirrored and out.get((f, 0)) == shape:      # capture's mirror flag set, the picture taken unflipped):
+            out[(f, 1)] = {(-x, y): c for (x, y), c in shape.items()}   # flipped about his place, as the NES's
     return out
 
 def joe_from_nes(s, shapes=None, opponent=0):
@@ -1199,9 +1229,12 @@ def joe_from_nes(s, shapes=None, opponent=0):
     step = 10 if abs(s - 0.7) < 1e-9 else 1     # NES pixels to a whole number of ours (7 at 0.7)
     ax, ay = round(JOE_ANCHOR[0] / s), round(JOE_ANCHOR[1] / s)
     W, H = round(RW / s), round(RH / s)
-    frames, moved = [], {}
+    frames, moved, jewels = [], {}, {}
+    def canon_key(name):                    # (a frame never caught: the pose it stands in for's)
+        k = canon.get(name) or canon[TELL_FALLBACK[name]]
+        return k if _key(k) in shapes or name not in TELL_FALLBACK else canon_key(TELL_FALLBACK[name])
     for name in FIGHT_POSES:
-        shape = shapes[_key(canon.get(name) or canon[TELL_FALLBACK[name]])]
+        shape = shapes[_key(canon_key(name))]
         xs, ys = [x for x, _ in shape], [y for _, y in shape]
         mx = my = 0                         # moved over (in steps) if he reaches past an edge
         while min(xs) + ax + mx < 0 and max(xs) + ax + mx + step < W: mx += step
@@ -1218,8 +1251,51 @@ def joe_from_nes(s, shapes=None, opponent=0):
         frame = [[small[y][x] if y < len(small) and x < len(small[0]) else None for x in range(RW)] for y in range(RH)]
         frames.append(frame)
         moved[name] = (round(mx * s), round(my * s))
+        if any(r["opp"] == opponent and r.get("jewel") for r in NES_RIVALS.values()):
+            gem = _jewel(shape)                 # (Great Tiger's: his turban's gem, where it lands in the pose)
+            if gem:
+                jewels[name] = [round((gem[0] + ax + mx) * s), round((gem[1] + ay + my) * s)]
+    key_of = {name: canon_key(name) for name in FIGHT_POSES}
+    plain = {}
+    for name in FIGHT_POSES:
+        plain.setdefault(key_of[name], name)
+    for k, name in enumerate(FIGHT_POSES):             # a mirrored frame whose plain one is a pose too: that pose
+        key = key_of[name]                              # flipped whole (the frame's middle: its tiles each another's
+        if key.endswith("|") and key[:-1] in plain:     # mirror, so Color stores them once); its place found as
+            other = FIGHT_POSES.index(plain[key[:-1]])  # every frame's is
+            frames[k] = [list(reversed(row)) for row in frames[other]]
+            moved[name] = moved[plain[key[:-1]]]
+            if plain[key[:-1]] in jewels:
+                jewels[name] = [RW - 1 - jewels[plain[key[:-1]]][0], jewels[plain[key[:-1]]][1]]
     joe_from_nes.moved = moved
+    joe_from_nes.jewels = jewels
     return frames
+
+
+def _jewel(shape, gem=(236, 106, 100), cloth=(236, 238, 236)):
+    """A turban's gem in a frame (Great Tiger's): the smallest patch of its color mostly bordered by the turban's
+    white (not a glove), as (x, y) at its middle; None if it isn't showing."""
+    pts = {p for p, c in shape.items() if tuple(c[:3]) == gem}
+    best, seen = None, set()
+    for p0 in pts:
+        if p0 in seen:
+            continue
+        g, st = {p0}, [p0]
+        while st:
+            x, y = st.pop()
+            for q in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if q in pts and q not in g:
+                    g.add(q); st.append(q)
+        seen |= g
+        if len(g) > 16:
+            continue
+        ring = {(x + dx, y + dy) for x, y in g for dx in (-2, -1, 0, 1, 2) for dy in (-2, -1, 0, 1, 2)} - g
+        white = sum(1 for q in ring if q in shape and tuple(shape[q][:3]) == cloth)
+        if white * 2 >= len(ring) * 0.6 and (best is None or len(g) < len(best)):
+            best = g
+    if not best:
+        return None
+    return (sum(x for x, _ in best) / len(best), sum(y for _, y in best) / len(best))
 
 
 # The referee from the game: Mario, his three looks (nes_play.ref_frames), scaled as everyone is and set at
@@ -1355,13 +1431,14 @@ def rival_art(key, s, colors, pposes, max_share=24):
     shapes = joe_shapes(r["opp"])
     sheet = HERE / "out" / f"{key}-from-nes.png"
     write_sheet(sheet, joe_from_nes(s, shapes, r["opp"]), RW, RH)
+    jewels = dict(joe_from_nes.jewels)
     places = joe_places(sheet, s, shapes, r["opp"])
     poses, pals, moved = import_rival(str(sheet), [26, 28, 31])
     shared, how, report = fit_rival(poses, pals, colors, pposes, max_share, nth=r["nth"])   # (in his own fight)
     print(f"{r['name']}: {report}; tiles shared {how}; {len(places)} frames placed")
     cgb, how, report = fit_cgb(poses, shared, pals, colors, pposes, max_share, nth=r["nth"])
     print(f"{r['name']} on Color: {report}; tiles {how}")
-    return {"poses": shared, "pals": pals, "places": places, "cgb": cgb}
+    return {"poses": shared, "pals": pals, "places": places, "cgb": cgb, "jewels": jewels}
 
 
 def fit_cgb(raw, shared, pals, colors, pposes, max_share=16, nth=0):
@@ -1476,7 +1553,9 @@ def _rival_js(key, art):
             + [f"  {n}:" + pose(v)[1:] for n, v in art["cgb"].items()]
             + ["};", f"export const {up}_NES = {{ bank: '{base64.b64encode(bank).decode()}', offset: {r['offset']},",
                f"  frames: {json.dumps(r['frames'])}, home: [135, 182], scale: {SCALE_JOE},",
-               f"  places: {json.dumps(art['places'])} }};", ""])
+               f"  places: {json.dumps(art['places'])} }};"]
+            + ([f"export const {up}_JEWEL = {json.dumps(art['jewels'])};   // his turban's gem: per pose, where (pixels in his area)"]
+               if art.get("jewels") else []) + [""])
 
 
 def intermission_art():
@@ -1674,7 +1753,12 @@ def main():
         write_example()
     def first(test):
         return next((n for n in range(args.max_share + 1) if test(n)), args.max_share)
-    plim = first(lambda n: "player's poses" not in budget(rival[args.max_share], pals, colors, player[n])[1])
+    spare = 2 * sum(1 for r in NES_RIVALS.values() if r.get("jewel"))   # (room kept for a jewel and its fight)
+    def tiles_ok(n):
+        rep = budget(rival[args.max_share], pals, colors, player[n])[1]
+        used = re.search(r"sprite tiles (\d+)/(\d+)", rep)
+        return "player's poses" not in rep and (not used or int(used.group(1)) + spare <= int(used.group(2)))
+    plim = first(tiles_ok)
     mac_cgb = share_player_tiles(pposes, 3)   # (Color: all of him, but a tile of a stray pixel or three: a sprite
                                               # each, and the 40 on screen are shared with the rival's head)
     pposes = player[plim]

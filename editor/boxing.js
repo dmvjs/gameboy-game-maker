@@ -274,7 +274,7 @@ export function boxingGame(pack) {
                palette: boxPal, textSlot: 1, bgSlot: 3, after: 1536, every: 4 },   // (as the NES's: 25 s, a letter
                                                                                        // every 4 frames)
       };
-      scene.pressStart = { target: 0, flashes: 1, area: null, prompt: null };
+      scene.pressStart = { target: 0, flashes: 1, area: null, prompt: null, quiet: true };   // (Start stops its song)
       p.scenes.push(scene);
     });
   }

@@ -8,7 +8,9 @@
 import { FIGHT_W, FIGHT_H, FIGHT_POSES } from './model.js';
 import { from8, to8, luminance } from './color.js';
 
-export const PLAYER_POSES = ['idle', 'jab', 'jab_high', 'dodge', 'block', 'hit', 'star', 'down', 'win'];
+export const PLAYER_POSES = ['idle', 'jab', 'jab_high', 'dodge', 'block', 'hit', 'star', 'down', 'win',
+                             'star2', 'star3', 'star4', 'jab_tell', 'high_tell', 'knocked', 'duck'];
+                             // (the star punch's frames, and the rest of his, as the NES's)
 const RW = FIGHT_W * 8, RH = FIGHT_H * 8;
 export const PW = 24, PH = 48, PLAYER_X = 80 - PW / 2 - 8;   // as in gbstage/fight.py
 const KINDS = ['s', 'g', 'h'];

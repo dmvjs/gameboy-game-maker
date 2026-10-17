@@ -247,9 +247,12 @@ ENDC
     call FtSwapSetup
     ld a, [wFtBankData]     ; the fight's data stays mapped while it runs
     ld [$2000], a
-    ld hl, FtObjTiles       ; player and count sprites
+    ld a, [FtObjBytes]      ; player and count sprites (this fight's: their count its own)
+    ld c, a
+    ld a, [FtObjBytes + 1]
+    ld b, a
+    ld hl, FtObjTiles
     ld de, $8000 + FT_OBJ_FIRST * 16
-    ld bc, FT_OBJ_TILES * 16
 .tiles:
     ld a, [hl+]
     ld [de], a
@@ -441,6 +444,17 @@ IF DEF(FT_ROPE)
     ldh [hFtOamBuild], a
 ENDC
     call FtBuildOAM
+IF DEF(FT_ROPE)
+    ld hl, wFtOAM2          ; (the one shown first: the same, not the last fight's, its KO bubble and all)
+    ld de, wFtOAM3
+    ld b, 0
+.oamPage:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .oamPage
+ENDC
     ld hl, wFtOAM           ; OAM is writable with the screen off
     ld de, $FE00
     ld b, 160
@@ -633,6 +647,27 @@ ENDC
     pop af
     reti
 
+IF DEF(FT_NES)
+; A = 2 while his tell's frame and state are up (RivalTell), else 0.
+FtTellShown:
+    ld a, [RivalTell]
+    ld b, a
+    ld a, [wNes + $A1]
+    cp b
+    jr nz, .no
+    ld a, [RivalTell + 1]
+    ld b, a
+    ld a, [wNes + $90]
+    and $7F
+    cp b
+    jr nz, .no
+    ld a, 2
+    ret
+.no:
+    xor a
+    ret
+ENDC
+
 ; ---- VBlank: sprites, then the rival's pose or the HUD ----
 
 FtVBlank:
@@ -666,7 +701,12 @@ ENDC
     and a
     jr z, .flashOff
     ld a, 1
+    jr .flashSet
 .flashOff:
+IF DEF(FT_NES)
+    call FtTellShown        ; (his tell, a palette change in the NES's: while its frame and state are up)
+ENDC
+.flashSet:
     ld hl, hFtFlashShown
     cp [hl]
     jr z, .pose
@@ -687,6 +727,9 @@ ENDC
 .hud:
     call FtSwapStep
     ret nz
+    ld a, [wPlRareLoad]     ; the player's rare pose loading: before the HUD (his star punch's frames come fast)
+    cp $FF
+    jp nz, FtPlStep
     ldh a, [hFtHudReady]
     and a
     jr z, .ref
@@ -728,10 +771,21 @@ ENDC
 ; A = the player's pose to draw: his pose, or (a rare one whose tiles aren't in yet: asked for) his last other.
 FtPlShown:
 IF DEF(FT_PL_CGB)
-    ldh a, [hIsCGB]         ; (Color: every pose's tiles are in)
+    ldh a, [hIsCGB]         ; (Color: every pose's tiles are in, but those it shares with the original: loaded)
     and a
     jr z, .dmg
     ld a, [wPlPose]
+    ld e, a
+    ld d, 0
+    push hl
+    ld hl, PlayerCgbShared
+    add hl, de
+    ld a, [hl]
+    pop hl
+    and a
+    jr nz, .dmg
+    ld a, e
+    ld [wPlRegular], a
     ret
 .dmg:
 ENDC
@@ -754,6 +808,32 @@ ENDC
     ld a, e
     ret z
     ld [wPlRareWant], a
+    push hl                 ; while it loads: the one in, if both are of one sequence (held, not back to standing)
+    push bc
+    ld hl, PlayerRareHold
+    add hl, de
+    ld a, [hl]
+    and a
+    jr z, .regularBc
+    ld b, a
+    ld a, [wPlRareIn]
+    cp $FF
+    jr z, .regularBc
+    ld e, a
+    ld hl, PlayerRareHold
+    add hl, de
+    ld a, [hl]
+    cp b
+    ld a, e
+    pop bc
+    pop hl
+    ret z
+    push hl
+    jr .regular
+.regularBc:
+    pop bc
+.regular:
+    pop hl
     ld a, [wPlRegular]
     ret
 
@@ -1570,7 +1650,7 @@ ENDC
     jr nc, .low
     cp RP_KD_STAGGER
     jr c, .standing
-    cp RP_KD_KNEEL + 1
+    cp RP_KD_RISE + 1
     jr nc, .standing
 .low:
     ld e, a                 ; (as far as his pose's blank rows on top: his band can't rise past the HUD)
@@ -3707,6 +3787,82 @@ ENDC
     ret
 ENDC
 
+IF DEF(FT_ROPE) && DEF(FT_NES)
+; His turban's gem (RivalJewel: Great Tiger's), a sprite of its own where his pose shows it, his band's offsets
+; as his top rows'; in his tell, white every few frames (the original: on and off). A = which list (0 upper,
+; 1 lower: the one the line it ends on falls in), HL = the next OAM entry.
+FtJewel:
+    ld b, a
+    ld a, [RivalJewel]
+    and a
+    ret z
+    ld a, l
+    cp 160
+    ret nc
+    push hl
+    ld a, [wRvPose]
+    add a
+    ld e, a
+    ld d, 0
+    ld hl, RivalJewel + 3
+    add hl, de
+    ld a, [hl+]
+    cp $FF
+    jr z, .none
+    ld e, a                 ; E = its x in his area, D = its y
+    ld d, [hl]
+    pop hl
+    ldh a, [hFtBandY]
+    cpl
+    inc a
+    add FT_HEAD_Y0 - 4
+    add d
+    ld d, a                 ; OAM y
+    cp FT_DMA_LINE + 16 - 8 + 1
+    ld a, 0
+    rla
+    xor 1                   ; (1: it ends past the line the lower list comes in at)
+    cp b
+    ret nz
+    call FtTellShown        ; his tell: white every few frames (the original: on and off)
+    ld c, a
+    ldh a, [hFrame]
+    and 4
+    jr z, .colors
+    ld a, c
+    and a
+    jr z, .colors
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    ld c, 2                 ; (C: 2 white)
+    jr .put
+.colors:
+    ld c, 1
+.put:
+    ld a, d
+    ld [hl+], a
+    ldh a, [hFtBandX]
+    cpl
+    inc a
+    add FT_HEAD_X0 - 4
+    add e
+    ld [hl+], a
+    ld a, [RivalJewel]
+    ld [hl+], a
+    ld a, c
+    dec a
+    ld a, [RivalJewel + 1]
+    jr z, .attr
+    ld a, [RivalJewel + 2]
+.attr:
+    ld [hl+], a
+    ret
+.none:
+    pop hl
+    ret
+ENDC
+
 IF DEF(FT_ROPE)
 ; His rows above his band, as the NES's sprites stand in front of its ropes and crowd: sprites of his top rows'
 ; tiles (kept where sprites reach them), where his band would show them: the pose VBlank draws next, his band's
@@ -3815,7 +3971,7 @@ StarOrbit:                  ; an ellipse: dx, dy in 16 steps
     db 0, -4,  5, -4,  9, -3,  12, -1,  13, 1,  12, 3,  9, 5,  5, 6
     db 0, 6,  -5, 6,  -9, 5,  -12, 3,  -13, 1,  -12, -1,  -9, -3,  -5, -4
 StarHeadY:                  ; head top, per knockdown pose
-    db 8, 16, 24, 8
+    db 8, 16, 24, 8, 8
 
 PunchRise:                  ; per frame of a body punch: y offset (a leap up into it)
     db 0, -6, -11, -14, -16, -16, -16, -14, -11, -8, -5, -3, -1, 0, 0
@@ -4001,6 +4157,10 @@ IF DEF(FT_ROPE)
 ENDC
     call FtTwinkle
 ENDC
+IF DEF(FT_ROPE) && DEF(FT_NES)
+    ld a, 1
+    call FtJewel
+ENDC
 IF FT_FX_SWEAT
     call FtSweatSprites
 ENDC
@@ -4119,6 +4279,10 @@ ENDC
 IF DEF(FT_ROPE)
     call .hideRest          ; the lower list done; the upper: his top rows over the ropes (and the star if there)
     ld hl, wFtOAM
+IF DEF(FT_NES)
+    xor a                   ; (his turban's gem first: in front of his top rows' sprites)
+    call FtJewel
+ENDC
     call FtHeadSprites
 IF DEF(FT_SIDE_TILE)
     ldh a, [hIsCGB]         ; Color: the ring's side ropes' ends, past the crowd's rows, behind him (on the

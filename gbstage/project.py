@@ -713,14 +713,14 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
     pl = ft.get("player") or {}
     pposes = {}
     for name in kit.PLAYER_POSES:
-        px = (pl.get("poses") or {}).get(name)
+        px = (pl.get("poses") or {}).get(name) or (pl.get("poses") or {}).get(kit.PLAYER_FALLBACK.get(name))
         if not (isinstance(px, str) and len(px) == kit.PLAYER_W * kit.PLAYER_H and set(px) <= set("0123")):
             errors.append(f'{where}: the player\'s "{name}" pose is missing or damaged.')
             continue
         pposes[name] = [ord(c) - 48 for c in px]
     pcgb = {}                                   # (optional) Color's own, unshared: in its second tile bank
     for name in kit.PLAYER_POSES if pl.get("cgbPoses") else ():
-        px = (pl.get("cgbPoses") or {}).get(name)
+        px = (pl.get("cgbPoses") or {}).get(name) or (pl.get("cgbPoses") or {}).get(kit.PLAYER_FALLBACK.get(name))
         if not (isinstance(px, str) and len(px) == kit.PLAYER_W * kit.PLAYER_H and set(px) <= set("0123")):
             errors.append(f'{where}: the player\'s Game Boy Color "{name}" pose is missing or damaged.')
             continue
@@ -925,7 +925,20 @@ def _nes_fighter(nes, where, errors):
             errors.append(f"{where}: NES Mac frame {k!r}'s place: a frame number (hex) and [pixels down 0-63, knocked-down colors 0/1].")
             return None
         mac_places[n] = v[0] | (0x80 if v[1] else 0)
+    tell = nes.get("tellFlash")             # his tell as a palette change (Great Tiger's: his black goes gray)
+    if tell is not None and not (isinstance(tell, dict) and all(isinstance(tell.get(k), int) and 0 <= tell[k] < 256
+                                                                for k in ("frame", "state"))
+                                 and isinstance(tell.get("color"), list) and len(tell["color"]) == 3
+                                 and all(isinstance(v, int) and 0 <= v <= 31 for v in tell["color"])):
+        errors.append(f"{where}: the NES tell flash is a frame, a state (0-255) and a color."); return None
+    jewel = nes.get("jewel")                # his turban's gem, a sprite of its own (Great Tiger's): per pose, where
+    if jewel is not None and not (isinstance(jewel, dict) and all(
+            p in kit.RIVAL_POSES and isinstance(v, list) and len(v) == 2 and all(isinstance(c, int) and 0 <= c < 80 for c in v)
+            for p, v in jewel.items())):
+        errors.append(f"{where}: the NES jewel is per pose, where (pixels in his area)."); return None
     return {"bank": bank, "offset": offset, "frames": frames, "places": places, "home": home, "scale": float(scale),
+            **({"tell": {"frame": tell["frame"], "state": tell["state"], "color": tell["color"]}} if tell else {}),
+            **({"jewel": {p: tuple(v) for p, v in jewel.items()}} if jewel else {}),
             "mac": mac, "mac_frames": mac_frames, "mac_places": mac_places, "mac_home": nes.get("macHome", 176),
             "mac_scale": float(nes.get("macScale", scale)), "sound": sound, "sound_fixed": sound_fixed,
             "samples": samples}
@@ -1569,6 +1582,10 @@ def _fight_compose_tiles(scene, tile_of):
     if ft.get("nes"):                                   # Punch-Out!!'s star just earned, twinkling by the HUD's
         obj.append(tuple(int(ch) if ch != "." else 0 for row in kit.TWINKLE_TILE for ch in row))
         scene["fight_twinkle_tile"] = kit.OBJ_FIRST_TILE + len(obj) - 1
+    scene["fight_jewel_tile"] = 0
+    if (ft.get("nes") or {}).get("jewel"):              # his turban's gem (Great Tiger's): its own sprite, its colors
+        obj.append(tuple(int(ch) if ch != "." else 0 for row in kit.JEWEL_TILE for ch in row))
+        scene["fight_jewel_tile"] = kit.OBJ_FIRST_TILE + len(obj) - 1
     # the loaded areas, at the top of the sprite tiles: the referee's two, the player's rare poses' below them
     ref_n = max([len(t) for _, t in refs.values()] + [0])
     pl_n = max([len(t) for _, t in rare.values()] + [0])
@@ -1596,6 +1613,9 @@ def _fight_compose_tiles(scene, tile_of):
             return cindex[key], 0
         csprites = {}
         for pose in kit.PLAYER_POSES:
+            if pose in kit.PLAYER_CGB_SHARED:   # (the original's: its tiles loaded as needed, in the first bank)
+                csprites[pose] = sprites[pose]
+                continue
             out = []
             for by in range(kit.PLAYER_H // 8):
                 for bx in range(kit.PLAYER_W // 8):
@@ -1728,6 +1748,13 @@ def _fight_cgb(scene):
             img[i] = v
         keys[pose] = [cell_key(img, c) for c, _ in cells]
         attrs[pose] = [pal for _, pal in cells]
+    flips = {}                          # (a tile and its mirror: one tile, Color's flip bit on the other's cells: a
+    for pose in kit.RIVAL_POSES:        # mirrored pose costs nothing)
+        out, fl = [], []
+        for k in keys[pose]:
+            m = tuple(k[y * 8 + 7 - x] for y in range(8) for x in range(8))
+            out.append(min(k, m)); fl.append(int(m < k))
+        keys[pose], flips[pose] = out, fl
     perm = []
     for pose in kit.RIVAL_POSES:
         if pose not in in_set:
@@ -1822,7 +1849,7 @@ def _fight_cgb(scene):
         maps[pose] = [t for t, _ in at]
         battrs[pose] = [b for _, b in at]
     empty = tuple([0] * 64)
-    scene["fight_cgb"] = {"maps": maps, "attrs": attrs, "banks": battrs, "size": size,
+    scene["fight_cgb"] = {"maps": maps, "attrs": attrs, "banks": battrs, "size": size, "flips": flips,
                           "sets": [sets[n] for n in ("attack", "knockdown", "special")],   # (each copies only its own)
                           "perm0": perm0, "perm0_slots": slots0, "perm1": perm1, "perm1_first": 256 - len(perm1),
                           "runs": [tuple(r) for r in runs],

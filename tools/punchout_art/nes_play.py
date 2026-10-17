@@ -126,7 +126,9 @@ def fighter_frames(opponent, wanted=None, budget=40000):
         return got
     b = fight(opponent)
     import copy
-    start = copy.deepcopy(b)                # his fight from the top: back to it whenever a fight ends
+    for _ in range(450):                    # (past his walk-in: Don's last palette is another's till then)
+        b.frame(0)
+    start = copy.deepcopy(b)                # his fight from there: back to it whenever a fight ends
     colors = bytes(b.pal[0x10:0x20])        # the sprites' palettes as they are (a hit's flash whitens his)
     rng = random.Random(1)
     held, hold, pending, ages = 0, 0, None, {k: SETTLED for k in got}

@@ -11,25 +11,28 @@ REGION_W, REGION_H = 8, 10                      # rival area, in tiles
 # in and steps him back with: up over the crowd), kept in tiles sprites can reach.
 HEAD_ROWS, HEAD_ROWS_TALL = 4, 7
 HEAD_TALL = {"idle", "idle2", "idle3", "taunt", "tell1", "tell2", "tell3", "tell4", "tell5",   # (and knocked down:
-             "kd_stagger", "kd_fall", "kd_down", "kd_kneel", "kd2_stagger", "kd2_fall", "kd2_down", "kd2_kneel"}   # back up into the crowd)
+             "kd_stagger", "kd_fall", "kd_down", "kd_kneel", "kd_rise", "kd2_stagger", "kd2_fall", "kd2_down", "kd2_kneel",
+             "kd2_rise"}   # back up into the crowd)
 
 
 def head_rows(pose):
     return HEAD_ROWS_TALL if pose in HEAD_TALL else HEAD_ROWS
 RIVAL_POSES = ["idle", "idle2", "guard", "hit_l", "hit_r", "hit_body", "dazed",
                "jab_tell", "jab_mid", "jab", "hook_tell", "hook_mid", "hook", "slip", "idle3", "hit_back",
-               "kd_stagger", "kd_fall", "kd_down", "kd_kneel",
+               "kd_stagger", "kd_fall", "kd_down", "kd_kneel", "kd_rise",   # (rise: up off the knee)
                "taunt", "arm_pop", "guard_low",
                "tell1", "tell2", "tell3", "tell4", "tell5",  # a fighter's own wind-up frames (Honda's gloves rolling)
                "extra1", "extra2", "extra3", "extra4",       # more of his own (a big fighter's spin punches)
-               "kd2_stagger", "kd2_fall", "kd2_down", "kd2_kneel"]  # his other way down (the NES drops him either way)
+               "kd2_stagger", "kd2_fall", "kd2_down", "kd2_kneel", "kd2_rise"]  # his other way down (the NES drops him
+                                                                                # either way)
 # Pose sets share one area of video memory: the attack set is there normally; the knockdown set replaces it
 # while he's down, the special set while he taunts or pops an arm. Poses in no set are always there.
 POSE_SETS = {"attack": ["jab_tell", "hook_tell", "tell1", "tell2", "tell3", "tell4", "tell5",   # (tells first: shared
                                                                                               # tiles keep theirs)
                         "idle2", "idle3", "guard", "guard_low", "hit_back", "jab_mid", "jab", "hook_mid", "hook", "slip",
                         "extra1", "extra2", "extra3", "extra4"],
-             "knockdown": ["kd_stagger", "kd_fall", "kd_down", "kd_kneel", "kd2_stagger", "kd2_fall", "kd2_down", "kd2_kneel"],
+             "knockdown": ["kd_stagger", "kd_fall", "kd_down", "kd_kneel", "kd_rise", "kd2_stagger", "kd2_fall", "kd2_down",
+                           "kd2_kneel", "kd2_rise"],
              "special": ["taunt", "arm_pop"]}
 KD_POSES = POSE_SETS["knockdown"]
 # Older projects: newer poses borrow one they already have.
@@ -37,8 +40,21 @@ POSE_FALLBACK = {"idle2": "idle", "idle3": "idle", "hit_back": "hit_l", "slip": 
                  "kd_down": "down", "kd_kneel": "fall", "arm_pop": "hit_body", "guard_low": "guard",
                  "tell1": "jab_tell", "tell2": "jab_tell", "tell3": "jab_tell", "tell4": "jab_tell", "tell5": "jab_tell",
                  "kd2_stagger": "kd_stagger", "kd2_fall": "kd_fall", "kd2_down": "kd_down", "kd2_kneel": "kd_kneel",
-                 "extra1": "jab", "extra2": "jab", "extra3": "jab", "extra4": "jab"}
-PLAYER_POSES = ["idle", "jab", "jab_high", "dodge", "block", "hit", "star", "down", "win"]
+                 "extra1": "jab", "extra2": "jab", "extra3": "jab", "extra4": "jab",
+                 "kd_rise": "kd_kneel", "kd2_rise": "kd2_kneel"}
+JEWEL_TILE = ["........", "........", "...33...", "..3113..", "..3113..", "...33...", "........", "........"]
+JEWEL_MID = 4                                   # (its middle in the tile)
+PLAYER_POSES = ["idle", "jab", "jab_high", "dodge", "block", "hit", "star", "down", "win",
+                "star2", "star3", "star4",           # (the star punch as the NES's: wound up, rising, the uppercut, after)
+                "jab_tell", "high_tell", "knocked", "duck"]   # (and the rest of his frames: wind-ups, knocked back,
+                                                              # ducking)
+PLAYER_FALLBACK = {"star2": "star", "star3": "star", "star4": "star", "jab_tell": "jab", "high_tell": "jab_high",
+                   "knocked": "hit", "duck": "block"}   # (older projects: the nearest they have)
+PLAYER_CGB_SHARED = ["star", "star2", "star3", "star4", "jab_tell", "high_tell", "knocked", "duck"]
+                                                          # Color draws these from the original's tiles, loaded as needed
+                                                          # (its own bank's 128 hold the rest)
+PLAYER_HOLD = {"star": 1, "star2": 1, "star3": 1, "star4": 1, "knocked": 2, "down": 2}
+                                                          # a sequence's frame held while its next loads
 PLAYER_W, PLAYER_H = 24, 48                     # player pose size in pixels (3x6 sprites, empty ones skipped)
 PLAYER_X = 80 - PLAYER_W // 2 - 8               # a little left of center, so the rival shows past him
 CELL_KINDS = {"s": "skin", "g": "gloves", "h": "hair"}
@@ -57,7 +73,7 @@ TWINKLE_TILE = ["...2....", "...2....", ".2.2.2..", "..232...", "2223222.", "..2
 STAR_TILE = ["...1....", "...1....", ".11311..", "1133311.", ".11311..", "...1....", "...1....", "........"]             # sprite text: the referee's count, "KO!", "FIGHT!"
 REF_POSES = ["stand", "count", "wave"]
 REF_W, REF_H = 24, 32
-PLAYER_RARE = ["star", "down", "win"]           # the player's poses loaded as they're needed (one at a time)
+PLAYER_RARE = ["star", "down", "win", "star2", "star3", "star4", "jab_tell", "high_tell", "knocked", "duck"]           # the player's poses loaded as they're needed (one at a time)
 REF_Y = 84                                      # the referee's top, in screen pixels: his feet below the rival's (in front)
 
 # HUD items: (key, cells, what)
