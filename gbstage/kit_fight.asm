@@ -91,6 +91,26 @@ wRvPose: db
 wRvShown: db                ; pose currently on the map
 wRvPic: db                  ; Color, his NES pictures: the one to show, the one on the map
 wRvPicShown: db
+wFtPicGo: db                ; (blocks this time)
+wFtPicDrew: db              ; (this VBlank spent on his picture)
+wRvPicBuf: db               ; which copy of his tiles the map shows (0: FT_PIC_VRAM, 1: FT_PIC_VRAM2)
+wRvPicLoad: db              ; the picture coming into the other, its tiles in so far, where it'll sit
+wRvPicDone: db
+wRvPicLoadX: db
+wRvPicLoadY: db
+wRvPicWantX: db             ; (where the wanted one sits)
+wRvPicWantY: db
+wRvPicSwitch: db            ; up next VBlank: its sprites built
+wRvPicHeads: db             ; the picture the sprites are built for, its copy
+wRvPicHeadsBuf: db
+wPlPic: db                  ; Color, the NES's Mac: his picture wanted, shown, the copy shown (0: tiles 0-31 of bank 1,
+wPlPicShown: db             ; 1: 32-63), up next VBlank, and the one the sprites are built for, its copy
+wPlPicBuf: db
+wPlPicSwitch: db
+wPlPicHeads: db
+wPlPicHeadsBuf: db
+wPlPicGo: db                ; (tiles of his going up next VBlank: room his rival's picture can't have)
+wFtPlTileAdd: db
 wFtCueColor: dw              ; (FtCueBuild's: the cue's color, and palettes to go)
 wFtCueN: db
 wFtPalCue: ds 8 * 8           ; his palettes in his dodge cue (the NES's outline color): built as it comes
@@ -170,6 +190,7 @@ wRvNesX: db                 ; NES rival: his offset from his place (pixels right
 wRvNesY: db
 wFtHeadX: db                ; (his top rows' sprites: OAM x of his area's left, this frame)
 wFtHeadIn: db               ; (and in this frame's yet)
+wFtHeadTile: db             ; (added to its tiles: his pictures' second copy)
 wFtTwinkleX: db             ; a star just earned: where it twinkles (OAM x, y), from the NES's ($0344, $0345)
 wFtTwinkleY: db
 wPlNesY: db                 ; NES Mac: pixels down his frame sits (bit 7: knocked-down colors)
@@ -333,6 +354,11 @@ IF DEF(FT_PL_CGB)
     xor a
     ldh [rVBK], a
 .plDone:
+ENDC
+IF DEF(FT_MAC_PICS)
+    call FtPlPicsStart      ; (Color: Mac's first picture)
+    ld a, [wFtBankData]
+    ld [$2000], a
 ENDC
     xor a                   ; the referee standing, his tiles in
     call FtRefFirst
@@ -754,11 +780,19 @@ DEF FT_PIC_PLACEX EQU $4210
 DEF FT_PIC_PLACEY EQU $4410
 DEF FT_PIC_TABLE EQU $4610
 DEF FT_PIC_HEADS EQU $4810
-DEF FT_PIC_VRAM EQU $8800   ; (bank 1: tile slots 128 on, where sprites reach them too)
-DEF FT_PIC_LATEST EQU 149   ; the last line a picture's copy may start on: 64 tiles and the rows take about 6 lines
-                            ; (GDMA, 32 cycles a 16 bytes), and VBlank ends after line 153
+DEF FT_PIC_VRAM EQU $8800      ; his tiles' two copies (bank 1: tiles 128-191, 192-255)
+DEF FT_PIC_VRAM2 EQU $8C00
+DEF FT_MAC_PIC_ROOM EQU 32     ; Mac's: each copy's tiles (bank 1's sprite tiles, 0 on)
+DEF FT_PIC_WHOLE EQU 56        ; a picture of up to this many tiles goes up in one VBlank, its tiles and all
 
 FtVBlank:
+IF DEF(FT_NES)
+    call FtPicSwitch        ; (his next picture, readied: before the sprites built for it)
+    ld [wFtPicDrew], a
+ENDC
+IF DEF(FT_MAC_PICS)
+    call FtPlPicSwitch      ; (and Mac's)
+ENDC
     ld a, HIGH(wFtOAM)
     call hOAMDMA
     ldh a, [hFtScx]
@@ -780,6 +814,14 @@ IF DEF(FT_ROPE)
     xor HIGH(wFtOAM2) ^ HIGH(wFtOAM3)
     ldh [hFtOamBuild], a
 ENDC
+IF DEF(FT_NES)
+    ld a, [wFtPicDrew]      ; Color, his NES pictures: a big one's tiles, a VBlank's room at a time (NZ: spent)
+    and a
+    jr nz, .picDone
+    call FtPicVBlank
+    ld [wFtPicDrew], a
+.picDone:
+ENDC
     ldh a, [hFtFlash]       ; Color: the rival flashes white when a punch lands
     and a
     jr z, .noFlash
@@ -798,6 +840,11 @@ ENDC
     ld hl, hFtFlashShown
     cp [hl]
     jr z, .pose
+    ld b, a
+    ldh a, [rLY]            ; (his palettes: 3 lines at most; too late in this VBlank, the next one's)
+    cp 151
+    jr nc, .pose
+    ld a, b
     ld [hl], a
 IF DEF(FT_ROPE)
     call FtFlashPalettes    ; (and his pose too: his top rows' sprites show the one asked for)
@@ -805,27 +852,19 @@ ELSE
     jp FtFlashPalettes
 ENDC
 .pose:
+IF DEF(FT_NES)
+    ld a, [wFtPicDrew]      ; (a picture drawn: this VBlank's spent, the rest in the next)
+    and a
+    ret nz
+ENDC
     call FtCrowdDraw
 IF DEF(FT_NES)
-    ld a, [wFtBankPics]     ; Color with his NES pictures: the picture the game draws, not a pose
+    ld a, [wFtBankPics]     ; (Color with his pictures: drawn above, no poses)
     and a
     jr z, .poses
     ldh a, [hIsCGB]
     and a
-    jr z, .poses
-    ld a, [wRvPose]         ; (the original's pose kept as shown: it isn't drawn)
-    ld [wRvShown], a
-    ld a, [wRvPic]
-    ld hl, wRvPicShown
-    cp [hl]
-    jr z, .hud
-    ld b, a
-    ldh a, [rLY]            ; (too late in this VBlank to finish before the screen draws: the next one's)
-    cp FT_PIC_LATEST
-    jr nc, .hud
-    ld a, b
-    ld [hl], a
-    jp FtDrawPic
+    jr nz, .hud
 .poses:
 ENDC
     ld a, [wRvPose]
@@ -1119,7 +1158,314 @@ IF DEF(FT_NES)
 ; mirrored) its picture ($FF: keep the one up), its place's x and y offsets; per picture its tiles' address,
 ; bank and count (its map rows and their attributes right after its tiles); per picture its top rows' sprites.
 
-; The first picture, as the fight sets up (the screen's off): NZ if he has pictures (Color), drawn.
+; Two copies of his area's tiles (bank 1, FT_PIC_VRAM and FT_PIC_VRAM2: wRvPicBuf the one on the map). A new
+; picture's tiles go into the other, a VBlank's room at a time (FtPicVBlank); once all are in, the frame's
+; sprites are built for it (FtPicDecide: his top rows, his place) and the next VBlank starts with its map rows
+; (FtPicSwitch), before those sprites go up: never half drawn, never a head of the last picture's.
+
+; His picture's entry (A): BC its tiles, D their bank, E how many (his pictures' bank mapped).
+FtPicEntry:
+    ld l, a
+    ld a, [wFtBankPics]
+    ld [$2000], a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    ld bc, FT_PIC_TABLE
+    add hl, bc
+    ld a, [hl+]
+    ld c, a
+    ld a, [hl+]
+    ld b, a
+    ld a, [hl+]
+    ld d, a
+    ld e, [hl]
+    ret
+
+; In VBlank, after the sprites: the wanted picture's tiles into the copy not shown, as many as there's room for
+; (DMA blocks, 8 cycles each: 14 a line, done in its last line, 153). A nonzero: this VBlank's spent.
+FtPicVBlank:
+    ld a, [wFtBankPics]
+    and a
+    ret z
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    ld a, [wRvPose]         ; (the original's pose kept as shown: it isn't drawn)
+    ld [wRvShown], a
+    ld a, [wRvPic]
+    ld hl, wRvPicShown
+    cp [hl]
+    jr nz, .want
+    ld [wRvPicLoad], a      ; (the one shown: none to load)
+    xor a
+    ret
+.want:
+    ld hl, wRvPicLoad
+    cp [hl]
+    jr z, .going
+    ld [hl], a              ; another: from its first tile, and where it sits
+    xor a
+    ld [wRvPicDone], a
+    ld a, [wRvPicWantX]
+    ld [wRvPicLoadX], a
+    ld a, [wRvPicWantY]
+    ld [wRvPicLoadY], a
+.going:
+    ld a, [wRvPicLoad]
+    call FtPicEntry
+    ld a, [wRvPicDone]
+    cp e
+    jr nc, .none            ; (all in)
+    cpl
+    inc a
+    add e
+    ld e, a                 ; E = tiles left
+    ldh a, [rLY]
+    sub 144
+    ld l, 255               ; (the screen off: room for all)
+    jr c, .room
+    cp 9
+    jr nc, .none            ; (too late: the next VBlank)
+    ld l, a
+    ld a, 9
+    sub l                   ; lines left before 153 (its last: done in it)
+    ld l, a
+    add a
+    add a
+    add a                   ; * 14, less 4 for what's between
+    sub l
+    sub l
+    sub 4
+    jr c, .none
+    ld l, a
+.room:                      ; L = blocks of room
+    ld a, e
+    cp l
+    jr c, .some
+    ld a, l
+.some:
+    and a
+    jr z, .none
+    ld [wFtPicGo], a        ; this time's
+    ld a, d
+    ld [$2000], a
+    ld a, [wRvPicDone]      ; from its tile wRvPicDone, into the copy not shown
+    ld l, a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    push hl
+    add hl, bc
+    ld a, h
+    ldh [rHDMA1], a
+    ld a, l
+    ldh [rHDMA2], a
+    pop hl
+    ld a, [wRvPicBuf]
+    and a
+    ld bc, FT_PIC_VRAM2
+    jr z, .to
+    ld bc, FT_PIC_VRAM
+.to:
+    add hl, bc
+    ld a, 1
+    ldh [rVBK], a
+    ld a, h
+    ldh [rHDMA3], a
+    ld a, l
+    ldh [rHDMA4], a
+    ld a, [wFtPicGo]
+    dec a
+    ldh [rHDMA5], a
+    xor a
+    ldh [rVBK], a
+    ld a, [wFtPicGo]
+    ld hl, wRvPicDone
+    add [hl]
+    ld [hl], a
+    ld a, [wFtBankData]
+    ld [$2000], a
+    ld a, 1
+    ret
+.none:
+    ld a, [wFtBankData]
+    ld [$2000], a
+    xor a
+    ret
+
+; As the frame's sprites are built (after the NES frame): the picture whose tiles are all in, if not the one shown,
+; goes up next VBlank: its top rows' sprites (wRvPicHeads, in wRvPicHeadsBuf's copy) and its place now.
+FtPicDecide:
+    ld a, [wFtBankPics]
+    and a
+    ret z
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    xor a
+    ld [wRvPicSwitch], a
+    ld a, [wRvPic]          ; a new one, small enough: all of it next VBlank (its tiles, rows, then the sprites)
+    ld hl, wRvPicShown
+    cp [hl]
+    jr z, .keep
+    ld hl, wRvPicLoad
+    cp [hl]
+    jr z, .loading
+    call FtPicEntry
+    ld a, [wPlPicGo]        ; (Mac's tiles going up in that VBlank too: room for that many fewer)
+    cpl
+    add FT_PIC_WHOLE + 2
+    ld b, a
+    ld a, e
+    cp b
+    jr nc, .loaded          ; (too many: a VBlank's room at a time, FtPicVBlank)
+    ld a, [wRvPic]
+    ld [wRvPicLoad], a
+    xor a
+    ld [wRvPicDone], a
+    ld a, [wRvPicWantX]
+    ld [wRvPicLoadX], a
+    ld a, [wRvPicWantY]
+    ld [wRvPicLoadY], a
+    jr .up
+.loading:
+.loaded:                    ; the one coming in: up once its tiles are
+    ld a, [wRvPicLoad]
+    ld hl, wRvPicShown
+    cp [hl]
+    jr z, .keep
+    call FtPicEntry
+    ld a, [wRvPicDone]
+    cp e
+    jr c, .keep
+.up:
+    ld a, 1
+    ld [wRvPicSwitch], a
+    ld a, [wRvPicLoad]
+    ld [wRvPicHeads], a
+    ld a, [wRvPicBuf]
+    xor 1
+    ld [wRvPicHeadsBuf], a
+    ld a, [wRvPicLoadX]
+    ld [wRvPlaceX], a
+    ld a, [wRvPicLoadY]
+    ld [wRvPlaceY], a
+    jr .out
+.keep:
+    ld a, [wRvPicShown]
+    ld [wRvPicHeads], a
+    ld a, [wRvPicBuf]
+    ld [wRvPicHeadsBuf], a
+.out:
+    ld a, [wFtBankNes]
+    ld [$2000], a
+    ret
+
+; VBlank's first, before the sprites: the picture FtPicDecide readied: its tiles, if not all in (FT_PIC_WHOLE at
+; most: under 4.3 lines), then onto the map (his rows, for its tiles' copy, then their attributes: 40 DMA blocks,
+; under 3 lines); then the sprites (1.5 lines). A nonzero: done.
+FtPicSwitch:
+    ld a, [wRvPicSwitch]
+    and a
+    ret z                   ; (A zero: none)
+    xor a
+    ld [wRvPicSwitch], a
+    ld a, [wRvPicLoad]
+    call FtPicEntry
+    ld a, d
+    ld [$2000], a
+    ld a, [wRvPicDone]      ; its tiles not all in (a small one: none yet): the rest, into the copy not shown
+    cp e
+    jr nc, .tilesIn
+    push bc
+    push de
+    ld l, a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    push hl
+    add hl, bc
+    ld a, h
+    ldh [rHDMA1], a
+    ld a, l
+    ldh [rHDMA2], a
+    pop hl
+    ld a, [wRvPicBuf]
+    and a
+    ld bc, FT_PIC_VRAM2
+    jr z, .to
+    ld bc, FT_PIC_VRAM
+.to:
+    add hl, bc
+    ld a, 1
+    ldh [rVBK], a
+    ld a, h
+    ldh [rHDMA3], a
+    ld a, l
+    ldh [rHDMA4], a
+    ld a, [wRvPicDone]
+    cpl
+    add e                   ; (left - 1)
+    ldh [rHDMA5], a
+    pop de
+    pop bc
+    ld a, e
+    ld [wRvPicDone], a
+.tilesIn:
+    ld l, e                 ; HL = its rows (after its tiles): for the first copy's tiles, then their
+    ld h, 0                 ; attributes, then for the second's
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, bc
+    ld a, [wRvPicBuf]
+    xor 1
+    ld [wRvPicBuf], a
+    jr z, .rows
+    ld bc, 2 * FT_POSE_BYTES
+    add hl, bc
+.rows:
+    xor a
+    ldh [rVBK], a
+    call .copy
+    ld a, [wRvPicBuf]       ; (their attributes: after the first copy's rows)
+    and a
+    ld bc, FT_POSE_BYTES
+    jr z, .attr
+    ld bc, -FT_POSE_BYTES
+.attr:
+    add hl, bc
+    ld a, 1
+    ldh [rVBK], a
+    call .copy
+    xor a
+    ldh [rVBK], a
+    ld a, [wRvPicLoad]
+    ld [wRvPicShown], a
+    ld a, [wFtBankData]
+    ld [$2000], a
+    ld a, 1                 ; (A nonzero: done, this VBlank's spent)
+    ret
+.copy:
+    ld a, h
+    ldh [rHDMA1], a
+    ld a, l
+    ldh [rHDMA2], a
+    ld a, HIGH(FT_REGION_ROW)
+    ldh [rHDMA3], a
+    ld a, LOW(FT_REGION_ROW)
+    ldh [rHDMA4], a
+    ld a, FT_POSE_BYTES / 16 - 1
+    ldh [rHDMA5], a
+    ret
+
+; The first picture, as the fight sets up (loading, black): NZ if he has pictures (Color), up.
 FtPicsStart:
     ld a, [wFtBankPics]
     and a
@@ -1131,13 +1477,32 @@ FtPicsStart:
     ld [$2000], a
     ld a, [FT_PIC_IDLE]
     ld [wRvPic], a
+    ld a, $FF               ; (none shown, none loading: the second copy's the one not shown)
     ld [wRvPicShown], a
-    call FtDrawPic
+    ld [wRvPicLoad], a
+    ld a, 1
+    ld [wRvPicBuf], a
+.tiles:
+    FT_VWAIT FT_ROOM_ALL
+    call FtPicVBlank
+    ld a, [wRvPicLoad]
+    call FtPicEntry
+    ld a, [wRvPicDone]
+    cp e
+    jr c, .tiles
+    FT_VWAIT FT_ROOM_ALL
+    ld a, 1
+    ld [wRvPicSwitch], a
+    call FtPicSwitch
+    ld a, [wRvPicShown]
+    ld [wRvPicHeads], a
+    ld a, [wRvPicBuf]
+    ld [wRvPicHeadsBuf], a
     or 1
     ret
 
-; His picture for the NES frame just drawn (C = frame, B = drawn mirrored): wRvPic and where it sits. Carry
-; set if he has pictures (Color); the NES bank mapped after.
+; His picture for the NES frame just drawn (C = frame, B = drawn mirrored): wRvPic and where it sits (once it's
+; up: FtPicDecide). Carry set if he has pictures (Color); the NES bank mapped after.
 FtNesPic:
     ld a, [wFtBankPics]
     and a
@@ -1156,81 +1521,15 @@ FtNesPic:
     ld hl, FT_PIC_PLACEX
     add hl, bc
     ld a, [hl]
-    ld [wRvPlaceX], a
+    ld [wRvPicWantX], a
     ld hl, FT_PIC_PLACEY
     add hl, bc
     ld a, [hl]
-    ld [wRvPlaceY], a
+    ld [wRvPicWantY], a
 .keep:
     ld a, [wFtBankNes]
     ld [$2000], a
     scf
-    ret
-
-; During VBlank: picture A onto the map, its tiles first (bank 1, FT_PIC_VRAM), then his rows and their
-; attributes. One VBlank: up to 64 tiles and the rows (about 3,300 cycles of its 4,560).
-FtDrawPic:
-    ld l, a
-    ld a, [wFtBankPics]
-    ld [$2000], a
-    ld h, 0
-    add hl, hl
-    add hl, hl
-    ld bc, FT_PIC_TABLE
-    add hl, bc
-    ld a, [hl+]
-    ld c, a
-    ld a, [hl+]
-    ld b, a                 ; BC = its tiles
-    ld a, [hl+]
-    ld d, a                 ; D = their bank
-    ld e, [hl]              ; E = how many
-    ld a, d
-    ld [$2000], a
-    ld a, 1
-    ldh [rVBK], a
-    ld a, b
-    ldh [rHDMA1], a
-    ld a, c
-    ldh [rHDMA2], a
-    ld a, HIGH(FT_PIC_VRAM)
-    ldh [rHDMA3], a
-    ld a, LOW(FT_PIC_VRAM)
-    ldh [rHDMA4], a
-    ld a, e
-    dec a
-    ldh [rHDMA5], a         ; (16 bytes a tile: count - 1 blocks)
-    ld l, e                 ; HL = his rows, after the tiles
-    ld h, 0
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, bc
-    xor a
-    ldh [rVBK], a
-    call .rows
-    ld bc, FT_POSE_BYTES    ; then their attributes
-    add hl, bc
-    ld a, 1
-    ldh [rVBK], a
-    call .rows
-    xor a
-    ldh [rVBK], a
-    ld a, [wFtBankData]
-    ld [$2000], a
-    ret
-.rows:
-    ld a, h
-    ldh [rHDMA1], a
-    ld a, l
-    ldh [rHDMA2], a
-    ld a, HIGH(FT_REGION_ROW)
-    ldh [rHDMA3], a
-    ld a, LOW(FT_REGION_ROW)
-    ldh [rHDMA4], a
-    ld a, FT_POSE_BYTES / 16 - 1
-    ldh [rHDMA5], a
     ret
 ENDC
 
@@ -1383,6 +1682,11 @@ FtSwapSetup:
     ldh a, [hIsCGB]
     and a
     ret z
+IF DEF(FT_NES)
+    ld a, [wFtBankPics]     ; (Color with his NES pictures: none of the finer poses' sets, his pictures instead)
+    and a
+    jr nz, .setsIn
+ENDC
     ld a, [wFtBankSwapCgb]
     and a
     ret z
@@ -4353,9 +4657,13 @@ IF DEF(FT_NES)
     ldh a, [hIsCGB]
     and a
     jr z, .poses
+    ld a, [wRvPicHeadsBuf]  ; (its tiles' copy: the second, 64 on)
+    rrca
+    rrca
+    ld [wFtHeadTile], a
     ld a, [wFtBankPics]
     ld [$2000], a
-    ld a, [wRvPic]
+    ld a, [wRvPicHeads]
     add a
     ld e, a
     ld d, 0
@@ -4364,6 +4672,8 @@ IF DEF(FT_NES)
     jr .read
 .poses:
 ENDC
+    xor a
+    ld [wFtHeadTile], a
     ld a, [wFtBankHeads]
     ld [$2000], a
     ld a, [wRvPose]
@@ -4422,7 +4732,12 @@ ENDC
 .onScreen:
     ld [hl+], a
     inc de
-    ld a, [de]              ; tile
+    ld a, [wFtHeadTile]     ; tile
+    push hl
+    ld h, d
+    ld l, e
+    add [hl]
+    pop hl
     inc de
     ld [hl+], a
     ld a, [de]              ; attributes
@@ -4561,6 +4876,25 @@ ENDC
     ld d, [hl]
     ld e, a
     pop hl
+IF DEF(FT_MAC_PICS)
+    xor a
+    ld [wFtPlTileAdd], a
+    ldh a, [hIsCGB]         ; Color: his picture's sprites (its bank mapped till they're built), in its copy
+    and a
+    jr z, .macPose
+    push hl
+    ld a, [wPlPicHeads]
+    call FtPlPicEntry
+    ld d, h
+    ld e, l
+    pop hl
+    ld a, [wPlPicHeadsBuf]
+    and a
+    jr z, .macPose
+    ld a, FT_MAC_PIC_ROOM
+    ld [wFtPlTileAdd], a
+.macPose:
+ENDC
     ld a, [de]              ; sprite count
     inc de
     ld b, a
@@ -4573,6 +4907,9 @@ ENDC
     pop bc
     add FT_PLAYER_Y
     ld [wFtPlayerY], a
+    ld a, b                 ; (a picture of nothing: no sprites)
+    and a
+    jp z, .refStart
     ld a, [wPlTired]        ; worn out on the original: he blinks
     and a
     jr z, .shown
@@ -4606,6 +4943,12 @@ ENDC
     add c
     ld [hl+], a
     ld a, [de]              ; tile
+IF DEF(FT_MAC_PICS)
+    push hl
+    ld hl, wFtPlTileAdd
+    add [hl]
+    pop hl
+ENDC
     inc de
     ld [hl+], a
     ld a, [wPlFlip]
@@ -4644,6 +4987,10 @@ ENDC
     dec b
     jr nz, .sprite
 .refStart:
+IF DEF(FT_MAC_PICS)
+    ld a, [wFtBankData]     ; (his pictures' bank was mapped)
+    ld [$2000], a
+ENDC
 IF FT_FX_STARS
     call FtStars
 ENDC
@@ -4830,12 +5177,12 @@ FtNesFrame:
     ld [wPlState], a
     call NesJoypad          ; the buttons, then the NES game's frame (kit_nes.asm)
     call NesEngineFrame
-    ld a, [wFtBankNes]  ; his pose and place
-    ld [$2000], a
-    call FtNesShow
-    ld a, BANK(NesMac)      ; Mac's
+    ld a, BANK(NesMac)      ; Mac's pose (first: his picture's tiles go up before his rival's)
     ld [$2000], a
     call FtNesMacShow
+    ld a, [wFtBankNes]      ; his pose and place
+    ld [$2000], a
+    call FtNesShow
     ld a, [wFtBankData]
     ld [$2000], a
     call FtCueBuild         ; (his dodge cue's palettes, ready for VBlank)
@@ -5083,6 +5430,7 @@ FtNesShow:
     ld a, [hl]
     ld [wRvPlaceY], a
 .place:
+    call FtPicDecide        ; (Color, his pictures: the one going up, and its place)
     ld a, [wNes + nOppBaseX]
     ld l, a
     ld h, 0
@@ -5144,6 +5492,9 @@ FtNesMacShow:
     rlca
     and 1
     ld [wPlFlip], a
+IF DEF(FT_MAC_PICS)
+    call FtPlPicFrame       ; (Color: his own picture of the frame, exact: no flip)
+ENDC
     ld a, [wNes + $61]      ; and where it sits
     ld l, a
     ld h, 0
@@ -5166,7 +5517,160 @@ FtNesMacShow:
     add hl, de
     ld a, [hl]
     ld [wPlX], a
+IF DEF(FT_MAC_PICS)
+    jp FtPlPicDecide
+ELSE
     ret
+ENDC
+
+IF DEF(FT_MAC_PICS)
+; ---- Color, the NES's Mac: each frame of his exact (MacPicFrames), two copies of his tiles in bank 1's sprite
+; tiles, as his rival's: decided as the frame's sprites are built, up at the next VBlank's start ----
+
+; His picture's entry (A): BC its tiles, D their bank, E how many, HL its sprites' address (their bank mapped).
+FtPlPicEntry:
+    ld l, a
+    ld h, 0
+    ld a, BANK(MacPicTable)
+    ld [$2000], a
+    ld b, h
+    ld c, l
+    add hl, hl
+    add hl, bc
+    add hl, hl              ; (6 bytes each)
+    ld bc, MacPicTable
+    add hl, bc
+    ld a, [hl+]
+    ld c, a
+    ld a, [hl+]
+    ld b, a
+    ld a, [hl+]
+    ld d, a
+    ld a, [hl+]
+    ld e, a
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    ret
+
+; His NES frame just drawn (wNes + $61): his picture for it, unflipped (NesMac's bank mapped after).
+FtPlPicFrame:
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    xor a
+    ld [wPlFlip], a
+    ld a, [wNes + $61]
+    cp 128
+    ret nc
+    ld l, a
+    ld h, 0
+    ld a, BANK(MacPicFrames)
+    ld [$2000], a
+    ld de, MacPicFrames
+    add hl, de
+    ld a, [hl]
+    cp $FF
+    jr z, .keep
+    ld [wPlPic], a
+.keep:
+    ld a, BANK(NesMac)
+    ld [$2000], a
+    ret
+
+; As the frame's sprites are built: a new picture of his goes up next VBlank (always room: 32 tiles at most).
+FtPlPicDecide:
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    xor a
+    ld [wPlPicSwitch], a
+    ld [wPlPicGo], a
+    ld a, [wPlPic]
+    ld hl, wPlPicShown
+    cp [hl]
+    jr z, .keep
+    ld [wPlPicHeads], a
+    call FtPlPicEntry
+    ld a, e
+    ld [wPlPicGo], a
+    ld a, 1
+    ld [wPlPicSwitch], a
+    ld a, [wPlPicBuf]
+    xor 1
+    ld [wPlPicHeadsBuf], a
+    jr .out
+.keep:
+    ld [wPlPicHeads], a
+    ld a, [wPlPicBuf]
+    ld [wPlPicHeadsBuf], a
+.out:
+    ld a, BANK(NesMac)
+    ld [$2000], a
+    ret
+
+; VBlank, before the sprites: his readied picture's tiles into the copy not shown (32 DMA blocks at most).
+FtPlPicSwitch:
+    ld a, [wPlPicSwitch]
+    and a
+    ret z
+    xor a
+    ld [wPlPicSwitch], a
+    ld a, [wPlPicHeads]
+    call FtPlPicEntry
+    ld a, e
+    and a
+    jr z, .shown            ; (a picture of nothing: no tiles)
+    ld a, d
+    ld [$2000], a
+    ld a, b
+    ldh [rHDMA1], a
+    ld a, c
+    ldh [rHDMA2], a
+    ld a, [wPlPicHeadsBuf]
+    and a
+    ld a, HIGH($8000)
+    jr z, .to
+    ld a, HIGH($8000 + FT_MAC_PIC_ROOM * 16)
+.to:
+    ldh [rHDMA3], a
+    ld a, LOW($8000)
+    ldh [rHDMA4], a
+    ld a, 1
+    ldh [rVBK], a
+    ld a, e
+    dec a
+    ldh [rHDMA5], a
+    xor a
+    ldh [rVBK], a
+.shown:
+    ld a, [wPlPicHeads]
+    ld [wPlPicShown], a
+    ld a, [wPlPicHeadsBuf]
+    ld [wPlPicBuf], a
+    ld a, [wFtBankData]
+    ld [$2000], a
+    ret
+
+; His first picture, as the fight sets up (loading: in a VBlank of its own).
+FtPlPicsStart:
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    ld a, BANK(MacPicIdle)
+    ld [$2000], a
+    ld a, [MacPicIdle]
+    ld [wPlPic], a
+    ld [wPlPicHeads], a
+    xor a
+    ld [wPlPicHeadsBuf], a
+    ld a, $FF
+    ld [wPlPicShown], a
+    FT_VWAIT FT_ROOM_ALL
+    ld a, 1
+    ld [wPlPicSwitch], a
+    jp FtPlPicSwitch
+ENDC
 
 ; The HUD from the NES's numbers: HP ($0392 Mac, $0399 him), hearts (BCD $0323/$0324), stars ($0342).
 FtNesHud:

@@ -925,6 +925,17 @@ def _nes_fighter(nes, where, errors):
             errors.append(f"{where}: NES Mac frame {k!r}'s place: a frame number (hex) and [pixels down 0-63, knocked-down colors 0/1].")
             return None
         mac_places[n] = v[0] | (0x80 if v[1] else 0)
+    mac_pics = nes.get("macPictures")       # Color: each NES frame of Mac's, exact ({key: {pixels, w, h, x, y}}: his
+    if mac_pics is not None:                # frame's pixels, where its top-left sits in the 24x48 pose box)
+        if not (isinstance(mac_pics, dict) and mac_pics and all(
+                re.fullmatch(r"[0-9A-F]{2}", k) and isinstance(v, dict)
+                and all(isinstance(v.get(f), int) for f in ("w", "h", "x", "y"))
+                and 0 <= v["w"] <= 40 and 0 <= v["h"] <= 64 and -40 <= v["x"] <= 40 and -64 <= v["y"] <= 64
+                and isinstance(v.get("pixels"), str) and len(v["pixels"]) == v["w"] * v["h"]
+                and set(v["pixels"]) <= set("0123") for k, v in mac_pics.items())):
+            errors.append(f"{where}: the NES Mac pictures are each his frame's pixels, its size and where it sits.")
+            return None
+        mac_places = [v & 0x80 for v in mac_places]     # (where each sits: in the pictures; his colors still here)
     tell = nes.get("tellFlash")             # his tell as a palette change (Great Tiger's: his black goes gray)
     if tell is not None and not (isinstance(tell, dict) and all(isinstance(tell.get(k), int) and 0 <= tell[k] < 256
                                                                 for k in ("frame", "state"))
@@ -956,6 +967,7 @@ def _nes_fighter(nes, where, errors):
                if pictures else {}),
             **({"tell": {"frame": tell["frame"], "state": tell["state"], "color": tell["color"]}} if tell else {}),
             **({"jewel": {p: tuple(v) for p, v in jewel.items()}} if jewel else {}),
+            **({"mac_pictures": mac_pics} if mac_pics else {}),
             "mac": mac, "mac_frames": mac_frames, "mac_places": mac_places, "mac_home": nes.get("macHome", 176),
             "mac_scale": float(nes.get("macScale", scale)), "sound": sound, "sound_fixed": sound_fixed,
             "samples": samples}
@@ -1652,6 +1664,14 @@ def _fight_compose_tiles(scene, tile_of):
             raise ProjectError([f'Scene "{scene["name"]}": the player\'s Game Boy Color poses need {len(ctiles)} tiles; '
                                 'the limit is 128. Share more of their tiles.'])
         scene["fight_pl_cgb"] = {"tiles": ctiles, "sprites": csprites}
+        mp = (ft.get("nes") or {}).get("mac_pictures")
+        if mp:                                  # Color, the NES's Mac: each frame of his exact, streamed in (two
+            scene["fight_mac_pics"] = _mac_pics(mp, pal)    # copies, MAC_PIC_ROOM tiles each, then the side ropes')
+            sides = ctiles[scene["fight_side_tile"]:] if side else []
+            scene["fight_pl_cgb"] = {"tiles": [(0,) * 64] * (2 * MAC_PIC_ROOM) + sides,
+                                     "sprites": {pose: [] for pose in csprites}}
+            if side:
+                scene["fight_side_tile"] = 2 * MAC_PIC_ROOM
     scene["fight_slots"] = {"ref": ref_at, "ref_tiles": ref_n, "pl": pl_at, "pl_tiles": pl_n,
                             "used": kit.OBJ_FIRST_TILE + len(obj) + pl_n + 2 * ref_n}
     # a camera flash in the crowd: a white burst (slot 1) on the darkest slot
@@ -1873,6 +1893,48 @@ def _fight_cgb(scene):
                           "perm0": perm0, "perm0_slots": slots0, "perm1": perm1, "perm1_first": 256 - len(perm1),
                           "runs": [tuple(r) for r in runs],
                           "sizes": {n: len(own) for n, own in sets.items()}}
+
+
+MAC_PIC_ROOM = 32                       # Color: tiles a picture of Mac's may have (each of its two copies' room)
+
+
+def _mac_pics(mp, pal):
+    """Color, the NES's Mac: his pictures (identical frames once), each its tiles (a tile and its mirror one once)
+    and its sprites (dy, dx from the pose box's top-left, tile, attributes: bank 1), on its own 8-pixel grid from its
+    top-left; and per NES frame of his (128), its picture."""
+    order, index, frame_pic = [], {}, [0xFF] * 128
+    for k in sorted(mp):
+        v = mp[k]
+        key = (v["pixels"], v["w"], v["h"], v["x"], v["y"])
+        if key not in index:
+            index[key] = len(order)
+            order.append(v)
+        if int(k, 16) < 128:
+            frame_pic[int(k, 16)] = index[key]
+    pics = []
+    for v in order:
+        w, h, px = v["w"], v["h"], v["pixels"]
+        tiles, local, sprites = [], {}, []
+        for r in range((h + 7) // 8):
+            for c in range((w + 7) // 8):
+                cell = tuple(int(px[(r * 8 + y) * w + c * 8 + x]) if r * 8 + y < h and c * 8 + x < w else 0
+                             for y in range(8) for x in range(8))
+                if not any(cell):
+                    continue
+                mirror = tuple(cell[y * 8 + 7 - x] for y in range(8) for x in range(8))
+                if cell in local:
+                    t, f = local[cell], 0
+                elif mirror in local:
+                    t, f = local[mirror], 0x20
+                else:
+                    local[cell] = t = len(tiles)
+                    tiles.append(cell)
+                    f = 0
+                sprites.append((v["y"] + r * 8, v["x"] + c * 8, t, pal | f | 0x08))
+        if len(tiles) > MAC_PIC_ROOM:
+            raise ProjectError([f"Mac's NES picture has {len(tiles)} tiles; a picture of his can have {MAC_PIC_ROOM}."])
+        pics.append({"tiles": tiles, "sprites": sprites})
+    return {"frames": frame_pic, "pics": pics, "idle": frame_pic[0]}
 
 
 PIC_BASE = 128                          # Color: where a picture's tiles go (bank 1, slots sprites reach too)

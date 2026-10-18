@@ -23,6 +23,8 @@ STAR = 20                               # a star earned, in damage
 HORIZON = 60                            # frames a punch of Mac's is judged over
 COMMIT = 4                              # frames ahead a plan's first press may be and still be made
 STALL = 45                              # frames of nothing before Mac draws him out
+DELAY = 20                              # frames ahead a punch is tried later, for a harder hit
+DELAY_GAIN = 3                          # how much harder it must hit to be worth the wait
 
 
 def _symbols(rom):
@@ -249,6 +251,37 @@ def follow_up(g, snap, p, depth=CHAIN):
     return total
 
 
+def timed(g, snap, hold):
+    """A punch thrown a few frames from now instead (a reeling fighter's stun ends on one frame: hit just
+    then, it lands as a fresh hit, not a combo's little one; out of a dodge, a counter just as his punch is
+    spent): its plan, if it beats the best now by DELAY_GAIN and every answer of his is still stopped. The
+    delays are tried with one punch, then the others at the best of them (a state's load is what costs)."""
+    names = ("jab_r", "jab_l", "body_r", "body_l") + (("star",) if g.nes(0x342) else ())
+
+    def try_(name, d):
+        g.load(snap)                    # (a press later: just then, 4 frames; out of a dodge too, as it ends)
+        r = run(g, Plan((d, d + (hold if d == 0 else 4), PUNCHES[name])), d + 18)
+        return -1 if r["mac_hp"] or r["mac_kd"] else value(r)
+
+    now = max(try_(n, 0) for n in names)
+    by_delay = sorted(((try_("jab_r", d), d) for d in range(1, DELAY + 1)), reverse=True)
+    best = None
+    for v, d in by_delay[:2]:
+        for name in names:
+            w = v if name == "jab_r" else try_(name, d)
+            if best is None or w > best[0]:
+                best = (w, name, d)
+    if best is None or best[0] < max(now, 0) + DELAY_GAIN:
+        return None
+    _, name, d = best
+    p = defended(g, snap, Plan((d, d + 4, PUNCHES[name])), HORIZON)
+    if p is None:
+        return None
+    g.load(snap)
+    r = run(g, p, HORIZON)
+    return None if r["mac_kd"] or r["mac_hp"] else p
+
+
 def think(g, idle_for, last_hand=None):
     """The plan for now: a punch that lands with every answer of his stopped; else the defense his next
     punch needs; else, if he's waiting on Mac, the safest punch to draw him out."""
@@ -271,6 +304,11 @@ def think(g, idle_for, last_hand=None):
         other = HAND.get(name) not in (None, last_hand)   # (as good either way: the other hand, left-right-left)
         scored.append((value(r) + follow_up(g, snap, p), name != "star", other, p))
     best = max(scored, key=lambda x: x[:3]) if scored else None
+    later = (timed(g, snap, hold) if not (best and best[0] >= 1000) and (g.nes(0x90) & 0x7F) not in (0, 1)
+             else None)                 # (he's waiting: no moment to wait for)
+    if later is not None:               # (a punch a few frames from now hits harder: wait for it)
+        g.load(snap)
+        return later
     if DEBUG is not None:
         DEBUG.append((idle_for, [(v, n) for v, n, _, _ in scored]))
     if best and best[0] > 0:

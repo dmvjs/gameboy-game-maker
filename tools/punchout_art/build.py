@@ -3,7 +3,7 @@ this folder and editor/art/mac-vs-joe.js (.git/info/exclude).
 
     python3 tools/punchout_art/build.py                    # rebuild from the NES rips at the default scales
     python3 tools/punchout_art/build.py --joe 0.7 --mac 0.75
-    python3 tools/punchout_art/build.py --joe-sheet my-joe.png --mac-sheet my-mac.png      # hand-edited sheets
+    python3 tools/punchout_art/build.py --mac-sheet my-mac.png      # a hand-edited sheet
 
 From the rips it writes out/joe-from-rip.png (64x80 frames) and out/mac-from-rip.png (24x48 frames); copy one
 to edit in any pixel editor (these two are rewritten on every run). Then, only if everything fits, it writes
@@ -428,7 +428,7 @@ def nes_portrait(opponent):
     return out
 
 def portrait(name):
-    if name in NES_RIVALS:
+    if name in NES_RIVALS and name not in PORTRAITS:    # (Joe's close-ups: their own, his hurt one too)
         return nes_portrait(NES_RIVALS[name]["opp"])
     src, (x0, y0) = PORTRAITS[name]
     px = load(src)
@@ -490,9 +490,9 @@ _cell = lambda k: str(k) if k < 10 else chr(65 + k - 10) if k < 36 else chr(0xC0
 
 def portraits():
     """({name: {pixels, cells}}, palettes): cells are digits, each tile's palette in the returned list."""
-    faces = {name: portrait(name) for name in list(PORTRAITS) + list(NES_RIVALS)}
+    faces = {name: portrait(name) for name in list(PORTRAITS) + [r for r in NES_RIVALS if r not in PORTRAITS]}
     out, palettes = {}, []
-    for fighter, names in (("joe", ["joe", "joe_hurt"]), ("mac", ["mac"]), *((r, [r]) for r in NES_RIVALS)):
+    for fighter, names in (("joe", ["joe", "joe_hurt"]), ("mac", ["mac"]), *((r, [r]) for r in NES_RIVALS if r != "joe")):
         pals = choose_palettes([t for n in names for t in _tiles(faces[n])], PORTRAIT_PALETTES[fighter])
         for n in names:
             slots, cells = _draw(faces[n], pals)
@@ -952,6 +952,42 @@ def mac_from_nes(s):
     return out
 
 
+def mac_pictures(s):
+    """Little Mac on Color: every NES frame of his, exact (no pose standing in for another), each where the NES
+    draws it: {key: {"pixels": slots, "w", "h", "x", "y"}}, x, y its top-left in the original's 24x48 pose box
+    (his idle frame bottom-centred in it, as there), scaled by s. A frame of nothing: no pixels."""
+    import mac_nes
+    def ink(c):
+        r, g, b = c[:3]
+        if r + g + b < 90: return MAC_INK[0] + (255,)
+        if r > g > b and r - b > 40: return MAC_INK[2] + (255,)
+        return MAC_INK[1] + (255,)
+    raw = {k: mac_nes.mac_frame_at(int(k, 16)) for k in sorted(MAC_FRAMES, key=lambda k: int(k, 16))}
+    i0, (x0, y0) = raw["00"]
+    w0 = len(shrink_lines([[ink(c) if c else None for c in row] for row in i0], s)[0])
+    bx, by = (PW - w0) // 2, y0 + len(i0)       # (his idle frame's left in the box; its bottom, the box's)
+    out = {}
+    for k, r in raw.items():
+        if r is None:                   # nothing drawn: sunk out of view (none of him), or no new picture (the one
+            if MAC_PLACES.get(k) == 48:     # up stays: $48, him standing)
+                out[k] = {"pixels": "", "w": 0, "h": 0, "x": 0, "y": 0}
+            continue
+        img, (x, y) = r
+        f = [[ink(c) if c else None for c in row] for row in img]
+        if MAC_FRAMES[k] == "duck":         # (the render leaves a slit down his back: his tank top's black)
+            for row in f:
+                on = [i for i, c in enumerate(row) if c]
+                for i in range(on[0], on[-1] + 1) if on else ():
+                    if not row[i]: row[i] = MAC_INK[0] + (255,)
+        small = shrink_lines(f, s)
+        h, w = len(small), len(small[0])
+        left = bx + round((x - x0) * s)
+        top = PH + round((y + len(img) - by) * s) - h
+        px = "".join(str(1 + min(range(3), key=lambda i: dist(c[:3], MAC_INK[i]))) if c else "0" for row in small for c in row)
+        out[k] = {"pixels": px, "w": w, "h": h, "x": left, "y": top}
+    return out
+
+
 # Where each of Joe's NES frames sits: the NES draws every frame at its own offset from his place (leaning into
 # a hit, stepping into a hook, down on the mat), and each pose of ours is cut and centred on its own. Each frame,
 # as the game draws it at his home, is matched by shape to the pose that shows it; the offsets put the pose
@@ -1176,15 +1212,16 @@ SODA_FROM_NES = dict(idle="C0", idle2="C4", idle3="C2", guard="08", guard_low="0
 # The rivals after Joe, from their NES fights: opponent number, fighter bank (and offset), frames, and the game's
 # nth fight (where their tiles are measured).
 NES_RIVALS = {
-    "kaiser": dict(name="Von Kaiser", opp=1, bank=2, offset=0x00, frames=KAISER_FRAMES, canon=KAISER_FROM_NES, nth=1),
-    "honda": dict(name="Piston Honda", opp=2, bank=5, offset=0x30, frames=HONDA_FRAMES, canon=HONDA_FROM_NES, nth=2),
-    "don": dict(name="Don Flamenco", opp=3, bank=0, offset=0x10, frames=DON_FRAMES, canon=DON_FROM_NES, nth=3),
-    "hippo": dict(name="King Hippo", opp=4, bank=1, offset=0x00, frames=HIPPO_FRAMES, canon=HIPPO_FROM_NES, nth=4),
-    "tiger": dict(name="Great Tiger", opp=5, bank=2, offset=0x10, frames=TIGER_FRAMES, canon=TIGER_FROM_NES, nth=5, jewel=True),
-    "bull": dict(name="Bald Bull", opp=6, bank=3, offset=0x30, frames=BULL_FRAMES, canon=BULL_FROM_NES, nth=6),
-    "soda": dict(name="Soda Popinski", opp=8, bank=4, offset=0x10, frames=SODA_FRAMES, canon=SODA_FROM_NES, nth=8),
-    "sandman": dict(name="Mr. Sandman", opp=11, bank=3, offset=0x10, frames=SANDMAN_FRAMES, canon=SANDMAN_FROM_NES, nth=11),
-    "macho": dict(name="Super Macho Man", opp=12, bank=4, offset=0x30, frames=MACHO_FRAMES, canon=MACHO_FROM_NES, nth=12, cynes=True),
+    "joe": dict(name="Glass Joe", opp=0, bank=0, offset=0x00, frames=NES_FRAMES, canon=JOE_FROM_NES, nth=0, pictures=True),
+    "kaiser": dict(name="Von Kaiser", opp=1, bank=2, offset=0x00, frames=KAISER_FRAMES, canon=KAISER_FROM_NES, nth=1, pictures=True),
+    "honda": dict(name="Piston Honda", opp=2, bank=5, offset=0x30, frames=HONDA_FRAMES, canon=HONDA_FROM_NES, nth=2, pictures=True),
+    "don": dict(name="Don Flamenco", opp=3, bank=0, offset=0x10, frames=DON_FRAMES, canon=DON_FROM_NES, nth=3, pictures=True),
+    "hippo": dict(name="King Hippo", opp=4, bank=1, offset=0x00, frames=HIPPO_FRAMES, canon=HIPPO_FROM_NES, nth=4, pictures=True),
+    "tiger": dict(name="Great Tiger", opp=5, bank=2, offset=0x10, frames=TIGER_FRAMES, canon=TIGER_FROM_NES, nth=5, jewel=True, pictures=True),
+    "bull": dict(name="Bald Bull", opp=6, bank=3, offset=0x30, frames=BULL_FRAMES, canon=BULL_FROM_NES, nth=6, pictures=True),
+    "soda": dict(name="Soda Popinski", opp=8, bank=4, offset=0x10, frames=SODA_FRAMES, canon=SODA_FROM_NES, nth=8, pictures=True),
+    "sandman": dict(name="Mr. Sandman", opp=11, bank=3, offset=0x10, frames=SANDMAN_FRAMES, canon=SANDMAN_FROM_NES, nth=11, pictures=True),
+    "macho": dict(name="Super Macho Man", opp=12, bank=4, offset=0x30, frames=MACHO_FRAMES, canon=MACHO_FROM_NES, nth=12, cynes=True, pictures=True),
     "tyson": dict(name="Mike Tyson", opp=13, bank=5, offset=0x40, frames=TYSON_FRAMES, canon=TYSON_FROM_NES, nth=13, lines=True,
                   pictures=True),
 }
@@ -1196,12 +1233,12 @@ for _fm, _canon in FIGHTERS.values():          # up off the knee (2E, his other 
             _canon.setdefault(_rise, _f)
 
 
-def joe_shapes(opponent=0):
+def joe_shapes(opponent=0, everything=False):
     """{(frame, mirrored): {(x, y) from his place: color}}: each frame of his from a fight, his biggest piece
     (not a speck of another sprite, nor the referee)."""
     import nes_play
     frames_map, canon = FIGHTERS[opponent]
-    wanted = {_key(k) for k in list(frames_map) + list(canon.values())} if opponent == 0 else None
+    wanted = {_key(k) for k in list(frames_map) + list(canon.values())} if opponent == 0 and not everything else None
     out = {}
     found = nes_play.fighter_frames(opponent, wanted)
     if any(r["opp"] == opponent and r.get("cynes") for r in NES_RIVALS.values()):
@@ -1295,7 +1332,7 @@ def joe_from_nes(s, shapes=None, opponent=0):
     return frames
 
 
-def pictures_from_nes(s, shapes, opponent):
+def pictures_from_nes(s, shapes, opponent, blank=()):
     """Every picture of his the NES game draws, each its own 64x80 frame (Game Boy Color shows exactly these:
     no pose standing in for another): {key: frame}, plain ones scaled as joe_from_nes scales poses, a mirrored
     one its plain one flipped whole (the NES draws it so; Color stores its tiles once). Keys as the frame maps'
@@ -1326,10 +1363,18 @@ def pictures_from_nes(s, shapes, opponent):
     for (f, mi) in sorted(shapes):
         if not mi:
             out["%02X" % f] = make(shapes[(f, 0)])
+    for (f, mi) in blank:               # (frames the NES draws him in as nothing: Tiger gone in his dash)
+        out["%02X%s" % (f, "|" if mi else "")] = [[None] * RW for _ in range(RH)]
     for (f, mi) in sorted(shapes):
-        if mi:
+        if mi and "%02X|" % f not in out:
             out["%02X|" % f] = [list(reversed(row)) for row in out["%02X" % f]]
     return out
+
+
+def blank_frames(opponent):
+    """The frames a fight showed him as nothing at all (his crop empty): {(frame, mirrored)}."""
+    import nes_play
+    return {k for k, (crop, _) in nes_play.fighter_frames(opponent).items() if not any(any(row) for row in crop)}
 
 
 def picture_places(frames, s, shapes):
@@ -1350,6 +1395,8 @@ def picture_places(frames, s, shapes):
         return [sum(1 << x for x in range(RW) if frame[y][x]) for y in range(RH)]
     found = {}
     for key, frame in frames.items():
+        if not any(any(row) for row in frame):
+            continue                        # (a blank one: nothing to place)
         shape = shapes.get(_key(key))
         if shape is None:                   # (a picture only caught the other way round: that one flipped)
             other = shapes.get(_key(key[:-1])) if key.endswith("|") else shapes.get(_key(key + "|"))
@@ -1560,8 +1607,9 @@ def rival_art(key, s, colors, pposes, max_share=24):
     print(f"{r['name']} on Color: {report}; tiles {how}")
     art = {"poses": shared, "pals": pals, "places": places, "cgb": cgb, "jewels": jewels}
     if r.get("pictures"):               # Color: every NES picture of his, exact (streamed as he shows it)
-        frames_ = pictures_from_nes(s, shapes, r["opp"])
-        art["pictures"] = {"poses": import_pictures(frames_, pals), "places": picture_places(frames_, s, shapes)}
+        every = joe_shapes(r["opp"], everything=True)
+        frames_ = pictures_from_nes(s, every, r["opp"], blank_frames(r["opp"]))
+        art["pictures"] = {"poses": import_pictures(frames_, pals), "places": picture_places(frames_, s, every)}
         write_sheet(HERE / "out" / f"{key}-pictures.png", [frames_[k] for k in sorted(frames_)], RW, RH, cols=13)
         print(f"{r['name']}: {len(frames_)} pictures, exact for Color")
     return art
@@ -1611,16 +1659,11 @@ def fit_rival(poses, pals, colors, pposes, max_share=16, nth=0):
     sys.exit("The rival's poses don't fit his fight's tiles.")
 
 
-def write_js(poses, pals, colors, pposes, note, faces, mac_pal, places=None, rivals=None, joe_cgb=None, mac_cgb=None):
-    L = ["// Little Mac and Glass Joe from Punch-Out!! (NES), for local testing only. Written by tools/punchout_art/build.py",
-         f"// ({note}). Not original art: keep it out of commits and builds you share.", "",
-         "// Rival palettes s, g, h (slot 0 is the mat, replaced at load).",
-         f"export const JOE_PALETTES = {json.dumps(pals)};", "", "export const JOE_POSES = {"]
-    L += [f"  {n}: {{ pixels: '{v['pixels']}', cells: '{v['cells']}' }}," for n, v in poses.items()]
-    L += ["};", "", "// The same, finer, for Game Boy Color (its second tile bank)."]
-    L += ["export const JOE_POSES_CGB = {"] + [f"  {n}: {{ pixels: '{v['pixels']}', cells: '{v['cells']}' }}," for n, v in (joe_cgb or poses).items()]
-    L += ["};", "", "// Player sprite colors for slots 1-3.", f"export const MAC_COLORS = {json.dumps(colors)};", "",
-          "export const MAC_POSES = {"]
+def write_js(colors, pposes, note, faces, mac_pal, rivals, mac_cgb=None):
+    L = ["// Little Mac and his opponents from Punch-Out!! (NES), from a copy of the game. Written by tools/punchout_art/build.py",
+         f"// ({note}).", "",
+         "// Player sprite colors for slots 1-3.", f"export const MAC_COLORS = {json.dumps(colors)};", "",
+         "export const MAC_POSES = {"]
     L += [f"  {n}: '{v}'," for n, v in pposes.items()]
     L += ["};", "", "// The same unshared, for Game Boy Color (its second bank's sprite tiles).", "export const MAC_POSES_CGB = {"]
     L += [f"  {n}: '{v}'," for n, v in (mac_cgb or pposes).items()]
@@ -1629,15 +1672,15 @@ def write_js(poses, pals, colors, pposes, note, faces, mac_pal, places=None, riv
           "export const PORTRAITS = {"]
     L += [f"  {n}: {{ pixels: '{v['pixels']}', cells: '{v['cells']}' }}," for n, v in faces.items()]
     import base64
-    L += ["};", "", "// Glass Joe's NES fighter bank (Punch-Out!! PRG bank 0) and our pose for each of its frames.",
-          f"export const JOE_NES = {{ bank: '{base64.b64encode(DISASM_BANK.read_bytes()).decode()}', offset: 0,",
-          f"  frames: {json.dumps(NES_FRAMES)}, home: [135, 182], scale: {SCALE_JOE},",
-          f"  places: {json.dumps(places or {})},",
+    L += ["};", "",
+          "// What every fight shares of the NES game: Mac, the sound engine (each fighter's own NES data: X_NES).",
+          f"export const NES_GAME = {{",
           f"  mac: '{base64.b64encode(DISASM_MAC.read_bytes()).decode()}',",
           f"  sound: '{base64.b64encode(DISASM_BANK.with_name('PRG_Bank008.bin').read_bytes()).decode()}',",
           f"  soundFixed: '{base64.b64encode(DISASM_BANK.with_name('PRG_BankDEF.bin').read_bytes()[0x5400:0x5900]).decode()}',",
           f"  samples: '{base64.b64encode(DISASM_BANK.with_name('PRG_BankDEF.bin').read_bytes()[0x4000:0x5400]).decode()}',",
           f"  macFrames: {json.dumps(MAC_FRAMES)}, macHome: 176, macScale: {SCALE_MAC},",
+          f"  macPictures: {json.dumps(mac_pictures(SCALE_MAC))},",
           f"  macPlaces: {json.dumps({**{k: [v, 1] for k, v in MAC_PLACES.items()}, **{k: [v, 0] for k, v in MAC_LIFTS.items()}})} }};", "",
           "// Little Mac knocked down: the NES's colors for him, slots 1-3 as MAC_COLORS.",
           f"export const MAC_DOWN_COLORS = {json.dumps(mac_down_colors(colors))};", "",
@@ -1645,7 +1688,7 @@ def write_js(poses, pals, colors, pposes, note, faces, mac_pal, places=None, riv
           f"export const MAC_TIRED_COLORS = {json.dumps(mac_down_colors(colors, MAC_TIRED_INK))};", "",
           "// The title's logo: Punch-Out!!'s, from its title screen, over its blue mesh (slots: holes, mesh, orange, red).",
           f"export const TITLE_LOGO = {json.dumps(title_logo())};", "",
-          *[line for key, art in (rivals or {}).items() for line in _rival_js(key, art)],
+          *[line for key, art in rivals.items() for line in _rival_js(key, art)],
           "// The training scene after the Minor Circuit title: New York scrolling by, Doc and Mac (the game's).",
           f"export const INTERMISSION = {json.dumps(intermission_art())};", "",
           "// Each fight's crowd color, as the NES game sets it (its background palette 2, color 2).",
@@ -1768,7 +1811,7 @@ def crowd_colors():
     if cache.exists():
         return json.loads(cache.read_text())
     rgb5 = lambda v: [round(c * 31 / 255) for c in nes_boot.NES_RGB[v & 0x3F]]
-    got = {name: rgb5(nes_play.ring_palette(opp)[10]) for name, opp in (("joe", 0), *((k, r["opp"]) for k, r in NES_RIVALS.items()))}
+    got = {name: rgb5(nes_play.ring_palette(opp)[10]) for name, opp in ((k, r["opp"]) for k, r in NES_RIVALS.items())}
     cache.write_text(json.dumps(got))
     return got
 
@@ -1848,22 +1891,16 @@ def main():
     a.add_argument("--joe", type=float, default=0.7, help="Joe's scale from NES size (default 0.7)")
     a.add_argument("--mac", type=float, default=0.7, help="Mac's scale from NES size (default 0.7, as Joe's: all of him, reaching punches too)")
     a.add_argument("--max-share", type=int, default=10, help="most pixels a tile may change to share another (default 10)")
-    a.add_argument("--joe-sheet", type=Path, help="use this edited 64x80-frame sheet instead of the rip")
-    a.add_argument("--joe-rip", dest="joe_nes", action="store_false", help="Joe's poses from the rip sheet instead of the game's own frames (as the rivals after him)")
     a.add_argument("--mac-sheet", type=Path, help="use this edited 24x48-frame sheet instead of the rip")
     args = a.parse_args()
     write_example(strict=False)         # from the current editor code, so the budget below measures what it builds
     out = HERE / "out"
-    joe_sheet, mac_sheet = args.joe_sheet, args.mac_sheet
+    mac_sheet = args.mac_sheet
     shapes = joe_shapes()               # his frames as the game draws them in a fight (for where each sits)
     order = write_joe_frames(out / "joe-nes-frames.png", shapes)
     print("Joe's NES frames:", (out / "joe-nes-frames.png").relative_to(ROOT), "-", " ".join(order))
-    if not joe_sheet and args.joe_nes:  # (his poses drawn from them too: more tiles than a fight has on the
-        joe_sheet = out / "joe-from-nes.png"        # original Game Boy, shared down to fit)
-        write_sheet(joe_sheet, joe_from_nes(args.joe, shapes), RW, RH)
-    if not joe_sheet:
-        joe_sheet = out / "joe-from-rip.png"
-        write_sheet(joe_sheet, frames_from_rip(HERE / "sources" / "glass-joe.png", JOE, args.joe, RW, RH, 104, JOE_ROWS, 112), RW, RH)
+    joe_sheet = out / "joe-from-nes.png"   # (his poses from the game's frames, as every rival's: for the budget below)
+    write_sheet(joe_sheet, joe_from_nes(args.joe, shapes), RW, RH)
     if not mac_sheet:
         mac_sheet = out / "mac-from-nes.png"
         write_sheet(mac_sheet, mac_from_nes(args.mac), PW, PH)
@@ -1872,14 +1909,15 @@ def main():
     print(f"Joe: {joe_sheet}  ({moved} tiles had a color moved)\nMac: {mac_sheet}  ({pmoved} pixels moved)")
     # Share near-duplicate tiles, only as much as it takes to fit: for each fighter, the smallest pixel
     # difference that works (the player's limit first, with the rival sharing as much as allowed).
-    share = max(args.max_share, 24) if args.joe_nes else args.max_share   # (the game's frames: as far as the rivals')
+    share = max(args.max_share, 24)    # (the game's frames: as far as the rivals')
     rival = {args.max_share: share_rival_tiles(poses, share)}   # (for measuring the player's)
     player = {n: share_player_tiles(pposes, n) for n in range(args.max_share + 1)}
     global SCALE_JOE, SCALE_MAC
     SCALE_JOE, SCALE_MAC = args.joe, args.mac
     if not EXAMPLE.exists():            # a first build: a provisional pack, so the editor can make the project to measure
         faces, mac_pal = portraits()
-        write_js(rival[args.max_share], pals, colors, player[args.max_share], "provisional", faces, mac_pal)
+        write_js(colors, player[args.max_share], "provisional", faces, mac_pal,
+                 {key: rival_art(key, args.joe, colors, player[args.max_share]) for key in NES_RIVALS})
         write_example()
     def first(test):
         return next((n for n in range(args.max_share + 1) if test(n)), args.max_share)
@@ -1892,23 +1930,18 @@ def main():
     mac_cgb = share_player_tiles(pposes, 3)   # (Color: all of him, but a tile of a stray pixel or three: a sprite
                                               # each, and the 40 on screen are shared with the rival's head)
     pposes = player[plim]
-    raw = poses
     poses, how, report = fit_rival(poses, pals, colors, pposes, share)
-    joe_cgb, cgb_how, cgb_report = fit_cgb(raw, poses, pals, colors, pposes, share)
-    print(f"Joe on Color: {cgb_report}; tiles {cgb_how}")
     ok, report = budget(poses, pals, colors, pposes)
     print(f"{'fits' if ok else 'DOES NOT FIT'}: {report}" + f"; tiles shared {how} (Joe), within {plim} pixels (Mac)")
     write_preview(out / "preview.png", poses, pals, colors, pposes)
     print("preview:", (out / "preview.png").relative_to(ROOT))
     if not ok:
         sys.exit("editor/art/mac-vs-joe.js left as it was.")
-    note = (f"Joe {'from ' + joe_sheet.name if args.joe_sheet else f'at {args.joe}'}, "
+    note = (f"rivals at {args.joe}, "
             f"Mac {'from ' + mac_sheet.name if args.mac_sheet else f'at {args.mac}'} of NES size")
     faces, mac_pal = portraits()
-    places = joe_places(joe_sheet, args.joe, shapes)
-    print("Joe's frames placed as the NES draws them:", len(places), "moved")
     rivals = {key: rival_art(key, args.joe, colors, pposes) for key in NES_RIVALS}
-    write_js(poses, pals, colors, pposes, note, faces, mac_pal, places, rivals, joe_cgb, mac_cgb)
+    write_js(colors, pposes, note, faces, mac_pal, rivals, mac_cgb)
     write_example()
     print("wrote", OUT_JS.relative_to(ROOT), "- reopen New > Examples > Joe vs Mac in the editor")
 

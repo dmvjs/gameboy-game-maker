@@ -1,9 +1,9 @@
 // Joe vs Mac: a fighter pack for the boxing template (boxing.js, which describes a pack's shape) with
-// Little Mac and Glass Joe from Punch-Out!! (NES). For local testing only: the art is Nintendo's, so this file
-// and art/mac-vs-joe.js (written by tools/punchout_art/build.py) stay out of git.
+// Little Mac and his opponents from Punch-Out!! (NES): the art and the game's own code in art/mac-vs-joe.js, which
+// tools/punchout_art/build.py writes from a copy of the game.
 
 import { boxingGame, BOXING_VERSION } from './boxing.js';
-import { JOE_PALETTES, JOE_POSES, JOE_POSES_CGB, MAC_COLORS, MAC_DOWN_COLORS, MAC_TIRED_COLORS, MAC_POSES, MAC_POSES_CGB, TEXT_PALETTE, PORTRAIT_PALETTES, PORTRAITS, JOE_NES, KAISER_PALETTES, KAISER_POSES, KAISER_POSES_CGB, KAISER_NES, HONDA_PALETTES, HONDA_POSES, HONDA_POSES_CGB, HONDA_NES, DON_PALETTES, DON_POSES, DON_POSES_CGB, DON_NES, HIPPO_PALETTES, HIPPO_POSES, HIPPO_POSES_CGB, HIPPO_NES, TIGER_PALETTES, TIGER_POSES, TIGER_POSES_CGB, TIGER_NES, BULL_PALETTES, BULL_POSES, BULL_POSES_CGB, BULL_NES, SODA_PALETTES, SODA_POSES, SODA_POSES_CGB, SODA_NES, TIGER_JEWEL, SANDMAN_PALETTES, SANDMAN_POSES, SANDMAN_POSES_CGB, SANDMAN_NES, MACHO_PALETTES, MACHO_POSES, MACHO_POSES_CGB, MACHO_NES, TYSON_PALETTES, TYSON_POSES, TYSON_POSES_CGB, TYSON_NES, TITLE_LOGO, TITLE_PUNCH, TITLE_GLOVES, SPLASH, ENDING, LOSE_GLOVE, REFEREE, CROWD_COLORS, RING_COLORS, INTERMISSION }
+import { JOE_PALETTES, JOE_POSES, JOE_POSES_CGB, MAC_COLORS, MAC_DOWN_COLORS, MAC_TIRED_COLORS, MAC_POSES, MAC_POSES_CGB, TEXT_PALETTE, PORTRAIT_PALETTES, PORTRAITS, NES_GAME, JOE_NES, KAISER_PALETTES, KAISER_POSES, KAISER_POSES_CGB, KAISER_NES, HONDA_PALETTES, HONDA_POSES, HONDA_POSES_CGB, HONDA_NES, DON_PALETTES, DON_POSES, DON_POSES_CGB, DON_NES, HIPPO_PALETTES, HIPPO_POSES, HIPPO_POSES_CGB, HIPPO_NES, TIGER_PALETTES, TIGER_POSES, TIGER_POSES_CGB, TIGER_NES, BULL_PALETTES, BULL_POSES, BULL_POSES_CGB, BULL_NES, SODA_PALETTES, SODA_POSES, SODA_POSES_CGB, SODA_NES, TIGER_JEWEL, SANDMAN_PALETTES, SANDMAN_POSES, SANDMAN_POSES_CGB, SANDMAN_NES, MACHO_PALETTES, MACHO_POSES, MACHO_POSES_CGB, MACHO_NES, TYSON_PALETTES, TYSON_POSES, TYSON_POSES_CGB, TYSON_NES, TITLE_LOGO, TITLE_PUNCH, TITLE_GLOVES, SPLASH, ENDING, LOSE_GLOVE, REFEREE, CROWD_COLORS, RING_COLORS, INTERMISSION }
   from './art/mac-vs-joe.js';
 
 export const MAC_VS_JOE_VERSION = BOXING_VERSION;
@@ -17,7 +17,7 @@ const JOE = {
   crowdColor: CROWD_COLORS.joe,        // his fight's crowd, as the NES colors it
   portrait: PORTRAITS.joe,
   hurtPortrait: PORTRAITS.joe_hurt,
-  nes: JOE_NES,                       // his NES game logic, run as the original
+  nes: { ...NES_GAME, ...JOE_NES },   // his NES game logic, run as the original
   // Between rounds, as Punch-Out!!'s (its words): Doc's tip after round 1, then one of the rival's lines
   tip: [['DODGE', 'HIS PUNCH', 'THEN', 'COUNTER-', 'PUNCH!']],
   quotes: [['THIS IS', 'MY LAST', 'MATCH!', '', "I'M TOO", 'OLD FOR', 'FIGHTING!'],
@@ -36,7 +36,7 @@ const KAISER = {
   cgbPoses: KAISER_POSES_CGB,
   crowdColor: CROWD_COLORS.kaiser,
   portrait: PORTRAITS.kaiser,
-  nes: { ...JOE_NES, ...KAISER_NES },  // (Mac and the sound engine are the game's, the same in every fight)
+  nes: { ...NES_GAME, ...KAISER_NES },  // (Mac and the sound engine are the game's, the same in every fight)
   tip: [['DODGE', 'HIS PUNCH', 'THEN', 'COUNTER-', 'PUNCH!']],
   quotes: [['I WAS A', 'BOXING', 'TEACHER...', '..AT THE', 'MILITARY', 'ACADEMY!'],
            ["I'LL TEACH", 'YOU A', 'LESSON.', '', 'YOU WILL', 'FALL DOWN!'],
@@ -57,7 +57,7 @@ const HONDA = {
   cgbPoses: HONDA_POSES_CGB,
   crowdColor: CROWD_COLORS.honda,
   portrait: PORTRAITS.honda,
-  nes: { ...JOE_NES, ...HONDA_NES },
+  nes: { ...NES_GAME, ...HONDA_NES },
   titleBout: true,                      // TITLE BOUT under the circuit
   tip: [['CATCH HIM', 'OFF-GUARD', 'TO STUN', 'HIM!'], ['THEN', 'UNLOAD', 'ON HIM!']],
   quotes: [['YOU SHOULD', 'WEAR A', 'HELMET', 'WHEN YOU', 'FIGHT ME!'],
@@ -77,7 +77,7 @@ const DON = {
   cgbPoses: DON_POSES_CGB,
   crowdColor: CROWD_COLORS.don,
   portrait: PORTRAITS.don,
-  nes: { ...JOE_NES, ...DON_NES },
+  nes: { ...NES_GAME, ...DON_NES },
   quotes: [["I'M A", 'BEAUTIFUL', 'FIGHTER.', '', 'I HAVE', 'SUCH A', 'STYLE!'],
            ['PEOPLE', 'LIKE MY', 'HAIR.', '', "DON'T MESS", 'MY HAIR!'],
            ['CARMEN,', 'MY LOVE...', '', 'I DANCE', 'SO SWEET', 'FOR YOU!'],
@@ -95,7 +95,7 @@ const HIPPO = {
   cgbPoses: HIPPO_POSES_CGB,
   crowdColor: CROWD_COLORS.hippo,
   portrait: PORTRAITS.hippo,
-  nes: { ...JOE_NES, ...HIPPO_NES },
+  nes: { ...NES_GAME, ...HIPPO_NES },
   talk: [[['HIS', 'DEFENSE IS', 'TOO TOUGH,', 'DOC!'], ["DON'T GIVE", 'UP, MAC!', 'HE HAS A', 'WEAKNESS..', '......'],   // Mac,
           ['WEAKNESS?', 'COME ON', 'DOC!', 'TEACH ME', 'MORE...']],                                                     // Doc, Mac
          [['HIS', 'DEFENSE IS', 'TOO TOUGH,', 'DOC!'], ["DON'T GIVE", 'UP, MAC!', 'MAKE HIM', 'CLOSE HIS', 'BIG MOUTH'],
@@ -115,7 +115,7 @@ const TIGER = {
   cgbPoses: TIGER_POSES_CGB,
   crowdColor: CROWD_COLORS.tiger,
   portrait: PORTRAITS.tiger,
-  nes: { ...JOE_NES, ...TIGER_NES, jewel: TIGER_JEWEL },   // (his jewel's tell:
+  nes: { ...NES_GAME, ...TIGER_NES, jewel: TIGER_JEWEL },   // (his jewel's tell:
                                                                                                       // his black goes gray)
   talk: [[['HIS FATHER', 'WAS A', 'GREAT', 'MAGICIAN', 'IN INDIA.'], ["DON'T BE", 'CHARMED BY', 'HIS MAGIC', 'PUNCHES.']]],
   quotes: [['SO A', 'PUSSYCAT', 'WANTS TO', 'FIGHT A', 'TIGER!'], ['BEWARE', 'MY TIGER', 'PUNCH!'],
@@ -136,7 +136,7 @@ const BULL = {
   cgbPoses: BULL_POSES_CGB,
   crowdColor: CROWD_COLORS.bull,
   portrait: PORTRAITS.bull,
-  nes: { ...JOE_NES, ...BULL_NES },
+  nes: { ...NES_GAME, ...BULL_NES },
   talk: [[['MAC! WATCH', 'HIS BULL', 'CHARGE!', 'STAND UP', 'TO HIM!']]],
   quotes: [["DOC CAN'T", 'HELP YOU', 'NOW.', '', 'WILL YOU', 'BEG ME FOR', 'HELP?'],
            ['HEY!LITTLE', 'MAC!', '', 'MAYBE DOC', 'SHOULD', 'THROW YOU', 'A TOWEL!'],
@@ -151,7 +151,7 @@ const HONDA2 = {                        // the World Circuit's first: Honda agai
   lines: ['26-2 18KO', 'FROM TOKYO,', 'JAPAN', 'AGE: 28', 'WEIGHT:174'],
   playerRank: 'RANKED NO.6',
   playerLines: ['"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER', '7-0 7KO'],
-  nes: { ...JOE_NES, ...HONDA_NES, offset: 0x20 },
+  nes: { ...NES_GAME, ...HONDA_NES, offset: 0x20 },
   quotes: [['I STILL', 'REMEMBER', 'OUR FIRST', 'FIGHT.', '', "NOW I'M", 'GONNA PAY', 'YOU BACK.', 'BANZAI!!'],
            ['YOU SHOULD', 'WEAR A', 'HELMET', 'WHEN YOU', 'FIGHT ME!'],
            ["I'LL GIVE", 'YOU A TKO', 'FROM', 'TOKYO!']],
@@ -168,7 +168,7 @@ const SODA = {
   cgbPoses: SODA_POSES_CGB,
   crowdColor: CROWD_COLORS.soda,
   portrait: PORTRAITS.soda,
-  nes: { ...JOE_NES, ...SODA_NES },
+  nes: { ...NES_GAME, ...SODA_NES },
   quotes: [['WOULD YOU', 'LIKE SOME', 'PUNCH TO', 'DRINK?', 'HA,HA,HA!'], ["I'M GONNA", 'MAKE YOU', 'FEEL', 'PUNCH', 'DRUNK!'],
            ['AFTER YOU', "LOSE,WE'LL", 'DRINK TO', 'YOUR', 'HEALTH!', '', 'HA,HA,HA!'],
            ['I DRINK TO', 'PREPARE', 'FOR A', 'FIGHT.', '', 'TONIGHT I', 'AM VERY', 'PREPARED!']],
@@ -181,7 +181,7 @@ const BULL2 = {                         // the World Circuit's third: Bald Bull 
   lines: ['34-5 29KO', 'FROM', 'ISTANBUL,', 'TURKEY', 'AGE: 36', 'WEIGHT:298'],
   playerRank: 'RANKED NO.4',            // Mac, once Soda's beaten
   playerLines: ['"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER', '9-0 9KO'],
-  nes: { ...JOE_NES, ...BULL_NES, offset: 0x20 },
+  nes: { ...NES_GAME, ...BULL_NES, offset: 0x20 },
   quotes: [['THIS TIME', "I'M GONNA", 'CHARGE', 'RIGHT OVER', 'YOU!'],     // (his own, half the time in the game's)
            ['THIS TIME', "I'M GONNA", 'CHARGE', 'RIGHT OVER', 'YOU!'],
            BULL.quotes[0], BULL.quotes[2], BULL.quotes[3]],
@@ -193,7 +193,7 @@ const DON2 = {                          // the World Circuit's fourth: Don again
   lines: ['22-4 9KO', 'FROM MADRID,', 'SPAIN', 'AGE: 23', 'WEIGHT:152'],
   playerRank: 'RANKED NO.3',            // Mac, once Bull's beaten again
   playerLines: ['"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER', '10-0 10KO'],
-  nes: { ...JOE_NES, ...DON_NES, offset: 0x20 },
+  nes: { ...NES_GAME, ...DON_NES, offset: 0x20 },
   quotes: [...Array(3)].map(() => ['FLAMENCO', 'STRIKES', 'BACK!!', '', 'RETURN OF', 'DON!!']).concat(   // (his own, most of
            [DON.quotes[0], DON.quotes[1], DON.quotes[3]]),                                             // the time in the game's)
 };
@@ -209,7 +209,7 @@ const SANDMAN = {
   cgbPoses: SANDMAN_POSES_CGB,
   crowdColor: CROWD_COLORS.sandman,
   portrait: PORTRAITS.sandman,
-  nes: { ...JOE_NES, ...SANDMAN_NES },
+  nes: { ...NES_GAME, ...SANDMAN_NES },
   talk: [[['JOIN THE', 'NINTENDO', 'FUN CLUB', 'TODAY!', 'MAC.']]],   // (Doc, in his corner)
   quotes: [['HEY!', 'MAC BABY...', '', 'SAY', 'GOODNIGHT!'], ['WELCOME', 'TO', 'DREAMLAND,', 'BABY!'],
            ['I THINK', "YOU'RE", 'GONNA', 'HAVE A', 'NIGHTMARE', 'TONIGHT!'], ['BEDTIME', 'FOR LITTLE', 'MAC!']],
@@ -229,7 +229,7 @@ const MACHO = {
   cgbPoses: MACHO_POSES_CGB,
   crowdColor: CROWD_COLORS.macho,
   portrait: PORTRAITS.macho,
-  nes: { ...JOE_NES, ...MACHO_NES },
+  nes: { ...NES_GAME, ...MACHO_NES },
   talk: [[['LOOK FOR', 'TWO TYPES', 'OF SPIN', 'PUNCH!', 'WATCH HIM']]],   // (Doc, in his corner)
   quotes: [['MY SUPER', 'SPIN PUNCH', 'IS TOTALLY', 'TOUGH!'], ['MY SUPER', 'SPIN PUNCH', 'IS TOTALLY', 'TOUGH!'],   // (his
            ['MY BODY', 'IS JUST', 'SO TOTALLY', 'COOL!'],                                                          // most often)
@@ -249,7 +249,7 @@ const TYSON = {
   cgbPoses: TYSON_POSES_CGB,
   crowdColor: CROWD_COLORS.tyson,
   portrait: PORTRAITS.tyson,
-  nes: { ...JOE_NES, ...TYSON_NES },
+  nes: { ...NES_GAME, ...TYSON_NES },
   quotes: [['YOU THINK', 'THE SPEED', 'OF YOUR', 'FINGERS', 'CAN MATCH', 'THE', 'STRENGTH', 'OF MY', 'FISTS?'],
            ['IF I KNOCK', 'YOU DOWN,', "DON'T", 'GET UP!'],
            ['THEY SAY', "I CAN'T", 'LOSE.', '', 'I SAY YOU', "CAN'T WIN!"],

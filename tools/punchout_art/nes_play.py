@@ -6,12 +6,12 @@ mean a different picture in another of his tables (the game switches them), so o
 are trusted: forcing a frame number from outside gives whatever table is in place.
 
 joe_frames(wanted) -> {(frame, mirrored): (RGB crop 128x192, (x, y) of his place in it)}, cached in
-out/nes-joe-play.pkl."""
+out/nes-opp0-play.pkl (each opponent his own, out/nes-opp{N}-play.pkl)."""
 import pickle, random
 import nes_boot as B
 
 HERE = B.pathlib.Path(__file__).parent
-CACHE = HERE / "out" / "nes-joe-play.pkl"
+CACHE = HERE / "out" / "nes-opp0-play.pkl"
 A, BTN_B, START, UP, DOWN, LEFT, RIGHT = 0x80, 0x40, 0x10, 0x08, 0x04, 0x02, 0x01
 DRAW_START = 0xC8A7                         # STY OppAnimFlags: his new frame being drawn (every table's way;
                                             # $A2, its "mirrored", still set: $CC9D clears it after)
@@ -119,8 +119,8 @@ def joe_frames(wanted, budget=40000):
 
 def fighter_frames(opponent, wanted=None, budget=40000):
     """{(frame, mirrored): (crop, place)} for this opponent: until every wanted one is in, or (wanted None)
-    the whole budget of frames played. Cached per opponent (out/nes-joe-play.pkl for Joe)."""
-    cache = CACHE if opponent == 0 else HERE / "out" / f"nes-opp{opponent}-play.pkl"
+    the whole budget of frames played. Cached per opponent (out/nes-opp{N}-play.pkl)."""
+    cache = HERE / "out" / f"nes-opp{opponent}-play.pkl"
     got = pickle.load(open(cache, "rb")) if cache.exists() else {}
     if got and (wanted is None or set(wanted) <= set(got)):
         return got

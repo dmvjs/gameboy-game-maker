@@ -1881,6 +1881,29 @@ MacOffsetX:                 ; NES $15 -> pixels right of his place ($15 scrolls 
 SECTION "NES engine: shared", ROM0
 {parts["common"]}
 """
+        mp = s.get("fight_mac_pics")
+        if mp:                          # Color: Mac's pictures (kit_fight.asm, FT_MAC_PICS): per NES frame of his, his
+            nes_defs += "DEF FT_MAC_PICS EQU 1\n"                # picture; per picture its tiles and sprites
+            n = len(mp["pics"])
+            entries = "\n".join(f"    dw MacPicT_{k}\n    db BANK(MacPicT_{k}), {len(pic['tiles'])}\n    dw MacPicS_{k}"
+                                for k, pic in enumerate(mp["pics"]))
+            mac_sprites = "\n".join(f"MacPicS_{k}:\n    db {len(pic['sprites'])}" + "".join(
+                f"\n    db {dy & 0xFF}, {dx & 0xFF}, {t}, ${a:02X}" for dy, dx, t, a in pic["sprites"])
+                for k, pic in enumerate(mp["pics"]))
+            mac_tiles = "\n".join(f'SECTION "Data: Mac picture {k}", ROMX, ALIGN[4]\nMacPicT_{k}:\n'
+                              + (_db([b for t in pic["tiles"] for b in encode_tile(list(t))]) if pic["tiles"] else "")
+                              for k, pic in enumerate(mp["pics"]))
+            nes_shared += f"""
+SECTION "Data: Mac pictures", ROMX
+MacPicFrames:               ; NES Mac frame -> his picture ($FF: the one up stays)
+{_db(mp["frames"])}
+MacPicIdle:
+    db {mp["idle"]}
+MacPicTable:                ; per picture ({n}): its tiles (address, bank, count), its sprites
+{entries}
+{mac_sprites}
+{mac_tiles}
+"""
         if nes.get("sound"):
             nes_shared += f"""
 {sound_head}
@@ -2188,8 +2211,9 @@ ASSERT (CgbMap{suffix}_idle | CgbSwap{suffix}.set0) & 15 == 0, "GDMA copies from
             tb = [b for t in pics["tiles"][k] for b in encode_tile(list(t))] or [0] * 16
             maprow = rows(pics["maps"][k], tiles)
             attrow = rows([a | 1 << 3 | f << 5 for a, f in zip(pics["attrs"][k], pics["flips"][k])], s["cell_pal"])
+            maprow2 = rows([t + 64 for t in pics["maps"][k]], tiles)     # (for its tiles' second copy, 64 on)
             body.append(f'SECTION "Data: Rival picture {pics["order"][k]}{suffix}", ROMX, ALIGN[4]\n{lab(k)}:\n'
-                        + _db(tb) + "\n" + _db(maprow, 32) + "\n" + _db(attrow, 32))
+                        + _db(tb) + "\n" + _db(maprow, 32) + "\n" + _db(attrow, 32) + "\n" + _db(maprow2, 32))
         pics_data = f"""
 SECTION "Data: Rival pictures{suffix}", ROMX[$4000]
 PicHeader{suffix}:              ; his NES pictures: count, the idle one's; per NES frame (then mirrored) its picture,

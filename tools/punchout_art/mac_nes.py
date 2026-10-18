@@ -8,6 +8,13 @@ HERE = pathlib.Path(__file__).parent
 _base = None
 
 def mac_frame(f):
+    """His NES frame f, cropped to what's drawn (None: nothing)."""
+    r = mac_frame_at(f)
+    return r[0] if r else None
+
+
+def mac_frame_at(f):
+    """His NES frame f, cropped, and where the NES draws its top-left (pixels on the screen): (img, (x, y))."""
     global _base
     if _base is None:
         _base = B.fight_snapshot()
@@ -41,7 +48,7 @@ def mac_frame(f):
     ys = [y for y in range(H) if any(img[y])]; xs = [x for x in range(W) if any(img[y][x] for y in range(H))]
     if not ys:
         return None
-    return [row[xs[0]:xs[-1] + 1] for row in img[ys[0]:ys[-1] + 1]]
+    return [row[xs[0]:xs[-1] + 1] for row in img[ys[0]:ys[-1] + 1]], (c0 * 8 + xs[0], r0 * 8 + ys[0])
 
 if __name__ == "__main__":
     import png
