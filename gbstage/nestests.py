@@ -113,22 +113,44 @@ class Gb:
 ROUTINES = [(0xB069, "NesTimeline"), (0xB10A, "NesAiMode"), (0xC291, "NesGuard"), (0xB196, "NesAi"), (0xC4E7, "NesOppTick")]
 
 
-def run(log=print):
-    """Each ending the NES frame reaches, both machines byte for byte all the way: for each opponent."""
+# Each fighter's checks: (title, the function, its arguments).
+CHECKS = [
+    ("Mac busy: punching, dodging, aiming", "scenario", dict(frames=6000, seed=7, busy=True)),
+    ("Mac fights: down and up, then out on the third (TKO)", "full", dict(frames=14000, seed=3, low=True)),
+    ("Mac stands there: down, counted out", "full", dict(frames=14000, seed=2)),
+    ("Mac gets up by mashing: down three times (TKO)", "full", dict(frames=14000, seed=3, idle=True, style="mash")),
+    ("Mac defends: three rounds to the final bell", "full", dict(frames=14000, seed=1, style="defend")),
+]
+
+
+def _check(job):
+    """One check in a process of its own: (ok, what it logged)."""
     global FIGHTER
+    fighter, title, fn, kw = job
+    FIGHTER = fighter
+    lines = []
+    ok = globals()[fn](lines.append, title, **kw)
+    return ok, lines
+
+
+def run(log=print):
+    """Each ending the NES frame reaches, both machines byte for byte all the way: for each opponent. The
+    checks run side by side, a process each; their logs come out in order."""
+    from concurrent.futures import ProcessPoolExecutor
+    jobs = [(name, title, fn, kw) for name in FIGHTERS for title, fn, kw in CHECKS]
+    jobs.append(("Glass Joe", "the sound engine: effects, music and samples at random", "sound",
+                 dict(frames=6000, seed=2)))
     ok = True
-    for name in FIGHTERS:
-        FIGHTER = name
-        log(f"  {name}:")
-        ok = all([
-            scenario(log, "Mac busy: punching, dodging, aiming", frames=6000, seed=7, busy=True),
-            full(log, "Mac fights: down and up, then out on the third (TKO)", 14000, 3, low=True),
-            full(log, "Mac stands there: down, counted out", 14000, 2),
-            full(log, "Mac gets up by mashing: down three times (TKO)", 14000, 3, idle=True, style="mash"),
-            full(log, "Mac defends: three rounds to the final bell", 14000, 1, style="defend"),
-        ]) and ok
-    FIGHTER = "Glass Joe"
-    return sound(log, "the sound engine: effects, music and samples at random", 6000, 2) and ok
+    with ProcessPoolExecutor() as pool:
+        last = None
+        for i, (job, (good, lines)) in enumerate(zip(jobs, pool.map(_check, jobs))):
+            if job[0] != last and i < len(jobs) - 1:    # (the sound engine's: no fighter's)
+                log(f"  {job[0]}:")
+                last = job[0]
+            for line in lines:
+                log(line)
+            ok = good and ok
+    return ok
 
 
 # NES RAM the Game Boy doesn't keep: its drawing (OAM, PPU update buffers, palettes, the crowd's palette
@@ -256,7 +278,8 @@ def full(log, title, frames, seed, low=False, idle=False, style=None):
         if ram[0x00] == 0xFF and ram[0x06] < 3:     # time: the next round ($A9AA)
             ram[0x06] += 1
             gb.m.write(gb.sym["wNesRand"][1], nes.rand)
-            nes.call(0xAB4E)                        # his knockdowns this round, then $AB58 from
+            nes.call(0xAB4E)                        # his knockdowns this round, $AB58's clear of
+            ram[0x40:0xF0] = bytes(0xB0)            # zero page $40-$EF ($AB5B), then $AB58 from
             nes.call(0xAB96, bank=7)                # where the screen's drawn: places, $ABB3
             gb.call("NesRoundStart", ram[0x06], bank="NesFighter")
             events.append(f"{frame}:R{ram[0x06]}")

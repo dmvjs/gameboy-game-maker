@@ -29,7 +29,7 @@
 import * as M from './model.js';
 import { REF_POSES } from './art/referee.js';
 
-export const BOXING_VERSION = 31;
+export const BOXING_VERSION = 32;
 
 const pal = (name, colors) => ({ name, colors });
 export const MAT = [26, 28, 31];
@@ -266,7 +266,8 @@ export function boxingGame(pack) {
         // Punch-Out!!'s parallax: each band its own speed (256ths of a pixel a frame: half the NES's, its map twice
         // as wide), from the sky and skyline (slowest) through the water, the trees, the sidewalk and curb, to the
         // road (fastest); each stops where the NES's does as the box comes up (the statue)
-        bands: [[48, 16, 31], [88, 32, 64], [92, 32, 64], [96, 48, 96], [100, 64, 0], [104, 80, 32], [112, 96, 65],
+        // (the skyline a touch slower than half the NES's: it starts a little to the right, ends the same)
+        bands: [[48, 15, 31], [88, 32, 64], [92, 32, 64], [96, 48, 96], [100, 64, 0], [104, 80, 32], [112, 96, 65],
                 [124, 128, 1], [128, 192, 1]].map(([y, speed, endX]) => ({ y, speed, endX })),
         actors: im.actors.map(a => ({ x: a.x, y: a.y, w: a.w, h: a.h, every: 6,
           frames: a.frames.map(f => ({ pixels: f.pixels, cells: [...f.cells].map(c => ob0 + +c) })) })),
@@ -407,7 +408,7 @@ export function boxingGame(pack) {
       : { stars: { x: 1, y: 0 }, hearts: { x: 3, y: 0 }, points: { x: 6, y: 0 }, clock: { x: 15, y: 0 },
           round: { x: 13, y: 0 }, playerBar: { x: 1, y: 1 }, rivalBar: { x: 13, y: 1 } };
     if (nesRing) {
-      const r = ringOf(rv), [white, , red, dark] = p.palettes[crowd].colors;
+      const r = ringOf(rv), [white, , , dark] = p.palettes[crowd].colors;
       const wall = addPal(`${rv.short} wall`, [r.wall, white, r.wall, r.brick]);
       const posts = addPal(`${rv.short} posts`, [white, matOf(rv), dark, r.post]);
       // The HUD as Punch-Out!!'s: boxes on the arena's wall (its lamps along the top). Left: stars, hearts, your
@@ -416,7 +417,7 @@ export function boxingGame(pack) {
       cellPalettes(sf, 0, 0, M.CW, 3, wall);
       for (const [x0, x1] of boxes) cellPalettes(sf, x0, 1, x1 - x0 + 1, 2, 0);
       for (let y = 0; y < 24; y++) for (let x = 0; x < M.W; x++)       // bricks, joints staggered
-        ring.pixels[y * M.W + x] = y % 4 === 3 || x % 8 === (y & 4 ? 4 : 0) ? 3 : 0;
+        ring.pixels[y * M.W + x] = y % 4 === 3 || x % 8 === (y % 8 >= 4 ? 4 : 0) ? 3 : 0;
       for (let x = 2; x < M.W; x += 8) {                    // the lamps
         fillRect(ring, x, 0, 4, 3, 1); ring.pixels[x] = 3; ring.pixels[x + 3] = 3;
       }
@@ -585,7 +586,7 @@ export function boxingGame(pack) {
       sc.notes = 'Punch-Out!!\'s ending: each fighter in turn. It goes on by itself.';
       p.scenes.push(sc);
     });
-    const end = blank('The end'), endL = { palettes: p.palettes, pixels: end.pixels, cellPal: end.cellPal };
+    const end = blank('The end');
     const endPal = addPal('Ending', [E.navy, [31, 31, 31], [31, 31, 31], [31, 31, 31]]);
     end.cellPal.fill(endPal);
     const macPals = E.mac.palettes.map((c, k) => addPal(`Ending Mac ${k + 1}`, c));
@@ -605,8 +606,8 @@ export function boxingGame(pack) {
       portrait(sc, lay, last.portrait, 6, 1);
       sc.texts = E.tyson.map((label, n) => ({ label, x: centered(label) >> 3, y: 9 + n + (n > 0), textSlot: 0 }));
       sc.pressStart = { target: at, flashes: 1, area: null, quiet: true, auto: E.frames.word };
-      sc.nesMusic = E.music;
-      sc.notes = 'Punch-Out!!\'s ending begins: his word to Mac. It goes on by itself.';
+      sc.notes = 'Punch-Out!!\'s ending begins: his word to Mac. It goes on by itself; the end music the fight '
+        + 'started as he went down plays on (as the game\'s: none of its ending screens starts a song).';
     }
   }
 

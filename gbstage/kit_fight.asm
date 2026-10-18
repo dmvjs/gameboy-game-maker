@@ -89,6 +89,11 @@ wRvTimer: db
 wRvHealth: db
 wRvPose: db
 wRvShown: db                ; pose currently on the map
+wRvPic: db                  ; Color, his NES pictures: the one to show, the one on the map
+wRvPicShown: db
+wFtCueColor: dw              ; (FtCueBuild's: the cue's color, and palettes to go)
+wFtCueN: db
+wFtPalCue: ds 8 * 8           ; his palettes in his dodge cue (the NES's outline color): built as it comes
 wRvAttack: db               ; 0 jab, 1 hook
 wRvDowns: db                ; knockdowns this fight
 wRvScript: dw
@@ -159,6 +164,7 @@ wFtCornerScene: db
 wFtBankMapsCgb: db          ; Color's finer poses: their map rows' bank, their tiles' (0: none, the original's)
 wFtBankSwapCgb: db
 wFtBankHeads: db            ; his top rows as sprites (a rope row: he stands in front of it), their bank (0: none)
+wFtBankPics: db             ; Color, an NES fighter: his pictures' bank (their header at $4000: FT_PIC_*; 0: none)
 wFtFightEnd:
 wRvNesX: db                 ; NES rival: his offset from his place (pixels right, down)
 wRvNesY: db
@@ -178,6 +184,9 @@ wFtEnd:
 SECTION "Fight between rounds", WRAM0   ; kept while the corner scene shows
 wFtResume: db               ; coming back from the corner: carry on, don't start a new fight
 wFtSelectUsed: db           ; the corner's Select refill is once per match
+wFtRoom: db                 ; loading with the display on (FT_LOAD_ON): this VBlank's time left (FtRoom)
+wFtRoomN: db                ; (FtCopy: blocks this time, their bytes)
+wFtRoomBytes: dw
 
 SECTION "Fight OAM", WRAM0, ALIGN[8]
 wFtOAM: ds 256              ; 40 sprites go to OAM; a busy frame's extras land in the spare room and aren't shown
@@ -197,18 +206,74 @@ OAMDMACode:                 ; copied to HRAM: OAM DMA needs the CPU to wait off 
     ret
 OAMDMACodeEnd:
 
-; ---- loading (screen off) ----
+; ---- loading (the screen off; on Color, on and black: FT_LOAD_ON, each piece in a VBlank) ----
+
+; Loading with the display on, each piece of it goes in a VBlank: FtRoom, with its time (8 cycles a unit, a DMA
+; block's), waits for the next VBlank's start unless this one has room left for it. A VBlank is 1,140 cycles, room
+; for FT_ROOM units (the rest a margin): the lines it's been going (15 units a line) and the DMAs done in it
+; (wFtRoom: they stop the CPU, and on hardware count in both: room to spare) are gone. A DMA piece's time counts
+; what comes before it (FT_ROOM_OVER).
+DEF FT_ROOM EQU 128
+DEF FT_ROOM_OVER EQU 12
+DEF FT_ROOM_ALL EQU FT_ROOM - 1     ; (a VBlank of its own)
+MACRO FT_VWAIT              ; \1: its time (units)
+IF DEF(FT_LOAD_ON)
+    ld a, \1
+    call FtRoom
+IF (\1) == FT_ROOM_ALL
+    xor a                   ; (it takes the VBlank)
+    ld [wFtRoom], a
+ENDC
+ENDC
+ENDM
+
+IF DEF(FT_LOAD_ON)
+FtRoomLeft:                 ; A: this VBlank's room left; carry: not in VBlank, or none
+    push bc
+    ldh a, [rLY]
+    sub 144
+    jr c, .none
+    ld c, a
+    swap a
+    sub c                   ; (15 units a line)
+    ld c, a
+    ld a, [wFtRoom]
+    sub c
+.none:
+    pop bc
+    ret
+
+FtRoom:                     ; A: the piece's time (HL, BC, DE kept)
+    push bc
+    ld b, a
+    call FtRoomLeft
+    jr c, .wait
+    cp b
+    jr nc, .fits
+.wait:
+    call VWait
+    ld a, FT_ROOM
+    ld [wFtRoom], a
+.fits:
+    pop bc
+    ret
+ENDC
 
 FightLoad:
+    xor a                   ; (no VBlank's room yet: the first piece waits for one)
+    ld [wFtRoom], a
     ld a, [wFtResume]       ; back from the corner: the fight carries on
     and a
     jr nz, .keep
     ld [wFtSelectUsed], a
     ld hl, wFtStart
-    ld b, wFtEnd - wFtStart
+    ld bc, wFtEnd - wFtStart    ; (more than 255 bytes: a 16-bit count)
 .clear:
+    xor a
     ld [hl+], a
-    dec b
+    dec bc
+    ld a, b
+    or c
     jr nz, .clear
 .keep:
 IF DEF(FT_NES)
@@ -237,6 +302,7 @@ ENDC
 .found:
     inc hl
     ld de, wFtFight
+    ASSERT wFtFightEnd - wFtFight < 256, "a fight's row is copied with an 8-bit count"
     ld b, wFtFightEnd - wFtFight
 .fight:
     ld a, [hl+]
@@ -251,33 +317,19 @@ ENDC
     ld c, a
     ld a, [FtObjBytes + 1]
     ld b, a
-    ld hl, FtObjTiles
-    ld de, $8000 + FT_OBJ_FIRST * 16
-.tiles:
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec bc
-    ld a, b
-    or c
-    jr nz, .tiles
+    ld de, FtObjTiles
+    ld hl, $8000 + FT_OBJ_FIRST * 16
+    call FtCopy             ; (Color: by DMA)
 IF DEF(FT_PL_CGB)
     ldh a, [hIsCGB]         ; Color: the player's own poses' tiles, unshared, into bank 1's sprite tiles
     and a
     jr z, .plDone
     ld a, 1
     ldh [rVBK], a
-    ld hl, PlayerCgbTiles
-    ld de, $8000
+    ld de, PlayerCgbTiles
+    ld hl, $8000
     ld bc, FT_PL_CGB_TILES * 16
-.plTiles:
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec bc
-    ld a, b
-    or c
-    jr nz, .plTiles
+    call FtCopy
     xor a
     ldh [rVBK], a
 .plDone:
@@ -343,56 +395,36 @@ ENDC
 .ready:
 IF DEF(FT_NES)
 IF DEF(FT_ROPE)
-    ld hl, FtRopeTiles      ; the bottom rope's row, in its own map row (shown over his area's first row)
-    ld de, $9800 + FT_ROPE_ROW * 32
-    ld b, 32
-.rope:
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec b
-    jr nz, .rope
+    ld de, FtRopeTiles      ; the bottom rope's row, in its own map row (shown over his area's first row)
+    ld hl, $9800 + FT_ROPE_ROW * 32
+    ld bc, 32
+    call FtCopy
     ldh a, [hIsCGB]
     and a
     jr z, .ropeDone
     ld a, 1
     ldh [rVBK], a
-    ld hl, FtRopeAttr
-    ld de, $9800 + FT_ROPE_ROW * 32
-    ld b, 32
-.ropeAttr:
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec b
-    jr nz, .ropeAttr
+    ld de, FtRopeAttr
+    ld hl, $9800 + FT_ROPE_ROW * 32
+    ld bc, 32
+    call FtCopy
     xor a
     ldh [rVBK], a
 .ropeDone:
 ENDC
-    ld hl, FtTailTiles      ; the background below him, for his band's end when he's raised
-    ld de, $9800 + FT_TAIL_ROW * 32
-    ld b, FT_TAIL_ROWS * 32
-.tail:
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec b
-    jr nz, .tail
+    ld de, FtTailTiles      ; the background below him, for his band's end when he's raised
+    ld hl, $9800 + FT_TAIL_ROW * 32
+    ld bc, FT_TAIL_ROWS * 32
+    call FtCopy
     ldh a, [hIsCGB]
     and a
     jr z, .tailDone
     ld a, 1
     ldh [rVBK], a
-    ld hl, FtTailAttr
-    ld de, $9800 + FT_TAIL_ROW * 32
-    ld b, FT_TAIL_ROWS * 32
-.tailAttr:
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec b
-    jr nz, .tailAttr
+    ld de, FtTailAttr
+    ld hl, $9800 + FT_TAIL_ROW * 32
+    ld bc, FT_TAIL_ROWS * 32
+    call FtCopy
     xor a
     ldh [rVBK], a
 .tailDone:
@@ -433,6 +465,7 @@ IF DEF(FT_NES)
     ld [$2000], a
 ENDC
     call FtHudCompute
+    FT_VWAIT FT_ROOM_ALL
     call FtHudDraw
     xor a
     ldh [hFtHudReady], a
@@ -443,27 +476,6 @@ IF DEF(FT_ROPE)
     ld a, HIGH(wFtOAM2)
     ldh [hFtOamBuild], a
 ENDC
-    call FtBuildOAM
-IF DEF(FT_ROPE)
-    ld hl, wFtOAM2          ; (the one shown first: the same, not the last fight's, its KO bubble and all)
-    ld de, wFtOAM3
-    ld b, 0
-.oamPage:
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec b
-    jr nz, .oamPage
-ENDC
-    ld hl, wFtOAM           ; OAM is writable with the screen off
-    ld de, $FE00
-    ld b, 160
-.oam:
-    ld a, [hl+]
-    ld [de], a
-    inc e
-    dec b
-    jr nz, .oam
     ld a, 1
     ldh [hFtActive], a
     xor a
@@ -492,8 +504,23 @@ IF DEF(FT_NES)
     ld a, [wFtBankData]
     ld [$2000], a
     call FtAnimate
-    ldh a, [hFtBandTop]
 ENDC
+    call FtBuildOAM
+IF DEF(FT_ROPE)
+    ld hl, wFtOAM2          ; (the one shown first: the same, not the last fight's, its KO bubble and all)
+    ld de, wFtOAM3
+    ld b, 0
+.oamPage:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .oamPage
+ENDC
+    FT_VWAIT 20 + FT_ROOM_OVER  ; (OAM: the screen off, or VBlank)
+    ld a, HIGH(wFtOAM)
+    call hOAMDMA
+    ldh a, [hFtBandTop]
     ldh [rLYC], a
     ld a, STATF_LYC
     ldh [rSTAT], a
@@ -509,9 +536,13 @@ IF DEF(FT_NES)
 ; sideways with him, and far over (his corner, as the round opens) it brings them in. (Color: VBK picks tiles
 ; or their attributes.)
 FtOffColumns:
+    FT_VWAIT FT_REGION_H / 2 * 13 + FT_ROOM_OVER   ; (in halves, loading with the display on: a row's 100 cycles)
     ld hl, FT_REGION_ROW
-    ld c, FT_REGION_H
-.row:
+    ld c, FT_REGION_H / 2
+    call .rows
+    FT_VWAIT (FT_REGION_H + 1) / 2 * 13 + FT_ROOM_OVER
+    ld c, FT_REGION_H - FT_REGION_H / 2
+.rows:
     ld a, [hl]
     push hl
     ld de, 20
@@ -525,7 +556,7 @@ FtOffColumns:
     ld de, 32
     add hl, de
     dec c
-    jr nz, .row
+    jr nz, .rows
     ret
 ENDC
 
@@ -648,27 +679,84 @@ ENDC
     reti
 
 IF DEF(FT_NES)
-; A = 2 while his tell's frame and state are up (RivalTell), else 0.
-FtTellShown:
-    ld a, [RivalTell]
-    ld b, a
-    ld a, [wNes + $A1]
-    cp b
-    jr nz, .no
-    ld a, [RivalTell + 1]
-    ld b, a
-    ld a, [wNes + $90]
-    and $7F
-    cp b
-    jr nz, .no
-    ld a, 2
+; His palettes in his dodge cue, for VBlank to put up (FtFlashPalettes, 2): each palette's outline
+; (RivalCueOutline) in the color the game holds now ($05EC, an NES color: NesRgb). Each frame, out of VBlank.
+FtCueBuild:
+    ld a, [wNes + $5EC]
+    and $3F
+    add a
+    add LOW(NesRgb)
+    ld l, a
+    adc HIGH(NesRgb)
+    sub l
+    ld h, a
+    ld a, [hl+]
+    ld [wFtCueColor], a
+    ld a, [hl]
+    ld [wFtCueColor + 1], a
+    ld a, [RivalPalSlots]
+    ld [wFtCueN], a
+    ld hl, RivalPalNormal
+    ld bc, wFtPalCue
+    ld de, RivalCueOutline
+.pal:
+    ld a, [de]
+    inc de
+    push de
+    ld d, a                 ; its outline's color number
+    ld e, 0
+.col:
+    ld a, e
+    cp d
+    jr z, .ink
+    ld a, [hl+]
+    ld [bc], a
+    inc bc
+    ld a, [hl+]
+    ld [bc], a
+    inc bc
+    jr .next
+.ink:
+    inc hl
+    inc hl
+    ld a, [wFtCueColor]
+    ld [bc], a
+    inc bc
+    ld a, [wFtCueColor + 1]
+    ld [bc], a
+    inc bc
+.next:
+    inc e
+    ld a, e
+    cp 4
+    jr nz, .col
+    pop de
+    ld a, [wFtCueN]
+    dec a
+    ld [wFtCueN], a
+    jr nz, .pal
     ret
-.no:
-    xor a
+
+; A = 2 while his dodge cue is up (the NES's $C440: his outline in its color, wNesCue), else 0.
+FtTellShown:
+    ld a, [wNesCue]
+    and a
+    ret z
+    ld a, 2
     ret
 ENDC
 
 ; ---- VBlank: sprites, then the rival's pose or the HUD ----
+
+DEF FT_PIC_IDLE EQU $4001
+DEF FT_PIC_FRAMES EQU $4010
+DEF FT_PIC_PLACEX EQU $4210
+DEF FT_PIC_PLACEY EQU $4410
+DEF FT_PIC_TABLE EQU $4610
+DEF FT_PIC_HEADS EQU $4810
+DEF FT_PIC_VRAM EQU $8800   ; (bank 1: tile slots 128 on, where sprites reach them too)
+DEF FT_PIC_LATEST EQU 149   ; the last line a picture's copy may start on: 64 tiles and the rows take about 6 lines
+                            ; (GDMA, 32 cycles a 16 bytes), and VBlank ends after line 153
 
 FtVBlank:
     ld a, HIGH(wFtOAM)
@@ -718,6 +806,28 @@ ELSE
 ENDC
 .pose:
     call FtCrowdDraw
+IF DEF(FT_NES)
+    ld a, [wFtBankPics]     ; Color with his NES pictures: the picture the game draws, not a pose
+    and a
+    jr z, .poses
+    ldh a, [hIsCGB]
+    and a
+    jr z, .poses
+    ld a, [wRvPose]         ; (the original's pose kept as shown: it isn't drawn)
+    ld [wRvShown], a
+    ld a, [wRvPic]
+    ld hl, wRvPicShown
+    cp [hl]
+    jr z, .hud
+    ld b, a
+    ldh a, [rLY]            ; (too late in this VBlank to finish before the screen draws: the next one's)
+    cp FT_PIC_LATEST
+    jr nc, .hud
+    ld a, b
+    ld [hl], a
+    jp FtDrawPic
+.poses:
+ENDC
     ld a, [wRvPose]
     ld hl, wRvShown
     cp [hl]
@@ -996,11 +1106,133 @@ FtRefFirst:
     xor a
     ld [wFtRefDone], a
 .more:
+    FT_VWAIT 64 + FT_ROOM_OVER  ; (a step: its 4 tiles, about 500 cycles)
     call FtRefStep
     ld a, [wFtRefLoad]
     cp $FF
     jr nz, .more
     ret
+
+IF DEF(FT_NES)
+; ---- Color, an NES fighter: his pictures, exact (each its own tiles, streamed as the game draws it) ----
+; Their bank's header ($4000, wFtBankPics): count and the idle one's number, then per NES frame (then drawn
+; mirrored) its picture ($FF: keep the one up), its place's x and y offsets; per picture its tiles' address,
+; bank and count (its map rows and their attributes right after its tiles); per picture its top rows' sprites.
+
+; The first picture, as the fight sets up (the screen's off): NZ if he has pictures (Color), drawn.
+FtPicsStart:
+    ld a, [wFtBankPics]
+    and a
+    ret z
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    ld a, [wFtBankPics]
+    ld [$2000], a
+    ld a, [FT_PIC_IDLE]
+    ld [wRvPic], a
+    ld [wRvPicShown], a
+    call FtDrawPic
+    or 1
+    ret
+
+; His picture for the NES frame just drawn (C = frame, B = drawn mirrored): wRvPic and where it sits. Carry
+; set if he has pictures (Color); the NES bank mapped after.
+FtNesPic:
+    ld a, [wFtBankPics]
+    and a
+    ret z
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    ld a, [wFtBankPics]
+    ld [$2000], a
+    ld hl, FT_PIC_FRAMES
+    add hl, bc
+    ld a, [hl]
+    cp $FF
+    jr z, .keep             ; (a frame he has no picture for: the one up stays)
+    ld [wRvPic], a
+    ld hl, FT_PIC_PLACEX
+    add hl, bc
+    ld a, [hl]
+    ld [wRvPlaceX], a
+    ld hl, FT_PIC_PLACEY
+    add hl, bc
+    ld a, [hl]
+    ld [wRvPlaceY], a
+.keep:
+    ld a, [wFtBankNes]
+    ld [$2000], a
+    scf
+    ret
+
+; During VBlank: picture A onto the map, its tiles first (bank 1, FT_PIC_VRAM), then his rows and their
+; attributes. One VBlank: up to 64 tiles and the rows (about 3,300 cycles of its 4,560).
+FtDrawPic:
+    ld l, a
+    ld a, [wFtBankPics]
+    ld [$2000], a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    ld bc, FT_PIC_TABLE
+    add hl, bc
+    ld a, [hl+]
+    ld c, a
+    ld a, [hl+]
+    ld b, a                 ; BC = its tiles
+    ld a, [hl+]
+    ld d, a                 ; D = their bank
+    ld e, [hl]              ; E = how many
+    ld a, d
+    ld [$2000], a
+    ld a, 1
+    ldh [rVBK], a
+    ld a, b
+    ldh [rHDMA1], a
+    ld a, c
+    ldh [rHDMA2], a
+    ld a, HIGH(FT_PIC_VRAM)
+    ldh [rHDMA3], a
+    ld a, LOW(FT_PIC_VRAM)
+    ldh [rHDMA4], a
+    ld a, e
+    dec a
+    ldh [rHDMA5], a         ; (16 bytes a tile: count - 1 blocks)
+    ld l, e                 ; HL = his rows, after the tiles
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, bc
+    xor a
+    ldh [rVBK], a
+    call .rows
+    ld bc, FT_POSE_BYTES    ; then their attributes
+    add hl, bc
+    ld a, 1
+    ldh [rVBK], a
+    call .rows
+    xor a
+    ldh [rVBK], a
+    ld a, [wFtBankData]
+    ld [$2000], a
+    ret
+.rows:
+    ld a, h
+    ldh [rHDMA1], a
+    ld a, l
+    ldh [rHDMA2], a
+    ld a, HIGH(FT_REGION_ROW)
+    ldh [rHDMA3], a
+    ld a, LOW(FT_REGION_ROW)
+    ldh [rHDMA4], a
+    ld a, FT_POSE_BYTES / 16 - 1
+    ldh [rHDMA5], a
+    ret
+ENDC
 
 ; A = pose. Game Boy Color: one GDMA of the rival's 10 full map rows, then one for their palettes.
 ; Original: copy just his 8 tiles of each row with the CPU.
@@ -1209,6 +1441,12 @@ FtSwapSetup:
 .setsIn:
     xor a
     ldh [rVBK], a
+    FT_VWAIT FT_ROOM_ALL    ; (his first pose: a VBlank of its own, loading with the display on)
+IF DEF(FT_NES)
+    call FtPicsStart        ; (Color with his NES pictures: the first of them instead)
+    ret nz
+    xor a
+ENDC
     jp FtDrawPose           ; (A = 0: idle, in its tiles)
 .bytes:
     ld a, [hl+]
@@ -1252,8 +1490,217 @@ FtSwapSetup:
     ENDR
     ret
 
-; BC bytes from DE to HL (the screen off).
+; BC bytes from DE to HL (the screen off; or on, as a fight loads on Color: FT_LOAD_ON). DE, HL past them after.
 FtCopy:
+    ldh a, [hIsCGB]         ; Color: whole tiles into video memory by DMA (a copy as the fight loads: on Color
+    and a                   ; it loads with the display on, black, a VBlank's worth at a time)
+    jp z, .cpu
+    ld a, h
+    and $E0
+    cp $80
+    jp nz, .cpu
+    ldh a, [rLCDC]
+    bit 7, a
+IF DEF(FT_LOAD_ON)
+    jr nz, .on
+ELSE
+    jp nz, .cpu
+ENDC
+    ld a, e
+    or l
+    or c
+    and 15
+    jp nz, .cpu
+.dma:                       ; up to 2048 bytes a time
+    ld a, b
+    or c
+    ret z
+    call .from
+    ld a, b
+    cp 8
+    jr c, .last
+    ld a, $7F               ; (128 blocks: 2048 bytes)
+    ldh [rHDMA5], a
+    ld a, b
+    sub 8
+    ld b, a
+    call .past8
+    jr .dma
+.last:                      ; the rest (under 2048 bytes): BC / 16 blocks
+    push bc
+    ld a, b
+    swap a
+    ld b, a
+    ld a, c
+    swap a
+    and $0F
+    or b
+    dec a
+    ldh [rHDMA5], a
+    pop bc                  ; DE, HL past it, as the CPU's copy leaves them (the source runs on)
+    ld a, e
+    add c
+    ld e, a
+    ld a, d
+    adc b
+    ld d, a
+    ld a, l
+    add c
+    ld l, a
+    ld a, h
+    adc b
+    ld h, a
+    ld bc, 0
+    ret
+.from:                      ; the DMA's source DE, destination HL
+    ld a, d
+    ldh [rHDMA1], a
+    ld a, e
+    ldh [rHDMA2], a
+    ld a, h
+    ldh [rHDMA3], a
+    ld a, l
+    ldh [rHDMA4], a
+    ret
+.past8:                     ; DE, HL on 2048 bytes
+    ld a, d
+    add 8
+    ld d, a
+    ld a, h
+    add 8
+    ld h, a
+    ret
+IF DEF(FT_LOAD_ON)
+.on:                        ; the display on: only while it's in VBlank (VWait: then about 1,100 cycles free)
+    ldh a, [hLoadOn]
+    and a
+    jp z, .cpu
+    ld a, e
+    or l
+    or c
+    and 15
+    jp nz, .onCpu
+.onDma:                     ; as many blocks as this VBlank has room for (FtRoom), the rest in the next
+    ld a, b
+    or c
+    ret z
+    call FtRoomLeft
+    jr c, .noRoom
+    cp FT_ROOM_OVER + 8     ; (8 blocks at least, else the next VBlank)
+    jr nc, .roomy
+.noRoom:
+    call VWait
+    ld a, FT_ROOM
+    ld [wFtRoom], a
+.roomy:
+    sub FT_ROOM_OVER
+    ld [wFtRoomN], a        ; blocks it has room for
+    push hl
+    ld l, a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    ld a, l                 ; (their bytes)
+    ld [wFtRoomBytes], a
+    ld a, h
+    ld [wFtRoomBytes + 1], a
+    ld a, l
+    sub c
+    ld a, h
+    sbc b
+    pop hl
+    jr c, .onPiece          ; more left than that: that many now
+    ld a, c                 ; the rest, now: the room less its blocks (BC / 16)
+    swap a
+    and $0F
+    ld [wFtRoomN], a
+    ld a, b
+    swap a
+    push hl
+    ld hl, wFtRoomN
+    or [hl]
+    cpl
+    inc a
+    ld hl, wFtRoom
+    add [hl]
+    ld [hl], a
+    pop hl
+    call .from
+    jp .last
+.onPiece:
+    call .from
+    ld a, [wFtRoomN]
+    dec a
+    ldh [rHDMA5], a
+    ld a, [wFtRoomN]        ; (their time gone)
+    cpl
+    inc a
+    push hl
+    ld hl, wFtRoom
+    add [hl]
+    ld [hl], a
+    pop hl
+    ld a, [wFtRoomBytes]    ; HL, DE on by their bytes, BC less
+    add l
+    ld l, a
+    ld a, [wFtRoomBytes + 1]
+    adc h
+    ld h, a
+    ld a, [wFtRoomBytes]
+    add e
+    ld e, a
+    ld a, [wFtRoomBytes + 1]
+    adc d
+    ld d, a
+    push hl
+    ld hl, wFtRoomBytes
+    ld a, c
+    sub [hl]
+    ld c, a
+    inc hl
+    ld a, b
+    sbc [hl]
+    ld b, a
+    pop hl
+    jp .onDma
+.onCpu:                     ; the CPU: 64 bytes a piece (10 cycles each)
+    ld a, b
+    or c
+    ret z
+    ld a, 80 + FT_ROOM_OVER
+    call FtRoom
+    ld a, b
+    and a
+    jr nz, .piece64
+    ld a, c
+    cp 64
+    jr c, .piece
+.piece64:
+    ld a, 64
+.piece:                     ; A bytes now
+    push bc
+    ld b, a
+    ld c, a
+.byte:
+    ld a, [de]
+    inc de
+    ld [hl+], a
+    dec b
+    jr nz, .byte
+    ld a, c                 ; BC less them
+    cpl
+    inc a
+    pop bc
+    add c
+    ld c, a
+    ld a, b
+    adc $FF
+    ld b, a
+    jr .onCpu
+ENDC
+.cpu:
     ld a, b
     or c
     ret z
@@ -1261,7 +1708,7 @@ FtCopy:
     ld [hl+], a
     inc de
     dec bc
-    jr FtCopy
+    jr .cpu
 
 ; Copy the next few tiles of the wanted set (knockdown or attack) into video memory.
 ; Returns NZ if it did work this VBlank.
@@ -1473,7 +1920,7 @@ IF DEF(FT_NES)
     cp M_END
     jp z, FtNesEnd
     jp FtFrame
-ENDC
+ELSE
     ld a, [wFtFreeze]       ; hit stop
     and a
     jr z, .moving
@@ -1502,6 +1949,7 @@ ENDC
     jp nz, FtFrame
     call FtRival
     ; fall through
+ENDC
 FtFrame:                    ; every frame: HUD values, sprites, shake
     ld a, [wFtHudDirty]
     and a
@@ -1844,6 +2292,7 @@ IdleCycle:
 
 ; ---- the clock ----
 
+IF !DEF(FT_NES)             ; ---- the kit's own fight (the NES game's runs it instead: kit_nes.asm) ----
 FtClock:
     ld hl, wFtSub
     inc [hl]
@@ -1929,6 +2378,7 @@ FtClock:
 
 ; ---- the corner, between rounds ----
 
+ENDC
 ; Select in the corner: the trainer works faster, and some health comes back (once per match).
 FtCornerSelect:
     ld a, [wFtSelectUsed]
@@ -1969,6 +2419,7 @@ CornerRefill2:              ; eighths: 1 x 8, 2 x 16, 4 x 32, 1 x 64
 CornerRefill3:              ; 1 x 8, 2 x 16, 2 x 32, 3 x 64
     db 8, 16, 16, 32, 32, 64, 64, 64
 
+IF !DEF(FT_NES)
 ; Clock-timed moves: (round, minute, BCD second, op, argument) in time order, ending with $FF.
 FtTimedMoves:
     ld a, [wRvTimed]
@@ -1998,6 +2449,7 @@ FtTimedMoves:
     ld [wRvTimed + 1], a
     ret
 
+ENDC
 FtResetBoxers:              ; both back to neutral
     xor a
     ld [wFtSwapWant], a
@@ -2009,6 +2461,7 @@ FtResetBoxers:              ; both back to neutral
     ld [wRvTimer], a
     jp FtStand
 
+IF !DEF(FT_NES)
 FtBreak:
     ld hl, wFtTimer
     dec [hl]
@@ -2305,6 +2758,7 @@ FtSpark:
     ld [wFtSparkT], a
     ret
 
+ENDC
 ; Sweat flies off his head: three beads, thrown up and out.
 FtSweat:
     ld hl, wFtSweat
@@ -2362,6 +2816,7 @@ FtSweatStep:
     jr nz, .bead
     ret
 
+IF !DEF(FT_NES)
 ; Hold still for at least A frames.
 FtHitStop:
     ld hl, wFtFreeze
@@ -3012,6 +3467,7 @@ FtRivalOpen:
     ld [wRvTimer], a
     ret
 
+ENDC
 ; Start the next step of the rival's script.
 FtNextOp:
     ld a, [wFtSwapHave]     ; only with the attack poses in video memory
@@ -3041,6 +3497,7 @@ FtNextOp:
     ld [wRvScript], a
     ld a, h
     ld [wRvScript + 1], a
+IF !DEF(FT_NES)
 FtStartOp:                  ; B = op, C = argument
     ld a, c
     ld [wRvTimer], a
@@ -3099,6 +3556,7 @@ FtStartOp:                  ; B = op, C = argument
     ld [wRvTimer], a
     ret
 
+ENDC
 FtStand:                    ; standing guard: gloves low cover the body, gloves high the face
     ld a, RV_IDLE
     ld [wRvState], a
@@ -3127,6 +3585,7 @@ FtStandPose:                ; idle (bouncing) or guard; plain idle while another
     ld [wRvPose], a
     ret
 
+IF !DEF(FT_NES)
 ; B = damage to the player
 FtPlayerHurt:
     ld a, SFX_PLAYER_HIT
@@ -3284,6 +3743,7 @@ FtRivalDown:
     call FtFinish
     jp FtFrame
 
+ENDC
 ; Show the celebration once its tiles are loaded.
 FtCheer:
     ld a, [wFtSwapHave]
@@ -3293,6 +3753,7 @@ FtCheer:
     ld [wRvPose], a
     ret
 
+IF !DEF(FT_NES)
 FtPlayerDown:
     call FtCheer
     ldh a, [hPadNew]        ; mash A or B to get up
@@ -3338,6 +3799,7 @@ FtPlayerDown:
     call FtFinish
     jp FtFrame
 
+ENDC                        ; (the kit's own fight: none of it when the NES game runs the fight)
 ; A = scene to go to after a pause.
 ; The fight's display ends: back to VBlank-only, no scroll split. LoadScene calls it, the screen faded out
 ; (till then his band stays where he is, not back to the middle).
@@ -3756,11 +4218,26 @@ FtStars:
     ret
 
 IF DEF(FT_TWINKLE_TILE)
+DEF TWINKLE_OVER EQU 10     ; (its top this far over his head: a few pixels clear, as the NES's)
 ; A star just earned: it twinkles beside his head, where the NES's does, while its count runs ($0343: 20
 ; frames). HL = the next OAM entry.
 FtTwinkle:
 IF DEF(FT_ROPE)
     ld b, a
+    push hl                 ; its height: over his head as his pose shows it (his area's top, his band's offset,
+    ld a, [wRvPose]         ; the pose's clear rows above his head), the NES's few pixels over it (the NES's
+    ld e, a                 ; own spot is for the NES's pictures: on ours it can land on his face)
+    ld d, 0
+    ld hl, RivalPoseRise
+    add hl, de
+    ld d, [hl]
+    pop hl
+    ldh a, [hFtBandY]
+    cpl
+    inc a
+    add FT_HEAD_Y0 - TWINKLE_OVER
+    add d
+    ld [wFtTwinkleY], a
     ld a, [wFtTwinkleY]     ; which list: the upper if it ends before FT_DMA_LINE, the lower if it starts after
     cp FT_DMA_LINE + 16 - 8 + 1
     ld a, 0
@@ -3868,9 +4345,27 @@ IF DEF(FT_ROPE)
 ; tiles (kept where sprites reach them), where his band would show them: the pose VBlank draws next, his band's
 ; offsets this frame. HL = the next OAM entry.
 FtHeadSprites:
+    push hl
+IF DEF(FT_NES)
+    ld a, [wFtBankPics]     ; Color with his pictures: the picture's own
+    and a
+    jr z, .poses
+    ldh a, [hIsCGB]
+    and a
+    jr z, .poses
+    ld a, [wFtBankPics]
+    ld [$2000], a
+    ld a, [wRvPic]
+    add a
+    ld e, a
+    ld d, 0
+    ld hl, FT_PIC_HEADS
+    add hl, de
+    jr .read
+.poses:
+ENDC
     ld a, [wFtBankHeads]
     ld [$2000], a
-    push hl
     ld a, [wRvPose]
     add a
     ld e, a
@@ -3884,6 +4379,7 @@ FtHeadSprites:
 .table:
     ld hl, $4000
     add hl, de
+.read:
     ld a, [hl+]
     ld d, [hl]
     ld e, a
@@ -4342,6 +4838,7 @@ FtNesFrame:
     call FtNesMacShow
     ld a, [wFtBankData]
     ld [$2000], a
+    call FtCueBuild         ; (his dodge cue's palettes, ready for VBlank)
     call FtNesPresent
     jp FtNesHud
 
@@ -4526,6 +5023,17 @@ FtNesShow:
     ld a, [wNesAnim]
     bit 7, a
     jr z, .place
+    call FtNesPic           ; Color with his pictures: the game's own picture (no tiles to wait for)
+    jr nc, .poseOnly
+    ld hl, NesPoseMap       ; (and the original's pose, for what goes by it: kept, never waited for)
+    add hl, bc
+    ld a, [hl]
+    ld [wRvPose], a
+    xor a
+    ld [wNesAnim], a
+    ld [wNes + nOppFlip], a
+    jr .place
+.poseOnly:
     ld hl, NesPoseMap
     add hl, bc
     ld a, [hl]

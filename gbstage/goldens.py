@@ -181,8 +181,10 @@ def run(update=False, only=None, log=print):
     info = deps.rgbds_info()
     log(f"Golden tests with RGBDS v{info['version']}\n")
     failed = 0
-    for case in cases:
-        results, asm, screens, problems = evaluate(case)
+    from concurrent.futures import ProcessPoolExecutor
+    with ProcessPoolExecutor() as pool:     # (side by side, a process each; reported in order)
+        evaluated = list(pool.map(evaluate, cases))
+    for case, (results, asm, screens, problems) in zip(cases, evaluated):
         exp_json = case / "expected.json"
         exp_asm = case / "expected.asm"
         if update:

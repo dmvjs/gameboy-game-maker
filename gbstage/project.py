@@ -936,7 +936,24 @@ def _nes_fighter(nes, where, errors):
             p in kit.RIVAL_POSES and isinstance(v, list) and len(v) == 2 and all(isinstance(c, int) and 0 <= c < 80 for c in v)
             for p, v in jewel.items())):
         errors.append(f"{where}: the NES jewel is per pose, where (pixels in his area)."); return None
+    pictures = nes.get("pictures")          # Color: each NES picture of his, exact ({poses: {key: {pixels, cells}},
+    if pictures is not None:                # places: {key: [dx, dy]}}: shown as the game draws them, streamed in)
+        area = kit.REGION_W * CELL * kit.REGION_H * CELL
+        pp, pl = (pictures or {}).get("poses"), (pictures or {}).get("places") or {}
+        if not (isinstance(pp, dict) and pp and all(
+                re.fullmatch(r"[0-9A-F]{2}\|?", k) and isinstance(v, dict) and isinstance(v.get("pixels"), str)
+                and len(v["pixels"]) == area and set(v["pixels"]) <= set("0123") and isinstance(v.get("cells"), str)
+                and len(v["cells"]) == kit.REGION_W * kit.REGION_H and set(v["cells"]) <= set("sgh")
+                for k, v in pp.items())
+                and isinstance(pl, dict) and all(k in pp and isinstance(v, list) and len(v) == 2
+                                                 and all(isinstance(c, int) and -64 <= c <= 64 for c in v)
+                                                 for k, v in pl.items())):
+            errors.append(f"{where}: the NES pictures are each his area's pixels and palettes, and where each sits.")
+            return None
+        pictures = {"poses": pp, "places": {k: tuple(v) for k, v in pl.items()}}
     return {"bank": bank, "offset": offset, "frames": frames, "places": places, "home": home, "scale": float(scale),
+            **({"pictures": pictures, "frame_names": {str(k): v for k, v in (nes.get("frames") or {}).items()}}
+               if pictures else {}),
             **({"tell": {"frame": tell["frame"], "state": tell["state"], "color": tell["color"]}} if tell else {}),
             **({"jewel": {p: tuple(v) for p, v in jewel.items()}} if jewel else {}),
             "mac": mac, "mac_frames": mac_frames, "mac_places": mac_places, "mac_home": nes.get("macHome", 176),
@@ -1427,7 +1444,9 @@ def compose(scene):
     scene["tiles"] = tiles
     if ft:
         _fight_swap(scene)
-        if scene["fight"].get("cgb_poses"):
+        if (scene["fight"].get("nes") or {}).get("pictures"):
+            _fight_pics(scene)          # (Color: his NES pictures, exact, streamed: no finer poses needed)
+        elif scene["fight"].get("cgb_poses"):
             _fight_cgb(scene)
     return scene
 
@@ -1854,6 +1873,75 @@ def _fight_cgb(scene):
                           "perm0": perm0, "perm0_slots": slots0, "perm1": perm1, "perm1_first": 256 - len(perm1),
                           "runs": [tuple(r) for r in runs],
                           "sizes": {n: len(own) for n, own in sets.items()}}
+
+
+PIC_BASE = 128                          # Color: where a picture's tiles go (bank 1, slots sprites reach too)
+PIC_ROOM = 64                           # tiles a picture may have (one VBlank copies them, with its map rows)
+
+
+def _fight_pics(scene):
+    """Game Boy Color, a fighter from the NES game: each picture the game draws of him, exact, its own tiles
+    (none shared with another's: a picture's tiles come in with it, one VBlank's copy, over the last's). Per
+    picture: its tiles (each once, a tile and its mirror one), his area's map (tile, palette, Color's flip bit;
+    the bank 1 copy at PIC_BASE), his top rows as sprites (a rope row); and per NES frame, its picture and
+    where it sits."""
+    from . import fight as kit
+    ft = scene["fight"]
+    nes = ft["nes"]
+    pics = nes["pictures"]
+    order = sorted(pics["poses"])
+    region = [(ft["y"] + r) * CW + ft["x"] + c for r in range(kit.REGION_H) for c in range(kit.REGION_W)]
+    pw = kit.REGION_W * CELL
+    blank = cell_key(scene["composed"], region[0]) if ft.get("rope_row") else None
+    pose_of = {}                        # (a picture's head rows: as many as the pose it stands for on the original)
+    for k, n in nes["frame_names"].items() if nes.get("frame_names") else ():
+        pose_of[k] = n
+    out = {"order": order, "tiles": [], "maps": [], "attrs": [], "flips": [], "heads": []}
+    for key in order:
+        p = pics["poses"][key]
+        img = list(scene["composed"])
+        for i, v in enumerate(p["pixels"]):
+            img[(ft["y"] * CELL + i // pw) * W + ft["x"] * CELL + i % pw] = int(v)
+        raw = [cell_key(img, c) for c in region]
+        canon, fl = [], []
+        for k in raw:
+            m = tuple(k[y * 8 + 7 - x] for y in range(8) for x in range(8))
+            canon.append(min(k, m)); fl.append(int(m < k))
+        rows = kit.HEAD_ROWS_TALL if pose_of.get(key.rstrip("|")) in kit.HEAD_TALL else kit.HEAD_ROWS
+        head = [k for k in canon[:rows * kit.REGION_W] if k != blank]
+        own = []
+        for k in head + canon:          # (his top rows' first: copied first, and where sprites find them)
+            if k not in own:
+                own.append(k)
+        if len(own) > PIC_ROOM:
+            raise ProjectError([f'Scene "{scene["name"]}": the rival\'s NES picture {key} has {len(own)} tiles; '
+                                f"a picture can have {PIC_ROOM}."])
+        local = {k: n for n, k in enumerate(own)}
+        attrs = [ft["palettes"][kind] for kind in p["cells"]]
+        out["tiles"].append(own)
+        out["maps"].append([PIC_BASE + local[k] for k in canon])
+        out["attrs"].append(attrs)
+        out["flips"].append(fl)
+        out["heads"].append([(i // kit.REGION_W * 8, i % kit.REGION_W * 8, PIC_BASE + local[canon[i]], attrs[i], fl[i])
+                             for i in range(rows * kit.REGION_W) if canon[i] != blank])
+    index = {k: n for n, k in enumerate(order)}
+    by_pose = {}                        # (a frame never caught: the picture of the pose the original shows for it)
+    for k in order:
+        if pose_of.get(k) is not None:
+            by_pose.setdefault(pose_of[k], index[k])
+    frame_map, place = [], []
+    for mi in (0, 1):
+        for f in range(256):
+            key = "%02X%s" % (f, "|" if mi else "")
+            n = index.get(key)
+            name = pose_of.get(key) or (pose_of.get(key[:2]) if mi else None)
+            if n is None and name is not None and name in by_pose:
+                n = by_pose[name]
+            frame_map.append(0xFF if n is None else n)
+            place.append(tuple(pics["places"].get(order[n], (0, 0))) if n is not None else (0, 0))
+    out["frame_map"], out["places"] = frame_map, place
+    out["idle"] = index.get("C0", 0)
+    scene["fight_pics"] = out
 
 
 def fade_palettes(colors, step, to):

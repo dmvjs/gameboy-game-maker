@@ -6,7 +6,7 @@
   python3 -m gbstage use rgbds <version> | --path DIR | --auto
   python3 -m gbstage serve [--port N]                        start the editor
   python3 -m gbstage build PROJECT [-o OUT.gb] [--asm FILE]  build a project file and measure it
-  python3 -m gbstage test [--update] [CASE...] [--cpu-roms DIR]  run the golden (and CPU) tests
+  python3 -m gbstage test [--update] [CASE...] [--stage S] [--no-bot] [--cpu-roms DIR]  run the tests
 """
 
 import argparse
@@ -135,16 +135,29 @@ def cmd_build(args):
     return 0
 
 
+STAGES = ("goldens", "kit", "nes", "bot")
+
+
 def cmd_test(args):
-    from . import goldens
-    ok = goldens.run(update=args.update, only=args.cases)
-    if not args.cases:
+    stages = set(args.stage or STAGES) - ({"bot"} if args.no_bot else set())
+    if args.cases:
+        stages = {"goldens"}
+    ok = True
+    if "goldens" in stages:
+        from . import goldens
+        ok = goldens.run(update=args.update, only=args.cases) and ok
+    if "kit" in stages:
         from . import kittests
         print()
         ok = kittests.run() and ok
+    if "nes" in stages:
         from . import nestests
         print("\nNES opponent engine (the Game Boy port against the original code)\n")
         ok = nestests.run() and ok
+    if "bot" in stages:
+        from . import bottests
+        print("\nEvery fighter beatable: the bot, buttons only, wins each fight inside two rounds\n")
+        ok = bottests.run() and ok
     if args.cpu_roms:
         from . import cputests
         print()
@@ -194,6 +207,9 @@ def main(argv=None):
     t = sub.add_parser("test", help="run the golden tests")
     t.add_argument("cases", nargs="*", help="only these cases")
     t.add_argument("--update", action="store_true", help="accept current output as the new expected results")
+    t.add_argument("--no-bot", action="store_true", help="skip the bot fighting every fight")
+    t.add_argument("--stage", action="append", choices=STAGES,
+                   help="only this stage (repeatable): CI can run each in a job of its own")
     t.add_argument("--cpu-roms", metavar="DIR", help="also run Blargg's CPU test ROMs from DIR against the profiler's CPU")
     t.set_defaults(fn=cmd_test)
 

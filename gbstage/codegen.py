@@ -38,6 +38,17 @@ NES_SFX = {"pass_digit": 0x0B, "pass_next": 0x09,   # (Punch-Out!!'s pass key: a
            "dodge": 0x11, "star_wind": 0x16}
 
 
+
+# The NES's colors (2C02), RGB: a fighter's dodge-cue outline is one of these, by number ($05EC).
+NES_RGB = [(84, 84, 84), (0, 30, 116), (8, 16, 144), (48, 0, 136), (68, 0, 100), (92, 0, 48), (84, 4, 0), (60, 24, 0),
+           (32, 42, 0), (8, 58, 0), (0, 64, 0), (0, 60, 0), (0, 50, 60), (0, 0, 0), (0, 0, 0), (0, 0, 0),
+           (152, 150, 152), (8, 76, 196), (48, 50, 236), (92, 30, 228), (136, 20, 176), (160, 20, 100), (152, 34, 32),
+           (120, 60, 0), (84, 90, 0), (40, 114, 0), (8, 124, 0), (0, 118, 40), (0, 102, 120), (0, 0, 0), (0, 0, 0), (0, 0, 0),
+           (236, 238, 236), (76, 154, 236), (120, 124, 236), (176, 98, 236), (228, 84, 236), (236, 88, 180), (236, 106, 100),
+           (212, 136, 32), (160, 170, 0), (116, 196, 0), (76, 208, 32), (56, 204, 108), (56, 180, 204), (60, 60, 60), (0, 0, 0), (0, 0, 0),
+           (236, 238, 236), (168, 204, 236), (188, 188, 236), (212, 178, 236), (236, 174, 236), (236, 174, 212), (236, 180, 176),
+           (228, 196, 144), (204, 210, 120), (180, 222, 120), (168, 226, 144), (152, 226, 180), (160, 214, 228), (160, 162, 160), (0, 0, 0), (0, 0, 0)]
+
 def _dmc_tables(nes):
     """The NES's DMC samples (crowd, laughs, grunt) for the GB noise channel: per sample its address byte
     ($4012), a noise clock from how often it crosses its average, and its loudness each frame (RMS of the
@@ -349,6 +360,10 @@ def hw_palettes(s):
         if s.get("fight_cgb"):
             cgb = s["fight_cgb"]
             out["fight_cgb"] = dict(cgb, attrs={pose: [slots[g] for g in cells] for pose, cells in cgb["attrs"].items()})
+        if s.get("fight_pics"):         # (his NES pictures' cells, and their top rows' sprites)
+            pc = s["fight_pics"]
+            out["fight_pics"] = dict(pc, attrs=[[slots[g] for g in cells] for cells in pc["attrs"]],
+                                     heads=[[(dy, dx, t, slots[a], f) for dy, dx, t, a, f in hl] for hl in pc["heads"]])
     return out
 
 
@@ -464,11 +479,18 @@ SCREEN_ON_CHECK = """    ldh a, [hScene]         ; a plain screen: the display s
     ld a, [hl]
     and a
     jr z, .waitVBlank
-    ld a, 1                 ; (interrupts are off outside a fight: nothing comes between)
+{fight_check}    ld a, 1                 ; (interrupts are off outside a fight: nothing comes between)
     ldh [hLoadOn], a
     call VWait              ; every palette black, not just the faded ones the last scene used (the new
     call BlackPalettes      ; scene's others would show it loading)
     jr .screenOff
+"""
+SCREEN_ON_FIGHT = """    cp 2                    ; (a fight: on Color)
+    jr nz, .loadOn
+    ldh a, [hIsCGB]
+    and a
+    jr z, .waitVBlank
+.loadOn:
 """
 SCREEN_ON_END = """    ldh a, [hLoadOn]
     and a
@@ -1676,7 +1698,8 @@ def _fight_entry(i, s, index_of, suffix):
             f"    db {sw['count']}, {swap_a}\n    dw ${vram_a:04X}, ${vram_b:04X}\n"
             f"    db {s['fight_flash_tile']}, {scene('win')}, {scene('win_tko')}, {scene('lose')}, {scene('corner')}\n"
             f"    db {f'BANK(CgbMaps{suffix}), BANK(CgbSwap{suffix})' if s.get('fight_cgb') else '0, 0'}\n"
-            f"    db {f'BANK(RivalHeads{suffix})' if ft.get('rope_row') else '0'}")
+            f"    db {f'BANK(RivalHeads{suffix})' if ft.get('rope_row') else '0'}\n"
+            f"    db {f'BANK(PicHeader{suffix})' if s.get('fight_pics') else '0'}")
 
 
 def _heads_data(s, suffix):
@@ -1782,7 +1805,7 @@ def _fight_asm(i, s, index_of, project, banked=False, suffix="", shared=True, pa
                   + "\n".join(f"PlayerCgb_{p}:\n    db {len(pc['sprites'][p])}\n"
                               + "\n".join(f"    db {dy}, {dx}, {t}, ${a:02X}" for dy, dx, t, a in pc["sprites"][p])
                               for p in kit.PLAYER_POSES)
-                  + "\nPlayerCgbTiles:\n" + _db([b for t in pc["tiles"] for b in encode_tile(list(t))]) + "\n")
+                  + "\n    ds -@ & 15                  ; (on 16 bytes: DMA'd in as the fight loads)\nPlayerCgbTiles:\n" + _db([b for t in pc["tiles"] for b in encode_tile(list(t))]) + "\n")
         pl_cgb_def = f"DEF FT_PL_CGB EQU 1\nDEF FT_PL_CGB_TILES EQU {len(pc['tiles'])}"
         if s.get("fight_side_tile") is not None:   # (the side ropes' ends: Color's, in the referee's shirt's colors)
             shirt = ft["referee"].get("shirt_palette")
@@ -1876,7 +1899,8 @@ NesSndFix:                  ; and its tables in the fixed bank, NES $F400-$F8FF
         cols = [side if ft["x"] <= c < ft["x"] + kit.REGION_W else c for c in range(CW)]
         tail_t += [s["cell_tiles"][row * CW + c] for c in cols]
         tail_p += [s["cell_pal"][row * CW + c] for c in cols]
-    tail_data = f"""FtTailTiles:                ; his band's last rows without him (the scene's own tiles)
+    tail_data = f"""    ds -@ & 15                  ; (16-aligned, these rows: copied by DMA on Color)
+FtTailTiles:                ; his band's last rows without him (the scene's own tiles)
 {_db(_pad_rows(tail_t, True), 32)}
 FtTailAttr:
 {_db(_pad_rows(tail_p, True), 32)}"""
@@ -1905,6 +1929,16 @@ FtRopeAttr:
                      f"DEF FT_DMA_LINE EQU {(ft['y'] + 3) * 8}                 ; LY where the lower part's sprites come in "
                      "(his top rows' done, the referee's not begun)")
         heads_data = _heads_data(s, suffix)
+    lum = lambda c: c[0] * 3 + c[1] * 6 + c[2]
+    ink = min((lum(c) for k in rival_pals for c in project["palettes"][k]), default=0)   # his outline: the darkest
+
+    def _outline(pal):                  # color across his palettes; in each, the entry that's it (none: none)
+        j = min(range(len(pal)), key=lambda k: lum(pal[k]))
+        return j if lum(pal[j]) <= ink + 8 and max(pal[j]) <= 10 else None
+    cue_outline = [_outline(project["palettes"][k]) for k in rival_pals]
+    cue_build = "    ld hl, RivalPalNormal   ; (2: none here)\n"
+    if ft.get("nes"):                   # (2: his dodge cue: FtCueBuild's palettes, built each frame, not in VBlank)
+        cue_build = "    ld hl, wFtPalCue        ; (2: his dodge cue, FtCueBuild's)\n"
     pad = lambda data, k: data + [0] * (max(0, (pads or {}).get(k, len(data)) - len(data)))
     code = f"""; ---- Fight: "{s['name']}" ----
 {nes_defs}
@@ -1995,8 +2029,7 @@ FtFlashPalettes:            ; during VBlank, Color only: the rival's palettes, w
     dec a
     ld hl, RivalPalFlash
     jr z, .upload
-    ld hl, RivalPalTell     ; (2: his tell)
-.upload:
+{cue_build}.upload:
 {"    push hl" + nl if ft.get("rope_row") else ""}    ld de, RivalPalSlots
     ld a, [de]
     inc de
@@ -2045,13 +2078,13 @@ RivalPalNormal:
     dw {", ".join(_rgb555(project["palettes"][k]).split(", ")[j] for k in rival_pals for j in range(4))}
 RivalPalFlash:              ; a hit flushes him red; the background and outline stay
     dw {", ".join(_rgb555([c if j in (0, 3) else ([31, 16, 12] if j == 1 else [26, 4, 4]) for j, c in enumerate(project["palettes"][k])]).split(", ")[j] for k in rival_pals for j in range(4))}
-RivalPalTell:               ; his tell, as the NES shows it (Tiger's: his black goes gray); the rest: as normal
-    dw {", ".join(_rgb555([((ft.get("nes") or {}).get("tell") or {}).get("color", c) if j == 3 else c for j, c in enumerate(project["palettes"][k])]).split(", ")[j] for k in rival_pals for j in range(4))}
+RivalCueOutline:            ; per palette of his: which color is his outline ($FF: none), for his dodge cue
+    db {", ".join("$FF" if o is None else str(o) for o in cue_outline + [None] * (8 - len(cue_outline)))}
+NesRgb:                     ; the NES's colors as Color ones: his dodge cue's outline, by its number ($05EC)
+    dw {", ".join(f"${(b >> 3) << 10 | (g >> 3) << 5 | (r >> 3):04X}" for r, g, b in NES_RGB)}
 RivalJewel:                 ; his turban's gem (Great Tiger's): its tile (0: none), Color palettes (his gloves', in his
     db {jewel_head}         ; tell his white's), then per pose its middle in his area ($FF: not showing)
     db {jewel_poses}
-RivalTell:                  ; its NES frame and state ($FF: none)
-    db {((ft.get("nes") or {}).get("tell") or {}).get("frame", 255)}, {((ft.get("nes") or {}).get("tell") or {}).get("state", 255)}
 GetupPlan:                  ; per knockdown: count he gets up at, health then
     db {", ".join(f"{c}, {h}" for c, h in kit.GETUP_PLAN)}
 RivalScript:                ; op, argument
@@ -2082,6 +2115,7 @@ RareTiles:                  ; per player pose: its own tiles' address and count 
 {nl.join(f"RareTiles_{p}:" + nl + (_db([b for t in s['fight_rare_tiles'][p] for b in encode_tile(list(t))]) or "") for p in kit.PLAYER_RARE)}
 FtObjBytes:                 ; (this fight's: one has a tile more, Great Tiger's gem)
     dw {len(s['fight_obj']) * 16}
+    ds -@ & 15                  ; (on 16 bytes: DMA'd in as the fight loads)
 FtObjTiles:                 ; the player's {len(s['fight_obj']) - len(kit.COUNT_GLYPHS)} tiles, then the count's glyphs
 {_db(obj_bytes)}
 {nes_data}
@@ -2132,6 +2166,46 @@ CgbSwap{suffix}:                ; each set's tiles; the swap area's runs (tiles,
 {_db(p1)}
 ASSERT (CgbMap{suffix}_idle | CgbSwap{suffix}.set0) & 15 == 0, "GDMA copies from 16-byte boundaries"
 """
+    pics = s.get("fight_pics")
+    pics_data = ""
+    if pics:                            # Color, an NES fighter: his pictures (kit_fight.asm, FT_PIC_*): a header
+        slot_of = s.get("pal_slots") or {}                       # bank, then each picture's tiles and rows
+        rival_hw = [slot_of.get(g, g) for g in sorted(set(ft["palettes"].values()))]
+        obj = {hw: 5 + k for k, hw in enumerate(rival_hw)}
+        n = len(pics["order"])
+        assert n <= 128, "a fighter has at most 128 pictures"
+        lab = lambda k: f"Pic{suffix}_{k}"
+        entries = []
+        for k in range(n):
+            entries.append(f"    dw {lab(k)}\n    db BANK({lab(k)}), {max(1, len(pics['tiles'][k]))}")
+        heads = []
+        for k in range(n):
+            hl = pics["heads"][k]
+            heads.append(f"PicHead{suffix}_{k}:\n    db {len(hl)}" + "".join(
+                f"\n    db {dy}, {dx}, {t}, ${obj.get(a, 5) | 1 << 3 | f << 5:02X}" for dy, dx, t, a, f in hl))
+        body = []
+        for k in range(n):
+            tb = [b for t in pics["tiles"][k] for b in encode_tile(list(t))] or [0] * 16
+            maprow = rows(pics["maps"][k], tiles)
+            attrow = rows([a | 1 << 3 | f << 5 for a, f in zip(pics["attrs"][k], pics["flips"][k])], s["cell_pal"])
+            body.append(f'SECTION "Data: Rival picture {pics["order"][k]}{suffix}", ROMX, ALIGN[4]\n{lab(k)}:\n'
+                        + _db(tb) + "\n" + _db(maprow, 32) + "\n" + _db(attrow, 32))
+        pics_data = f"""
+SECTION "Data: Rival pictures{suffix}", ROMX[$4000]
+PicHeader{suffix}:              ; his NES pictures: count, the idle one's; per NES frame (then mirrored) its picture,
+    db {n}, {pics["idle"]}       ; its place's x, y; per picture its tiles (address, bank, count), its top rows' sprites
+    ds 14
+{_db(pics["frame_map"])}
+{_db([dx & 0xFF for dx, _ in pics["places"]])}
+{_db([dy & 0xFF for _, dy in pics["places"]])}
+{nl.join(entries)}
+    ds {4 * (128 - n)}
+    dw {", ".join(f"PicHead{suffix}_{k}" for k in range(n))}
+    ds {2 * (128 - n)}
+{nl.join(heads)}
+ASSERT PicHeader{suffix} == $4000
+{nl.join(body)}
+"""
     if not shared:                      # a later fight: its scene's update, its own data under its own labels
         data, checks = _suffixed(data, suffix)
         return f"""; ---- Fight: "{s['name']}" (its own data; the kit is the first fight's) ----
@@ -2139,11 +2213,12 @@ Scene{i}Update:
     jp FightUpdate
 {data}
 {cgb_data}
+{pics_data}
 {heads_data}
 {checks}
 SECTION "Code: Scenes after fight {i}", ROM0
 """
-    return code + data + cgb_data + heads_data + nes_shared + """
+    return code + data + cgb_data + pics_data + heads_data + nes_shared + """
 SECTION "Code: Scenes after the fight", ROM0   ; the next scenes' code must not land in the data bank
 """
 
@@ -3403,6 +3478,10 @@ def generate_asm(project):
     # VBlank (VWait) and go in pieces. (Switching the display off flashes white on Game Boy Color.)
     screen_on = [i for i, s in enumerate(scenes) if fade and not (s["menu"] or s["options"] or s.get("puzzle")
                                                                 or s.get("fight") or s.get("pass_key"))]
+    # Fights on Color load the same way (their copies by DMA, a VBlank's worth at a time): the original's would take
+    # too long, its display off.
+    fight_on = [i for i, s in enumerate(scenes) if fade and s.get("fight")]
+    load_on = screen_on + fight_on
     finish = []
     reset = (["ldh [hSel], a"] if menus else []) + (["ldh [hPatchPending], a"] if patches else []) + \
         (["ldh [hPromptHidden], a"] if prompt_blink else [])
@@ -3417,7 +3496,7 @@ def generate_asm(project):
     elif interactive:
         finish.append("    call SetSceneUpdate")
     if cursor_on:
-        finish.append(("    call VWait" + nl if screen_on else "") + """    ldh a, [hCursorY]       ; OAM is writable while the screen is off
+        finish.append(("    call VWait" + nl if load_on else "") + """    ldh a, [hCursorY]       ; OAM is writable while the screen is off
     ld [OAM_CURSOR], a
     ldh a, [hCursorX]
     ld [OAM_CURSOR + 1], a""")
@@ -3472,7 +3551,7 @@ DEF FADE_FRAMES EQU {fade['frames'] if fade else 1}
 DEF BLINK_FRAMES EQU {BLINK_FRAMES}
 DEF LCDC_ON EQU %{lcdc:08b}
 {SLIDE_DEFS if slides else ""}
-{"DEF FT_NES_SOUND EQU 1         ; the fight's NES sound engine plays the game's sounds" + nl if nes_sound_any else ""}; joypad bits in hPad / hPadNew (d-pad in the high nibble)
+{"DEF FT_LOAD_ON EQU 1           ; fights load with the display on, on Color (VWait)" + nl if fight_on else ""}{"DEF FT_NES_SOUND EQU 1         ; the fight's NES sound engine plays the game's sounds" + nl if nes_sound_any else ""}; joypad bits in hPad / hPadNew (d-pad in the high nibble)
 DEF PAD_A EQU 0
 DEF PAD_B EQU 1
 DEF PAD_START EQU 3
@@ -3547,7 +3626,7 @@ Start:
     inc a
 .notCGB:
     ldh [hIsCGB], a
-{"    xor a                   ; (not loading with the display on: HRAM is random at power-on)" + nl + "    ldh [hLoadOn], a" + nl if screen_on else ""}    ld sp, wStackTop
+{"    xor a                   ; (not loading with the display on: HRAM is random at power-on)" + nl + "    ldh [hLoadOn], a" + nl if load_on else ""}    ld sp, wStackTop
 .waitVBlank:                ; the LCD may only be switched off during VBlank
     ldh a, [rLY]
     cp 144
@@ -3607,10 +3686,10 @@ SECTION "Code: Scenes", ROM0
 ; Load scene A with the screen off. Tiles, map and palette map go by DMA on Game Boy Color.
 LoadScene:
     ldh [hScene], a
-{"    xor a                   ; (a cutscene's VBlank work done)" + nl + "    ldh [hCutOn], a" + nl + "    ldh [rSCX], a" + nl if cutscenes else ""}{"    xor a                   ; (not loading with the display on, unless a plain screen turns it so)" + nl + "    ldh [hLoadOn], a" + nl if screen_on else ""}{"    ldh a, [hFtActive]      ; leaving a fight: its scroll split ends now (it held through the fade)" + nl + "    and a" + nl + "    call nz, FtStop" + nl if fights else ""}    ldh a, [rLCDC]
+{"    xor a                   ; (a cutscene's VBlank work done)" + nl + "    ldh [hCutOn], a" + nl + "    ldh [rSCX], a" + nl if cutscenes else ""}{"    xor a                   ; (not loading with the display on, unless a plain screen turns it so)" + nl + "    ldh [hLoadOn], a" + nl if load_on else ""}{"    ldh a, [hFtActive]      ; leaving a fight: its scroll split ends now (it held through the fade)" + nl + "    and a" + nl + "    call nz, FtStop" + nl if fights else ""}    ldh a, [rLCDC]
     add a                   ; screen already off (at boot)? bit 7 -> carry
     jr nc, .screenOff
-{SCREEN_ON_CHECK if screen_on else ""}.waitVBlank:
+{SCREEN_ON_CHECK.replace('{fight_check}', SCREEN_ON_FIGHT if fight_on else '') if load_on else ""}.waitVBlank:
     ldh a, [rLY]
     cp 144
     jr c, .waitVBlank
@@ -3630,10 +3709,10 @@ LoadScene:
     ld l, a
 {"    xor a                   ; not sliding unless this scene starts one" + nl + "    ldh [hScrollY], a" + nl if slides else ""}{"    xor a                   ; (no gloves till its menu puts them up)" + nl + "    ldh [hGloveY], a" + nl if gloves else ""}{"    ld [wCardOn], a         ; (nor a round card up)" + nl if cards else ""}{_bank_switch() if banked else ""}    call JumpHL
 {nl.join(finish)}
-{"    call VWait              ; (palettes: written in VBlank when the screen stayed on)" + nl if screen_on else ""}    call UploadPalettes
+{"    call VWait              ; (palettes: written in VBlank when the screen stayed on)" + nl if load_on else ""}    call UploadPalettes
 {"    ldh a, [hScrollY]" + nl + "    ldh [rSCY], a" + nl if slides else ""}    ld a, LCDC_ON
     ldh [rLCDC], a
-{SCREEN_ON_END if screen_on else ""}    ret
+{SCREEN_ON_END if load_on else ""}    ret
 
 JumpHL:
     jp hl
@@ -3641,13 +3720,13 @@ JumpHL:
 SceneLoads:
     dw {", ".join(f"Scene{i}Load" for i in range(len(scenes)))}
 {"SceneBanks:" + nl + "    db " + ", ".join(f"BANK(Scene{i}Tiles)" for i in range(len(scenes))) if banked else ""}
-{("SceneScreenOn:              ; 1: loads with the display on" + nl + "    db " + ", ".join("1" if i in screen_on else "0" for i in range(len(scenes))) + nl + VWAIT_CODE) if screen_on else ""}
+{("SceneScreenOn:              ; 1: loads with the display on" + (" (2: on Color)" if fight_on else "") + nl + "    db " + ", ".join("1" if i in screen_on else "2" if i in fight_on else "0" for i in range(len(scenes))) + nl + VWAIT_CODE) if load_on else ""}
 
-{nl.join(_scene_load(i, s, cursor_on, opt_index, markers) for i, s in enumerate(scenes) if not (banked and not s.get("fight")))}{nl + nl + (SLIDE_FILL_ON if screen_on else SLIDE_FILL).rstrip() if slides else ""}
+{nl.join(_scene_load(i, s, cursor_on, opt_index, markers) for i, s in enumerate(scenes) if not (banked and not s.get("fight")))}{nl + nl + (SLIDE_FILL_ON if load_on else SLIDE_FILL).rstrip() if slides else ""}
 
 ; Copy C tiles (1-128) from HL to DE.
 CopyTiles:
-{COPY_TILES_CHUNKS if screen_on else ""}CopyTilesNow:
+{COPY_TILES_CHUNKS if load_on else ""}CopyTilesNow:
     ldh a, [hIsCGB]
     and a
     jr z, .byCPU
@@ -3676,7 +3755,7 @@ CopyTiles:
 
 ; Copy a 32-wide padded map from HL to $9800 (in the current VRAM bank).
 CopyMap:
-{"    call VWait" + nl if screen_on else ""}    ldh a, [hIsCGB]
+{"    call VWait" + nl if load_on else ""}    ldh a, [hIsCGB]
     and a
     jr z, .byCPU
     ld a, h
@@ -3691,7 +3770,7 @@ CopyMap:
     ldh [rHDMA5], a
     ret
 .byCPU:
-{COPY_MAP_CHUNKS if screen_on else ""}    ld [wSavedSP], sp
+{COPY_MAP_CHUNKS if load_on else ""}    ld [wSavedSP], sp
     ld sp, hl
     ld hl, $9800
     ld b, MAP_H
@@ -3948,7 +4027,7 @@ GloveSprites:               ; per sprite: its OAM entry, y under hGloveY, x, til
             reset += ["    ld a, 1", "    ld [OAM_CURSOR + 6], a  ; slider marker: tile 1", f"    ld a, {project['cursor']['palette']}",
                       "    ld [OAM_CURSOR + 7], a"]
         out.append('SECTION "Code: OAM", ROM0\nResetOAM:                   ; screen off or VBlank: every sprite hidden\n'
-                   + ("    call VWait\n" if screen_on else "") + nl.join(reset) + "\n    ret\n")
+                   + ("    call VWait\n" if load_on else "") + nl.join(reset) + "\n    ret\n")
     if cursor_on:
         out.append(f"""SECTION "Data: Sprites", ROM0
 CursorTile:

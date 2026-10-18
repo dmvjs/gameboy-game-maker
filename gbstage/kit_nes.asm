@@ -1442,22 +1442,21 @@ GuardAimed:                 ; $C3CA: A = up on the d-pad (1/0); Z if his guard i
 ; $AB0C: his fight data (96 bytes) to $05A0, the timeline and AI tables' addresses to $31-$34.
 NesFightStart::
     ld hl, wNes             ; a clean start, but the sound engine's ($F0-$FF, $0700-$07FF): what's playing
-    ld bc, $F0              ; (the crowd) plays on into the fight
+    xor a                   ; (the crowd) plays on into the fight
+    ld b, $F0 / 16
 .clear:
-    xor a
-    ld [hl+], a
-    dec bc
-    ld a, b
-    or c
+    REPT 16
+        ld [hl+], a
+    ENDR
+    dec b
     jp nz, .clear
     ld hl, wNes + $100
-    ld bc, $600
+    ld b, $600 / 16
 .clear2:
-    xor a
-    ld [hl+], a
-    dec bc
-    ld a, b
-    or c
+    REPT 16
+        ld [hl+], a
+    ENDR
+    dec b
     jp nz, .clear2
     ld a, [wFtNesOffset]    ; FightOffset ($03) as the NES has it (scripts test it: a fighter's rematch
     ld [wNes + $03], a      ; shares his bank)
@@ -1541,6 +1540,15 @@ NesHpCarry:
 
 ; $ABB3: a round begins (A = round number, 1-3): the clock's seconds, his AI from the start, waiting.
 NesRoundStart::             ; A = round (1-3)
+    push af
+    ld hl, wNes + $40       ; ($AB5B) zero page $40-$EF cleared: nothing of the last round's carries over
+    ld b, $B0               ; (GameStatusBB left set: his script would cue Mac out of his corner before
+    xor a                   ; Mac's there to be cued, and the round never starts)
+.zp:
+    ld [hl+], a
+    dec b
+    jp nz, .zp
+    pop af
     ld [wNes + nRoundNumber], a
     ld a, $C0               ; ($ABB3) the timeline's seconds; fresh state for the round
     ld [wNes + nSecondsLeft], a

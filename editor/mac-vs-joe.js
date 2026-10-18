@@ -115,7 +115,7 @@ const TIGER = {
   cgbPoses: TIGER_POSES_CGB,
   crowdColor: CROWD_COLORS.tiger,
   portrait: PORTRAITS.tiger,
-  nes: { ...JOE_NES, ...TIGER_NES, tellFlash: { frame: 0x44, state: 0x19, color: [19, 19, 19] }, jewel: TIGER_JEWEL },   // (his jewel's tell:
+  nes: { ...JOE_NES, ...TIGER_NES, jewel: TIGER_JEWEL },   // (his jewel's tell:
                                                                                                       // his black goes gray)
   talk: [[['HIS FATHER', 'WAS A', 'GREAT', 'MAGICIAN', 'IN INDIA.'], ["DON'T BE", 'CHARMED BY', 'HIS MAGIC', 'PUNCHES.']]],
   quotes: [['SO A', 'PUSSYCAT', 'WANTS TO', 'FIGHT A', 'TIGER!'], ['BEWARE', 'MY TIGER', 'PUNCH!'],
