@@ -952,10 +952,12 @@ def mac_from_nes(s):
     return out
 
 
-def mac_pictures(s):
+def mac_pictures(s, colors):
     """Little Mac on Color: every NES frame of his, exact (no pose standing in for another), each where the NES
     draws it: {key: {"pixels": slots, "w", "h", "x", "y"}}, x, y its top-left in the original's 24x48 pose box
-    (his idle frame bottom-centred in it, as there), scaled by s. A frame of nothing: no pixels."""
+    (his idle frame bottom-centred in it, as there), scaled by s; slots 1-3 his palette's (colors: MAC_COLORS, in
+    its order). A frame of nothing: no pixels."""
+    pal = [tuple(v * 255 // 31 for v in c) for c in colors]
     import mac_nes
     def ink(c):
         r, g, b = c[:3]
@@ -983,7 +985,7 @@ def mac_pictures(s):
         h, w = len(small), len(small[0])
         left = bx + round((x - x0) * s)
         top = PH + round((y + len(img) - by) * s) - h
-        px = "".join(str(1 + min(range(3), key=lambda i: dist(c[:3], MAC_INK[i]))) if c else "0" for row in small for c in row)
+        px = "".join(str(1 + min(range(3), key=lambda i: dist(c[:3], pal[i]))) if c else "0" for row in small for c in row)
         out[k] = {"pixels": px, "w": w, "h": h, "x": left, "y": top}
     return out
 
@@ -1268,7 +1270,13 @@ def joe_shapes(opponent=0, everything=False):
         if not pieces:                      # (a capture with nothing in it)
             continue
         near = [g for g in pieces if any(abs(x - px) <= 12 for x, _ in g)]
-        him = max(near or pieces, key=len)
+        him = set(max(near or pieces, key=len))
+        x0, x1 = min(x for x, _ in him) - 8, max(x for x, _ in him) + 8
+        y0, y1 = min(y for _, y in him) - 8, max(y for _, y in him) + 8
+        for g in pieces:                # (and parts of him drawn apart: Macho's boots as he goes down; not specks,
+            if g is not him and len(g) >= 40 and any(x0 <= x <= x1 and y0 <= y <= y1 for x, y in g) \
+                    and any(abs(x - a) <= 8 and abs(y - b) <= 8 for x, y in g for a, b in him):   # a star's twinkle)
+                him |= g
         out[key] = {(x - px, y - py): img[y][x] for x, y in him}
     for k in frames_map:                               # a mirrored frame never caught whole: its plain one flipped
         f, mi = _key(k)
@@ -1680,7 +1688,7 @@ def write_js(colors, pposes, note, faces, mac_pal, rivals, mac_cgb=None):
           f"  soundFixed: '{base64.b64encode(DISASM_BANK.with_name('PRG_BankDEF.bin').read_bytes()[0x5400:0x5900]).decode()}',",
           f"  samples: '{base64.b64encode(DISASM_BANK.with_name('PRG_BankDEF.bin').read_bytes()[0x4000:0x5400]).decode()}',",
           f"  macFrames: {json.dumps(MAC_FRAMES)}, macHome: 176, macScale: {SCALE_MAC},",
-          f"  macPictures: {json.dumps(mac_pictures(SCALE_MAC))},",
+          f"  macPictures: {json.dumps(mac_pictures(SCALE_MAC, colors))},",
           f"  macPlaces: {json.dumps({**{k: [v, 1] for k, v in MAC_PLACES.items()}, **{k: [v, 0] for k, v in MAC_LIFTS.items()}})} }};", "",
           "// Little Mac knocked down: the NES's colors for him, slots 1-3 as MAC_COLORS.",
           f"export const MAC_DOWN_COLORS = {json.dumps(mac_down_colors(colors))};", "",
