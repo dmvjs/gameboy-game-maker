@@ -647,6 +647,8 @@ export function boxingGame(pack) {
       sc.cellPal.fill(ROLE.t); fillRect(lay, 0, 0, M.W, M.H, 3);
       portrait(sc, lay, last.portrait, 6, 1);
       sc.texts = E.tyson.map((label, n) => ({ label, x: centered(label) >> 3, y: 9 + n + (n > 0), textSlot: 0 }));
+      if ((pack.anotherWorld || []).includes(last.short))   // the Another World Circuit's: the fight's time, as the NES
+        sc.awTexts = [...sc.texts, { label: 'TIME 0:00.00,R1', x: 2, y: 16, textSlot: 0, fightTime: true }];   // gives it
       sc.pressStart = { target: at, flashes: 1, area: null, quiet: true, auto: E.frames.word };
       sc.notes = 'Punch-Out!!\'s ending begins: his word to Mac. It goes on by itself; the end music the fight '
         + 'started as he went down plays on (as the game\'s: none of its ending screens starts a song).';

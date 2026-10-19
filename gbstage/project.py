@@ -1131,7 +1131,8 @@ def _texts(texts, where, errors):
         elif slot not in (0, 1, 2, 3):
             errors.append(f'{where}: the text "{label}" needs a color slot 1-4.')
         else:
-            out.append({"label": label, "x": x, "y": y, "text_slot": slot, **({"record": True} if t.get("record") else {})})
+            out.append({"label": label, "x": x, "y": y, "text_slot": slot, **({"record": True} if t.get("record") else {}),
+                        **({"fight_time": True} if t.get("fightTime") else {})})
     return out
 
 
@@ -1440,6 +1441,21 @@ def compose(scene):
                 glyphs.append(tile_of(cell_key(img, c0)))
             rec.append((t["x"], t["y"], glyphs + [tile_of(cell_key(scene["pixels"], c0))]))
     scene["record_glyphs"] = rec
+    times = []                      # the fight's time (Punch-Out!!'s Another World Circuit, its last win): "TIME M:SS.CC,RN",
+    for t in scene.get("aw_texts") or []:   # each digit's cell in each digit
+        if t.get("fight_time"):
+            cells = []
+            for k in (5, 7, 8, 10, 11, 14):
+                c0 = t["y"] * CW + t["x"] + k
+                glyphs = []
+                for ch in "0123456789":
+                    img = list(scene["pixels"])
+                    for x, y in text_ink(ch, t["x"] + k, t["y"]):
+                        img[y * W + x] = t["text_slot"]
+                    glyphs.append(tile_of(cell_key(img, c0)))
+                cells.append(glyphs)
+            times.append((t["x"], t["y"], cells))
+    scene["time_glyphs"] = times
     scene["aw_patch"] = []          # Punch-Out!!'s Another World Circuit: its words over these, cell by cell
     if scene.get("aw_texts"):
         aw = list(scene["pixels"])

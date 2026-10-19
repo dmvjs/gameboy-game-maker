@@ -360,7 +360,9 @@ Scene{i}Map:"""
 Scene{i}Attr:               ; palette number per tile (Game Boy Color only)
 {_db(s['cell_pal'] if s.get('cutscene') else _pad_rows(s['cell_pal'], bool(s.get('fight'))), 32)}
 """ + "".join(f"Scene{i}Record{n}:             ; Mac's record's glyphs: 0-9, -, K, O, blank\n    db {', '.join(map(str, g))}\n"
-              for n, (_, _, g) in enumerate(s.get("record_glyphs") or ())) + (
+              for n, (_, _, g) in enumerate(s.get("record_glyphs") or ())) + "".join(
+        f"Scene{i}Time{n}:               ; the fight's time's glyphs: each digit's cell, 0-9\n    db {', '.join(str(v) for g in cells for v in g)}\n"
+        for n, (_, _, cells) in enumerate(s.get("time_glyphs") or ())) + (
         f"Scene{i}Aw:                 ; Another World Circuit's words: cells, then each's address and tile\n    db {len(s['aw_patch'])}\n"
         + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n    db {tile}\n" for c, tile in s["aw_patch"])
         if s.get("aw_patch") else "")
@@ -770,7 +772,10 @@ def _scene_load(i, s, sprites, opt_index=None, markers=False):
                   f"    ld c, {n - 128}", "    call CopyTiles"]
     lines += [f"    ld hl, Scene{i}Map", "    call CopyMap", f"    ld hl, Scene{i}Attr", "    call CopyAttr"]
     if s.get("aw_patch"):               # (Punch-Out!!'s Another World Circuit on: its words)
-        lines += ["    ld a, [wAw]", "    and a", "    jr z, .notAw", f"    ld hl, Scene{i}Aw", "    call AwPatch", ".notAw:"]
+        lines += ["    ld a, [wAw]", "    and a", "    jr z, .notAw", f"    ld hl, Scene{i}Aw", "    call AwPatch"]
+        for n, (x, y, _) in enumerate(s.get("time_glyphs") or ()):  # (and the fight's time, there)
+            lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Time{n}", "    call TimeDraw"]
+        lines.append(".notAw:")
     for n, (x, y, _) in enumerate(s.get("record_glyphs") or ()):    # Mac's record, as it stands
         lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Record{n}", "    call RecordDraw"]
     if s.get("_rec_reset"):
@@ -2214,6 +2219,10 @@ RivalTimed:                 ; round, minute, second (BCD), op, argument
     db $FF
 FtHudLUT:                   ; per HUD cell: its tile for each value (digits 0-9, bars 0-8)
 {_db(s['fight_lut'], 10)}
+FtHudMap:                   ; the HUD's values to tiles, through each cell's own table (its bank's, mapped)
+{nl.join(f"    ld a, [wFtHudVal + {k}]{nl}    add LOW(FtHudLUT + {10 * k}){nl}    ld l, a{nl}    adc HIGH(FtHudLUT + {10 * k})"
+         f"{nl}    sub l{nl}    ld h, a{nl}    ld a, [hl]{nl}    ld [wFtHud + {k}], a" for k in range(len(s['fight_hud_cells'])))}
+    ret
 PlayerPoses:
     dw {", ".join(f"Player_{p}" for p in kit.PLAYER_POSES)}
 {nl.join(sprites)}

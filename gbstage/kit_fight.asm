@@ -4949,6 +4949,74 @@ RecordDraw::
     pop de
     ret
 
+IF DEF(FT_NES)
+; The fight's time as Punch-Out!!'s Another World Circuit gives it after its last win, "TIME M:SS.CC,RN" (the NES's
+; clock, $0302-$0305; its hundredths from the sub-second count, $0306's top four bits, by its table; the round, $06),
+; over the label it's baked as: HL = its first cell in the map, DE = its digits' glyphs (each cell's 0-9).
+TimeDraw::
+    ldh a, [hLoadOn]        ; (the display on: in a VBlank)
+    and a
+    call nz, VWait
+    push hl
+    ld a, [wNes + $0306]
+    swap a
+    and $0F
+    cp 7
+    jr c, .cents
+    ld a, 6
+.cents:
+    add a
+    ld c, a
+    ld b, 0
+    ld hl, TimeCents
+    add hl, bc
+    ld a, [hl+]
+    ld b, a
+    ld c, [hl]              ; B, C: its hundredths' digits
+    pop hl
+    ld a, l
+    add 5
+    ld l, a                 ; (a row's cells: no carry out of the label's row)
+    ld a, [wNes + $0302]
+    call .put
+    inc l
+    inc l
+    ld a, [wNes + $0304]
+    call .put
+    inc l
+    ld a, [wNes + $0305]
+    call .put
+    inc l
+    inc l
+    ld a, b
+    call .put
+    inc l
+    ld a, c
+    call .put
+    inc l
+    inc l
+    inc l
+    ld a, [wNes + $06]
+.put:                       ; [HL] = digit A's glyph (DE's ten), DE on to the next cell's
+    push de
+    add e
+    ld e, a
+    adc d
+    sub e
+    ld d, a
+    ld a, [de]
+    ld [hl], a
+    pop de
+    ld a, e
+    add 10
+    ld e, a
+    ret nc
+    inc d
+    ret
+TimeCents:                  ; ($85BB) the hundredths by the sub-second count's top bits: 00 25 48 61 82 97 99
+    db 0, 0, 2, 5, 4, 8, 6, 1, 8, 2, 9, 7, 9, 9
+ENDC
+
 ; A = the scene the fight goes on to, from its result (won, lost, the corner): this fight's own (FtFights).
 FtResultScene:
     ld a, [wFtResult]
@@ -5016,33 +5084,7 @@ FtHudCompute:
     ld a, [wRvHealth]
     srl a
     call .bar
-    ld hl, wFtHudVal        ; values -> tiles, through each cell's own table
-    ld de, wFtHud
-    ld bc, FtHudLUT
-    ld a, FT_HUD_CELLS
-.map:
-    push af
-    ld a, [hl+]
-    push hl
-    add c
-    ld l, a
-    adc b
-    sub l
-    ld h, a
-    ld a, [hl]
-    ld [de], a
-    inc de
-    pop hl
-    ld a, c
-    add 10
-    ld c, a
-    adc b
-    sub c
-    ld b, a
-    pop af
-    dec a
-    jr nz, .map
-    ret
+    jp FtHudMap             ; values -> tiles (unrolled, by its tables, in their bank)
 .bar:                       ; A = health -> FT_BAR_CELLS levels of 0-8
     ld b, FT_BAR_CELLS
 .cell:

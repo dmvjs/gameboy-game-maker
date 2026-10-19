@@ -23,6 +23,7 @@ On each console, note anything that looks or sounds different from the emulator.
 - [ ] Power off, on, CONTINUE, type that key: Don Flamenco's challenger with your record.
 - [ ] 007 373 5963 on CONTINUE: straight to Mike Tyson.
 - [ ] 135 792 4680 on CONTINUE, Select held as you enter the last digit: ANOTHER WORLD CIRCUIT, King Hippo.
+- [ ] Beat Mike Tyson in the Another World Circuit: his word to Mac ends with TIME (the knockout's, to hundredths) and the round.
 - [ ] 075 541 6113 on CONTINUE: the busy signal (ten beeps), then back to the title.
 - [ ] Sound: music and effects as on the NES; no clicks or dropouts in a fight.
 - [ ] Original Game Boy only: the grey pictures (his frames may run a frame or two behind Color's).

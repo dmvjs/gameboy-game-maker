@@ -857,7 +857,7 @@ export function uniqueTileCount(scene) {
 const cloneMenu = m => m && { ...m, items: m.items.map(it => ({ ...it })) };
 const clonePress = ps => ps && { ...ps, area: ps.area && { ...ps.area }, prompt: ps.prompt && { ...ps.prompt } };
 const cloneTexts = t => (Array.isArray(t) ? t : []).map(x => ({ label: String(x.label), x: x.x, y: x.y, textSlot: x.textSlot,
-                                                                   ...(x.record ? { record: true } : {}) }));   // (live: the player's record)
+                                                                   ...(x.record ? { record: true } : {}), ...(x.fightTime ? { fightTime: true } : {}) }));   // (live: the player's record, the fight's time)
 const clonePuzzle = pz => pz && JSON.parse(JSON.stringify(pz));
 const POSE_FALLBACK = { idle2: 'idle', idle3: 'idle', hit_back: 'hit_l', slip: 'idle', jab_mid: 'jab_tell', hook_mid: 'hook_tell', kd_stagger: 'hit_body', kd_fall: 'fall',
                         kd_down: 'down', kd_kneel: 'fall', arm_pop: 'hit_body', guard_low: 'guard',
