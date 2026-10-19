@@ -2,7 +2,24 @@
 
 A Flash-style editor for making Game Boy games. It generates assembly and builds real `.gb` ROMs with [RGBDS](https://rgbds.gbdev.io).
 
-## Play Joe vs Mac
+## Joe vs Mac
+
+Mike Tyson's Punch-Out!! on the Game Boy, built with gbstage: all 14 fights of the NES game, Glass Joe to Mike
+Tyson, on Game Boy Color and the original Game Boy.
+
+- **The NES game's own fight logic.** Each opponent's moves, tells, timing and AI run as the NES's do, so the
+  patterns you know from the original work here.
+- **Every frame as the NES draws it.** Each opponent's and Little Mac's frames are captured from the NES game
+  itself and shown as they are, mirrored ones included. On the original Game Boy, each fighter gets his own grey
+  shading.
+- **The NES's music and sound effects**, played on the Game Boy's own sound channels.
+- **The whole game around the fights**: title, pass key, challenger screens, the corner between rounds (Select
+  there, once per match, for a refill), knockdowns with the referee's count, TKOs, decisions on points and rematches.
+- **Checked against real hardware timing.** Every fight runs in SameBoy with no video writes outside the time the
+  hardware allows, on both machines. In the test suite, a bot that only presses buttons beats every fighter within
+  two rounds.
+
+It's a 4 MB MBC5 cartridge (`joe-vs-mac.gb`) that runs in any Game Boy emulator.
 
 ```sh
 git clone https://github.com/dmvjs/gameboy-game-maker.git
@@ -11,7 +28,13 @@ npm i
 npm start
 ```
 
-Then press **▶ Test**. More in [DEMO.md](DEMO.md).
+`npm start` needs a Mike Tyson's Punch-Out!! (USA) `.nes` file and the Glass Joe and Little Mac sprite sheets (a
+`.png` with `joe` / `mac` in its name) in the folder. It builds the ROM and opens the editor with the game loaded:
+press **▶ Test** to play. The first build takes a few minutes. No Node? Double-click **Start.command** (Mac) or
+**Start.bat** (Windows) instead. You need Python 3.9 or newer.
+
+**Controls** (keyboard in **▶ Test**): **B** (Z) left punch, **A** (X) right punch, **Up** + punch to the face,
+**Left/Right** dodge, hold **Down** to block, **Start** (Enter) star punch.
 
 ### Every fight, start to knockout
 
@@ -75,16 +98,12 @@ installed from there.
 Under **Examples**, **Capsule Clinic** is a complete, playable falling-capsule puzzle game: title menu, settings
 (virus level, speed), playfield, how to play, and win / game over screens.
 
-**Joe vs Mac** is a boxing game against one scripted rival, seen from behind the player: guard switching,
-counters, star punches, a timed taunt and charge, knockdowns with a referee's count, three rounds with a corner
-scene between them (Select there for a once-per-match refill), and a decision on points. It's built from the boxing
-template (`editor/boxing.js`) and a fighter pack: swap the pack's names, text, poses and portraits for a new game on
-the same engine. Its art is Little Mac and Glass Joe from Punch-Out!! (NES), so it stays on this machine
-(`tools/punchout_art/build.py` makes it; `.git/info/exclude` keeps it out of git). The rival's poses swap in and
-out of video memory in sets (attack, knockdown, special) so he can have more of them than fit at once. Its fight
-scene's art comes in and out as sprite sheets: **Download rival sheet** / **Import rival sheet…** (64x80 frames)
-and the same for the player (24x48 frames, transparent background). Importing snaps colors to the hardware and picks
-the rival's three palettes from the art. Games larger than 32 KB are built as MBC5 cartridges automatically.
+**Joe vs Mac** (above) is built from the boxing template (`editor/boxing.js`) and a fighter pack
+(`editor/art/mac-vs-joe.js`, made from the NES game by `tools/punchout_art/build.py`). Swap the pack's names, text,
+poses and portraits for a new game on the same engine. A fight scene's art comes in and out as sprite sheets:
+**Download rival sheet** / **Import rival sheet…** (64x80 frames) and the same for the player (24x48 frames,
+transparent background). Importing snaps colors to the hardware and picks the rival's three palettes from the art.
+Games larger than 32 KB are built as MBC5 cartridges automatically.
 
 Scenes are listed in the side panel. ★ marks where the game starts. A scene can have a menu, an options screen
 (choices, numbers, sliders), a press-start prompt or a puzzle grid, and can send B back to another scene. Scenes nothing leads to are tagged "not reachable" and left out
