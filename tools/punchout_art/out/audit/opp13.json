@@ -1,0 +1,66 @@
+{
+ "00": {
+  "flash": false,
+  "frame": 1,
+  "looks": 9,
+  "missing": false,
+  "score": 0.913,
+  "state": "40"
+ },
+ "02": {
+  "flash": false,
+  "frame": 25,
+  "looks": 9,
+  "missing": false,
+  "score": 0.919,
+  "state": "40"
+ },
+ "06": {
+  "flash": false,
+  "frame": 34,
+  "looks": 9,
+  "missing": false,
+  "score": 0.909,
+  "state": "40"
+ },
+ "08": {
+  "flash": false,
+  "frame": 576,
+  "looks": 9,
+  "missing": false,
+  "score": 0.978,
+  "state": "17"
+ },
+ "46": {
+  "flash": false,
+  "frame": 592,
+  "looks": 9,
+  "missing": false,
+  "score": 0.435,
+  "state": "17"
+ },
+ "4E|": {
+  "flash": false,
+  "frame": 5372,
+  "looks": 9,
+  "missing": false,
+  "score": 0.435,
+  "state": "1D"
+ },
+ "C2": {
+  "flash": false,
+  "frame": 409,
+  "looks": 9,
+  "missing": false,
+  "score": 0.989,
+  "state": "40"
+ },
+ "C4": {
+  "flash": false,
+  "frame": 27,
+  "looks": 9,
+  "missing": false,
+  "score": 0.973,
+  "state": "40"
+ }
+}

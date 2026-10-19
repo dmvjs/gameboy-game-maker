@@ -1,0 +1,146 @@
+{
+ "00": {
+  "flash": false,
+  "frame": 1,
+  "looks": 9,
+  "missing": false,
+  "score": 0.978,
+  "state": "40"
+ },
+ "02": {
+  "flash": false,
+  "frame": 56,
+  "looks": 9,
+  "missing": false,
+  "score": 0.978,
+  "state": "40"
+ },
+ "04|": {
+  "flash": false,
+  "frame": 58,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "40"
+ },
+ "08|": {
+  "flash": false,
+  "frame": 60,
+  "looks": 9,
+  "missing": false,
+  "score": 0.981,
+  "state": "40"
+ },
+ "0A|": {
+  "flash": false,
+  "frame": 825,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "0B"
+ },
+ "26": {
+  "flash": false,
+  "frame": 8276,
+  "looks": 7,
+  "missing": false,
+  "score": 0.502,
+  "state": "0E"
+ },
+ "28": {
+  "flash": false,
+  "frame": 8290,
+  "looks": 9,
+  "missing": false,
+  "score": 0.507,
+  "state": "0E"
+ },
+ "2A": {
+  "flash": false,
+  "frame": 8314,
+  "looks": 9,
+  "missing": false,
+  "score": 0.49,
+  "state": "0E"
+ },
+ "30|": {
+  "flash": false,
+  "frame": 14142,
+  "looks": 7,
+  "missing": false,
+  "score": 0.502,
+  "state": "0D"
+ },
+ "32|": {
+  "flash": false,
+  "frame": 14156,
+  "looks": 9,
+  "missing": false,
+  "score": 0.507,
+  "state": "0D"
+ },
+ "3A": {
+  "flash": false,
+  "frame": 441,
+  "looks": 9,
+  "missing": false,
+  "score": 0.982,
+  "state": "40"
+ },
+ "40|": {
+  "flash": false,
+  "frame": 636,
+  "looks": 9,
+  "missing": false,
+  "score": 0.484,
+  "state": "15"
+ },
+ "50|": {
+  "flash": false,
+  "frame": 870,
+  "looks": 9,
+  "missing": false,
+  "score": 0.987,
+  "state": "18"
+ },
+ "80|": {
+  "flash": false,
+  "frame": 1109,
+  "looks": 9,
+  "missing": false,
+  "score": 0.467,
+  "state": "16"
+ },
+ "C0|": {
+  "flash": false,
+  "frame": 556,
+  "looks": 9,
+  "missing": false,
+  "score": 0.555,
+  "state": "40"
+ },
+ "C6|": {
+  "flash": false,
+  "frame": 1104,
+  "looks": 9,
+  "missing": false,
+  "score": 0.981,
+  "state": "16"
+ },
+ "C8|": {
+  "flash": false,
+  "frame": 3377,
+  "looks": 3,
+  "missing": true,
+  "score": 0.0,
+  "state": "0D"
+ },
+ "CC": {
+  "flash": false,
+  "frame": 446,
+  "looks": 9,
+  "missing": false,
+  "score": 0.981,
+  "state": "40"
+ }
+}

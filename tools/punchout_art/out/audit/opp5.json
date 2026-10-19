@@ -1,0 +1,26 @@
+{
+ "20": {
+  "flash": false,
+  "frame": 29155,
+  "looks": 9,
+  "missing": false,
+  "score": 0.456,
+  "state": "0D"
+ },
+ "28": {
+  "flash": false,
+  "frame": 9447,
+  "looks": 9,
+  "missing": false,
+  "score": 0.59,
+  "state": "10"
+ },
+ "CE": {
+  "flash": false,
+  "frame": 4193,
+  "looks": 9,
+  "missing": false,
+  "score": 0.0,
+  "state": "41"
+ }
+}

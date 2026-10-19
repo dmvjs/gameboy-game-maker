@@ -1980,7 +1980,7 @@ def _fight_pics(scene):
         for k in raw:
             m = tuple(k[y * 8 + 7 - x] for y in range(8) for x in range(8))
             canon.append(min(k, m)); fl.append(int(m < k))
-        rows = kit.HEAD_ROWS_TALL if pose_of.get(key.rstrip("|")) in kit.HEAD_TALL else kit.HEAD_ROWS
+        rows = kit.HEAD_ROWS_TALL         # (any picture can rise into the crowd: his get-up, his walk-in)
         head = [k for k in canon[:rows * kit.REGION_W] if k != blank]
         own = []
         for k in head + canon:          # (his top rows' first: copied first, and where sprites find them)
@@ -2090,7 +2090,7 @@ def _fight_pics_dmg(scene):
                         sl = int(px[(r * CELL + y) * W + c * CELL + x])
                         t.append(grey.get(color[(kind, sl)], 3) if sl else 0)
                 cell_tiles.append(tuple(t))
-        rows = kit.HEAD_ROWS_TALL if pose_of.get(key.rstrip("|")) in kit.HEAD_TALL else kit.HEAD_ROWS
+        rows = kit.HEAD_ROWS_TALL         # (any picture can rise into the crowd: his get-up, his walk-in)
         own = []
         for t in cell_tiles[:rows * kit.REGION_W] + cell_tiles:     # (his top rows' first)
             if t not in own:

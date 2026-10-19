@@ -1,0 +1,138 @@
+{
+ "04": {
+  "flash": false,
+  "frame": 391,
+  "looks": 9,
+  "missing": false,
+  "score": 0.977,
+  "state": "40"
+ },
+ "08": {
+  "flash": false,
+  "frame": 406,
+  "looks": 9,
+  "missing": false,
+  "score": 0.978,
+  "state": "40"
+ },
+ "0A": {
+  "flash": false,
+  "frame": 1620,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "0B"
+ },
+ "24|": {
+  "flash": false,
+  "frame": 13565,
+  "looks": 9,
+  "missing": false,
+  "score": 0.536,
+  "state": "0D"
+ },
+ "26": {
+  "flash": false,
+  "frame": 27671,
+  "looks": 7,
+  "missing": false,
+  "score": 0.512,
+  "state": "0E"
+ },
+ "28": {
+  "flash": false,
+  "frame": 5020,
+  "looks": 9,
+  "missing": false,
+  "score": 0.509,
+  "state": "10"
+ },
+ "2A": {
+  "flash": false,
+  "frame": 5030,
+  "looks": 9,
+  "missing": false,
+  "score": 0.493,
+  "state": "10"
+ },
+ "30|": {
+  "flash": false,
+  "frame": 4113,
+  "looks": 9,
+  "missing": false,
+  "score": 0.512,
+  "state": "0D"
+ },
+ "32|": {
+  "flash": false,
+  "frame": 4128,
+  "looks": 9,
+  "missing": false,
+  "score": 0.509,
+  "state": "0D"
+ },
+ "3A": {
+  "flash": false,
+  "frame": 1,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "40"
+ },
+ "48": {
+  "flash": false,
+  "frame": 960,
+  "looks": 9,
+  "missing": false,
+  "score": 0.987,
+  "state": "17"
+ },
+ "50|": {
+  "flash": false,
+  "frame": 884,
+  "looks": 9,
+  "missing": false,
+  "score": 0.586,
+  "state": "18"
+ },
+ "52": {
+  "flash": false,
+  "frame": 5800,
+  "looks": 9,
+  "missing": false,
+  "score": 0.981,
+  "state": "1A"
+ },
+ "58": {
+  "flash": false,
+  "frame": 5850,
+  "looks": 6,
+  "missing": false,
+  "score": 0.597,
+  "state": "1A"
+ },
+ "80": {
+  "flash": false,
+  "frame": 4739,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "0D"
+ },
+ "C4": {
+  "flash": false,
+  "frame": 384,
+  "looks": 9,
+  "missing": false,
+  "score": 0.977,
+  "state": "40"
+ },
+ "CC": {
+  "flash": false,
+  "frame": 25,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "40"
+ }
+}

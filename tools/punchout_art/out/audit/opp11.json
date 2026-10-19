@@ -1,0 +1,186 @@
+{
+ "00": {
+  "flash": false,
+  "frame": 116,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "40"
+ },
+ "04": {
+  "flash": false,
+  "frame": 261,
+  "looks": 9,
+  "missing": false,
+  "score": 0.983,
+  "state": "40"
+ },
+ "06": {
+  "flash": false,
+  "frame": 254,
+  "looks": 9,
+  "missing": false,
+  "score": 0.978,
+  "state": "40"
+ },
+ "08": {
+  "flash": false,
+  "frame": 39,
+  "looks": 9,
+  "missing": false,
+  "score": 0.979,
+  "state": "40"
+ },
+ "0A": {
+  "flash": false,
+  "frame": 1,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "40"
+ },
+ "0C": {
+  "flash": false,
+  "frame": 123,
+  "looks": 9,
+  "missing": false,
+  "score": 0.981,
+  "state": "40"
+ },
+ "0E|": {
+  "flash": false,
+  "frame": 150,
+  "looks": 9,
+  "missing": false,
+  "score": 0.979,
+  "state": "40"
+ },
+ "10": {
+  "flash": false,
+  "frame": 2687,
+  "looks": 9,
+  "missing": false,
+  "score": 0.979,
+  "state": "08"
+ },
+ "12": {
+  "flash": false,
+  "frame": 4896,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "05"
+ },
+ "14": {
+  "flash": false,
+  "frame": 2719,
+  "looks": 9,
+  "missing": false,
+  "score": 0.982,
+  "state": "03"
+ },
+ "18": {
+  "flash": false,
+  "frame": 2938,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "15"
+ },
+ "1A": {
+  "flash": false,
+  "frame": 2944,
+  "looks": 9,
+  "missing": false,
+  "score": 0.982,
+  "state": "15"
+ },
+ "22|": {
+  "flash": false,
+  "frame": 14951,
+  "looks": 9,
+  "missing": false,
+  "score": 0.983,
+  "state": "0D"
+ },
+ "3A": {
+  "flash": false,
+  "frame": 3657,
+  "looks": 9,
+  "missing": false,
+  "score": 0.983,
+  "state": "41"
+ },
+ "3C|": {
+  "flash": false,
+  "frame": 3005,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "1C"
+ },
+ "3E|": {
+  "flash": false,
+  "frame": 3011,
+  "looks": 9,
+  "missing": false,
+  "score": 0.989,
+  "state": "1C"
+ },
+ "4A": {
+  "flash": false,
+  "frame": 125,
+  "looks": 9,
+  "missing": false,
+  "score": 0.979,
+  "state": "40"
+ },
+ "52|": {
+  "flash": false,
+  "frame": 152,
+  "looks": 9,
+  "missing": false,
+  "score": 0.979,
+  "state": "40"
+ },
+ "54|": {
+  "flash": false,
+  "frame": 24890,
+  "looks": 4,
+  "missing": false,
+  "score": 0.535,
+  "state": "04"
+ },
+ "80": {
+  "flash": false,
+  "frame": 615,
+  "looks": 9,
+  "missing": false,
+  "score": 0.984,
+  "state": "40"
+ },
+ "82": {
+  "flash": false,
+  "frame": 2818,
+  "looks": 9,
+  "missing": false,
+  "score": 0.982,
+  "state": "15"
+ },
+ "C4": {
+  "flash": false,
+  "frame": 247,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "40"
+ },
+ "CC": {
+  "flash": false,
+  "frame": 3672,
+  "looks": 9,
+  "missing": false,
+  "score": 0.983,
+  "state": "41"
+ }
+}

@@ -1,0 +1,170 @@
+{
+ "00": {
+  "flash": false,
+  "frame": 17,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "40"
+ },
+ "06": {
+  "flash": false,
+  "frame": 1,
+  "looks": 9,
+  "missing": false,
+  "score": 0.978,
+  "state": "40"
+ },
+ "08": {
+  "flash": false,
+  "frame": 824,
+  "looks": 9,
+  "missing": false,
+  "score": 0.982,
+  "state": "15"
+ },
+ "0A": {
+  "flash": false,
+  "frame": 259,
+  "looks": 9,
+  "missing": false,
+  "score": 0.982,
+  "state": "40"
+ },
+ "0E|": {
+  "flash": false,
+  "frame": 495,
+  "looks": 9,
+  "missing": false,
+  "score": 0.981,
+  "state": "16"
+ },
+ "10": {
+  "flash": false,
+  "frame": 1341,
+  "looks": 9,
+  "missing": false,
+  "score": 0.978,
+  "state": "07"
+ },
+ "12": {
+  "flash": false,
+  "frame": 4835,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "05"
+ },
+ "18": {
+  "flash": false,
+  "frame": 855,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "15"
+ },
+ "1A": {
+  "flash": false,
+  "frame": 861,
+  "looks": 9,
+  "missing": false,
+  "score": 0.982,
+  "state": "15"
+ },
+ "20": {
+  "flash": false,
+  "frame": 8230,
+  "looks": 9,
+  "missing": false,
+  "score": 0.986,
+  "state": "0E"
+ },
+ "24|": {
+  "flash": false,
+  "frame": 3431,
+  "looks": 9,
+  "missing": false,
+  "score": 0.986,
+  "state": "0D"
+ },
+ "26": {
+  "flash": false,
+  "frame": 8245,
+  "looks": 9,
+  "missing": false,
+  "score": 0.983,
+  "state": "0E"
+ },
+ "30|": {
+  "flash": false,
+  "frame": 3446,
+  "looks": 9,
+  "missing": false,
+  "score": 0.609,
+  "state": "0D"
+ },
+ "32|": {
+  "flash": false,
+  "frame": 3479,
+  "looks": 9,
+  "missing": false,
+  "score": 0.64,
+  "state": "0D"
+ },
+ "3A": {
+  "flash": false,
+  "frame": 2507,
+  "looks": 9,
+  "missing": false,
+  "score": 0.984,
+  "state": "41"
+ },
+ "48": {
+  "flash": false,
+  "frame": 5621,
+  "looks": 9,
+  "missing": false,
+  "score": 0.98,
+  "state": "17"
+ },
+ "4A": {
+  "flash": false,
+  "frame": 5626,
+  "looks": 9,
+  "missing": false,
+  "score": 0.988,
+  "state": "17"
+ },
+ "80": {
+  "flash": false,
+  "frame": 395,
+  "looks": 9,
+  "missing": false,
+  "score": 0.982,
+  "state": "40"
+ },
+ "82": {
+  "flash": false,
+  "frame": 828,
+  "looks": 9,
+  "missing": false,
+  "score": 0.982,
+  "state": "15"
+ },
+ "C4": {
+  "flash": false,
+  "frame": 10,
+  "looks": 9,
+  "missing": false,
+  "score": 0.979,
+  "state": "40"
+ },
+ "CC": {
+  "flash": false,
+  "frame": 2522,
+  "looks": 9,
+  "missing": false,
+  "score": 0.983,
+  "state": "41"
+ }
+}
