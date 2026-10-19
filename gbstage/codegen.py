@@ -27,6 +27,7 @@ KIT_SFX = __import__("pathlib").Path(__file__).with_name("kit_sfx.asm").read_tex
 KIT_FIGHT = __import__("pathlib").Path(__file__).with_name("kit_fight.asm").read_text()
 KIT_NES = __import__("pathlib").Path(__file__).with_name("kit_nes.asm").read_text()
 KIT_NES_SOUND = __import__("pathlib").Path(__file__).with_name("kit_nes_sound.asm").read_text()
+KIT_PASSKEY = __import__("pathlib").Path(__file__).with_name("kit_passkey.asm").read_text()
 
 
 # The template's effects as Punch-Out!!'s (its SQ1 effect numbers): what plays when a project has its engine.
@@ -218,6 +219,8 @@ def reachable_scenes(project):
                 todo += [s[kit]["win"], s[kit]["lose"]]
         if s.get("fight") and s["fight"]["corner"] is not None:
             todo.append(s["fight"]["corner"])
+        if s.get("fight") and s["fight"].get("game_over") is not None:
+            todo.append(s["fight"]["game_over"])
         if s.get("fight") and s["fight"].get("win_tko") is not None:
             todo.append(s["fight"]["win_tko"])
     return sorted(seen)
@@ -226,6 +229,18 @@ def reachable_scenes(project):
 def _db(values, per_line=16):
     return "\n".join("    db " + ", ".join(f"${v:02X}" for v in values[i:i + per_line])
                      for i in range(0, len(values), per_line))
+
+
+def _crowd_pulse(s, project):
+    """The crowd going wild at his KO, as Punch-Out!!'s: its color a brightness down every 4 frames, twice, and
+    back up ($26, $16, $06, $16): its palette's hardware slot (as BCPS: color 1), then the four colors."""
+    slot = s["cell_pal"][s["fight"]["crowd_row"] * CW + CW // 2]       # (a hardware slot by now: its palette's)
+    k = {v: p for p, v in (s.get("pal_slots") or {}).items()}.get(slot, slot)
+    r, g, b = (v * 8 for v in project["palettes"][k][1])
+    nes = min(range(64), key=lambda i: (NES_RGB[i][0] - r) ** 2 + (NES_RGB[i][1] - g) ** 2 + (NES_RGB[i][2] - b) ** 2)
+    steps = [nes, max(nes - 0x10, nes & 0x0F), max(nes - 0x20, nes & 0x0F)]
+    col = lambda i: (NES_RGB[i][2] >> 3) << 10 | (NES_RGB[i][1] >> 3) << 5 | NES_RGB[i][0] >> 3
+    return f"    db ${0x80 | slot * 8 + 2:02X}\n    dw " + ", ".join(f"${col(i):04X}" for i in steps + [steps[1]])
 
 
 def _rgb555(colors):
@@ -331,7 +346,8 @@ Scene{i}Map:"""
 {_db(s['cell_tiles'] if s.get('cutscene') else _pad_rows(s['cell_tiles'], bool(s.get('fight'))), 32)}
 Scene{i}Attr:               ; palette number per tile (Game Boy Color only)
 {_db(s['cell_pal'] if s.get('cutscene') else _pad_rows(s['cell_pal'], bool(s.get('fight'))), 32)}
-"""
+""" + "".join(f"Scene{i}Record{n}:             ; Mac's record's glyphs: 0-9, -, K, O, blank\n    db {', '.join(map(str, g))}\n"
+              for n, (_, _, g) in enumerate(s.get("record_glyphs") or ()))
 
 
 # ---- palettes per scene ----------------------------------------------------------
@@ -737,6 +753,12 @@ def _scene_load(i, s, sprites, opt_index=None, markers=False):
         lines += [f"    ld hl, Scene{i}Tiles + 128 * 16", "    ld de, $8800            ; tiles 128-255",
                   f"    ld c, {n - 128}", "    call CopyTiles"]
     lines += [f"    ld hl, Scene{i}Map", "    call CopyMap", f"    ld hl, Scene{i}Attr", "    call CopyAttr"]
+    for n, (x, y, _) in enumerate(s.get("record_glyphs") or ()):    # Mac's record, as it stands
+        lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Record{n}", "    call RecordDraw"]
+    if s.get("_rec_reset"):
+        lines.append("    call RecReset")
+    if (s.get("cut_key") or {}).get("circuit") is not None:     # Punch-Out!!'s pass key, from his record
+        lines += [f"    ld b, {s['cut_key']['circuit']}", "    call PwKeyFar"]
     if s.get("slide"):
         pairs = list(zip(s["cell_tiles"], s["cell_pal"]))
         tile, pal = max(set(pairs), key=lambda tp: (pairs.count(tp), -pairs.index(tp)))
@@ -863,6 +885,11 @@ def _patch_routine(name, rows, comment):
     return "\n".join(lines)
 
 
+def _press_target(s, index_of):
+    """A press-start screen's way on: its target, or (a loss's screen, Punch-Out!!'s circuits) the career's."""
+    return "ld a, [wRecNext]" if s.get("_rec_next") else f"ld a, {index_of[s['press']['target']]}"
+
+
 def _press_code(i, s, index_of, corner=False):
     p = s["press"]
     pr = p["prompt"]
@@ -908,7 +935,7 @@ def _press_code(i, s, index_of, corner=False):
     if p.get("hold"):                       # then a while on the screen (the crowd, before the fight)
         hold = f"    ld a, {p['hold']}\n    ldh [hTimer], a\n    SET_UPDATE Scene{i}Hold\n    ret\n"
         hold_code = (f"Scene{i}Hold:\n    ld hl, hTimer\n    dec [hl]\n    ret nz\n"
-                     f"    ld a, {index_of[p['target']]}\n    jp StartTransition\n")
+                     f"    {_press_target(s, index_of)}\n    jp StartTransition\n")
     typed = ""
     if s.get("typed"):                      # its words write themselves first; Start waits for them (as Punch-Out!!'s)
         show = (f"    ld hl, Scene{i}PromptShown  ; then the prompt\n    QUEUE_PATCH Scene{i}PromptPatch\n"
@@ -949,7 +976,7 @@ def _press_code(i, s, index_of, corner=False):
     ld hl, wCardHold
     dec [hl]
     ret nz
-    ld a, {index_of[p['target']]}
+    {_press_target(s, index_of)}
     jp StartTransition
 """
     if p.get("auto"):                       # Start ignored: on by itself once its time is up
@@ -988,7 +1015,7 @@ ENDC
     ld [wAutoLeft + 1], a
     or l
     ret nz
-    ld a, {index_of[p['target']]}
+    {_press_target(s, index_of)}
     jp StartTransition
 {ring_data}"""
     return f"""Scene{i}Update:              ; press-start screen: wait for Start or A
@@ -1016,7 +1043,7 @@ Scene{i}Press:              ; flip the flash area, then go
     dec [hl]
 {flip}
 .go:
-{card_go}{hold}    ld a, {index_of[p['target']]}
+{card_go}{hold}    {_press_target(s, index_of)}
     jp StartTransition
 {hold_code}{card_code}"""
 
@@ -1691,7 +1718,38 @@ def _all_pics(project):
     return bool(fs) and all(sc.get("fight_pics") and sc.get("fight_pics_dmg") for sc in fs)
 
 
-def _fight_entry(i, s, index_of, suffix, all_pics=False):
+def _career(scenes, fights, index_of):
+    """Punch-Out!!'s circuits, from how the fights link up: per fight scene, (flags, rematch, drop, game over)
+    for FtCareerResult. A title bout's win goes somewhere other than the next challenger (the training run);
+    the first fight of a circuit follows one; a loss drops him to the challenger before (two before after the
+    third circuit's title bout); the last fight's loss, or a third loss, is game over (the title). None: no
+    circuits (one fight, or not the NES game's)."""
+    if len(fights) < 2 or not all(scenes[f]["fight"].get("nes") for f in fights):
+        return None
+    press = lambda j: index_of.get((scenes[j].get("press") or {}).get("target"))
+    rematch = {f: press(index_of[scenes[f]["fight"]["lose"]]) for f in fights}
+    corner = {f: index_of.get(scenes[f]["fight"].get("corner")) for f in fights}
+    chal = {}
+    for j, s in enumerate(scenes):
+        f = press(j) if s.get("press") and not s.get("fight") else None
+        if f in fights and j not in (rematch[f], corner[f]) and f not in chal:
+            chal[f] = j
+    title = {}
+    for k, f in enumerate(fights):
+        nxt = fights[k + 1] if k + 1 < len(fights) else None
+        title[f] = nxt is not None and press(index_of[scenes[f]["fight"]["win"]]) != chal.get(nxt)
+    out = {}
+    for k, f in enumerate(fights):
+        flags = 0x80 | (1 << 0 if title[f] else 0) | (1 << 1 if k == 0 or title[fights[k - 1]] else 0) \
+            | (1 << 2 if k == len(fights) - 1 else 0)
+        back = 2 if title[f] and sum(title[g] for g in fights[:k]) >= 2 else 1
+        drop = chal.get(fights[max(0, k - back)], rematch[f]) if k else rematch[f]
+        over = index_of.get(scenes[f]["fight"].get("game_over"), 0)
+        out[f] = (flags, rematch[f], drop, over)
+    return out
+
+
+def _fight_entry(i, s, index_of, suffix, all_pics=False, career=None):
     """A fight's row of FtFights: its scene, then the kit's wFtFight (its banks, its swap area, where it goes)."""
     from . import fight as kit
     ft, sw = s["fight"], s["fight_swap"]
@@ -1707,7 +1765,8 @@ def _fight_entry(i, s, index_of, suffix, all_pics=False):
             f"    db {f'BANK(CgbMaps{suffix}), BANK(CgbSwap{suffix})' if s.get('fight_cgb') else '0, 0'}\n"
             f"    db {f'BANK(RivalHeads{suffix})' if ft.get('rope_row') and not all_pics else '0'}\n"
             f"    db {f'BANK(PicHeader{suffix})' if s.get('fight_pics') else '0'}\n"
-            f"    db {f'BANK(PicHeaderDmg{suffix})' if s.get('fight_pics_dmg') and s.get('fight_pics') else '0'}")
+            f"    db {f'BANK(PicHeaderDmg{suffix})' if s.get('fight_pics_dmg') and s.get('fight_pics') else '0'}\n"
+            f"    db {', '.join(str(v) for v in (career or (0, 255, 255, 255)))}")
 
 
 def _heads_data(s, suffix):
@@ -1888,6 +1947,7 @@ MacOffsetX:                 ; NES $15 -> pixels right of his place ($15 scrolls 
 {parts["head"]}
 SECTION "NES engine: shared", ROM0
 {parts["common"]}
+{KIT_PASSKEY}
 """
         mp = s.get("fight_mac_pics")
         if mp:                          # Color: Mac's pictures (kit_fight.asm, FT_MAC_PICS): per NES frame of his, his
@@ -1976,6 +2036,9 @@ FtRopeAttr:
 DEF FT_WIN_SCENE EQU 0                             ; results (the scenes they go to: this fight's, FtFights)
 DEF FT_LOSE_SCENE EQU 1
 DEF FT_CORNER_RESULT EQU 2
+DEF CAREER_TITLE EQU 0                            ; wFtCareer (bit 7: circuits): a title bout,
+DEF CAREER_FIRST EQU 1                            ; a circuit's first fight,
+DEF CAREER_FINAL EQU 2                            ; the last fight
 FtFights:                   ; per fight scene: its number, then the kit's wFtFight
 {table}
 DEF FT_REGION_X EQU {ft['x']}
@@ -2104,6 +2167,8 @@ RivalPoseRise:              ; per pose: how far it can rise in his band and stay
     db {", ".join(str(_blank_top(ft["poses"][p]["pixels"])) for p in kit.RIVAL_POSES)}
 CrowdMap:                   ; the crowd row's tiles, put back after each camera flash
     db {", ".join(f"${t:02X}" for t in s['cell_tiles'][crowd_y * CW:(crowd_y + 1) * CW])}
+CrowdPulse:                 ; Color, his KO: the crowd's color through the NES's brightnesses (its slot's BCPS, 4 steps)
+{_crowd_pulse(s, project)}
 RivalPalNormal:
     dw {", ".join(_rgb555(project["palettes"][k]).split(", ")[j] for k in rival_pals for j in range(4))}
 RivalPalFlash:              ; a hit flushes him red; the background and outline stay
@@ -2425,7 +2490,7 @@ def _pk_menu_code(i, pk, beep=True):
     dec c
     jp nz, .pkCode
 .pkWrong:                   ; no match: forgotten, dashes again
-    call PkReset
+{_pk_nes() if pk.get("_nes") else ""}    call PkReset
     ld hl, Scene{i}PkShow
     QUEUE_PATCH PkListPatch
     jp .cursor
@@ -2551,6 +2616,25 @@ def _cut_code(i, s, index_of):
     split = (box["y"] + len(box["lines"]) + 2) * 8 if box else 0
     box_rows = len(box["lines"]) + 2 if box else 0
     target = index_of[s["press"]["target"]]
+    ck = s.get("cut_key") or {}
+    key_patch = f"""    ldh a, [hCutTyped]      ; a pass key's digit (the letter just counted): the one worked out
+    sub {ck['first'] + 1}           ; (PwKeyFromRecord)
+    cp 10
+    jr nc, .notKey
+    add LOW(wPw + $10)
+    ld l, a
+    ld h, HIGH(wPw)
+    ld a, [hl]
+    ld hl, Scene{i}KeyGlyphs
+    add l
+    ld l, a
+    adc h
+    sub l
+    ld h, a
+    ld a, [hl]
+    ld [wCutPatch + 3], a
+.notKey:
+""" if ck.get("circuit") is not None else ""
     hush = ("IF DEF(FT_NES_SOUND)\n    ldh a, [hNesSound]      ; (quiet: its NES song stopped as it goes on)\n    and a\n"
             "    jr z, .hushed\n    ld a, $80\n    ld [wNes + $F2], a\n.hushed:\nENDC\n") if s["press"].get("quiet") else ""
     box_code = f"""    ldh a, [hCutDone]       ; the box: after its wait, its background, then a letter every few frames
@@ -2611,7 +2695,7 @@ def _cut_code(i, s, index_of):
         ld [de], a
         inc de
     ENDR
-    ld a, 1
+{key_patch}    ld a, 1
     ld [wCutPatch], a
     ld hl, wCutPatch
     QUEUE_PATCH PkListPatch
@@ -2739,6 +2823,8 @@ def _cut_data(i, s):
         out.append(f"    dw {b['speed']}, ${start:04X}")
     out.append(f"Scene{i}CutTyped:")
     out += [f"    db LOW({cell(c)}), HIGH({cell(c)}), ${t:02X}" for c, t in s["cut_typed"]]
+    if (s.get("cut_key") or {}).get("circuit") is not None:
+        out += [f"Scene{i}KeyGlyphs:          ; its pass key's digits 0-9", "    db " + ", ".join(f"${g:02X}" for g in s["cut_key"]["glyphs"])]
     return nl.join(out)
 
 
@@ -3049,6 +3135,19 @@ TypeStep::
     ld a, h
     ld [wTyPtr + 1], a
     ret
+"""
+
+
+def _pk_nes():
+    """The title's pass key as Punch-Out!!'s: the NES's own (PwContinue), when none of the menu's codes matched."""
+    return """    call PwContinueFar
+    cp $FF
+    jr z, .pkNotNes
+    ld [wPkTarget], a
+    ld a, SFX_MENU_CONFIRM
+    call PlaySfx
+    jp .choose
+.pkNotNes:
 """
 
 
@@ -3584,8 +3683,29 @@ def generate_asm(project):
     # Fights: each one's swap sets padded alike (their labels sit where the first fight's do), and the table of
     # each one's own values the kit loads (FtFights).
     fight_pads = {k: max(len(scenes[f]["fight_swap"]["sets"][k]) * 16 for f in fights) for k in range(3)} if fights else {}
-    fight_table = "\n".join(_fight_entry(f, scenes[f], index_of, "" if k == 0 else f"_F{k}", _all_pics(project))
-                            for k, f in enumerate(fights))
+    career = _career(scenes, fights, index_of) if fights else None
+    if career:                          # (a new career on the title: the pass key there can set another)
+        scenes[0]["_rec_reset"] = True
+        if (scenes[0]["menu"] or {}).get("pass_key"):
+            scenes[0]["menu"]["pass_key"]["_nes"] = True
+        keyed = [sc for sc in scenes if sc.get("cut_key")]     # the training runs' pass keys: circuit by circuit
+        for n, sc in enumerate(keyed[:3]):
+            sc["cut_key"]["circuit"] = n
+    pw_starts = [255] * 5               # where a pass key starts (PwContinue): the World title bout, the World
+    if career:                          # circuit, the Major (by circuit), Tyson, the ending
+        ttl = [f for f in fights if career[f][0] & 1]
+        chal_of = {f: next((j for j, sc in enumerate(scenes) if sc.get("press") and not sc.get("fight")
+                            and index_of.get(sc["press"]["target"]) == f and j != career[f][1]), 255) for f in fights}
+        last_win = index_of[scenes[fights[-1]]["fight"]["win"]]
+        if len(ttl) == 3:
+            pw_starts = [chal_of[fights[fights.index(ttl[0]) + 1]], chal_of[fights[fights.index(ttl[1]) + 1]],
+                         chal_of[ttl[2]], chal_of[fights[-1]], index_of.get(scenes[last_win]["press"]["target"], 255)]
+    for f in career or ():              # (a loss's screen goes where FtCareerResult says)
+        scenes[index_of[scenes[f]["fight"]["lose"]]]["_rec_next"] = True
+    fight_table = "\n".join(_fight_entry(f, scenes[f], index_of, "" if k == 0 else f"_F{k}", _all_pics(project),
+                                         (career or {}).get(f)) for k, f in enumerate(fights))
+    fight_table += ("\nPwStarts::                  ; a pass key's starts: Major, World, the World title bout, Tyson, the"
+                    "\n    db " + ", ".join(map(str, pw_starts)) + "      ; ending ($FF: none)")
     scene_code = []
     in_bank = {i: [] for i in range(len(scenes))}   # a banked game: a press-start screen's code and patches go in
     for i, s in enumerate(scenes):                  # its own data bank, mapped while it runs (ROM0 stays free)

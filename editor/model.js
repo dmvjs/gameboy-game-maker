@@ -9,7 +9,7 @@
 import { luminance, sameColor } from './color.js';
 
 export const W = 160, H = 144, CELL = 8, CW = W / CELL, CH = H / CELL;
-export const MAX_BG_PALETTES = 128;                // in a project (same as gbstage/project.py)
+export const MAX_BG_PALETTES = 192;                // in a project (same as gbstage/project.py)
 export const SCENE_BG_PALETTES = 8;                // in one scene: what the hardware holds
 export const MAX_OBJ_PALETTES = 8;
 export const MAX_TILES = 256;
@@ -855,7 +855,8 @@ export function uniqueTileCount(scene) {
 
 const cloneMenu = m => m && { ...m, items: m.items.map(it => ({ ...it })) };
 const clonePress = ps => ps && { ...ps, area: ps.area && { ...ps.area }, prompt: ps.prompt && { ...ps.prompt } };
-const cloneTexts = t => (Array.isArray(t) ? t : []).map(x => ({ label: String(x.label), x: x.x, y: x.y, textSlot: x.textSlot }));
+const cloneTexts = t => (Array.isArray(t) ? t : []).map(x => ({ label: String(x.label), x: x.x, y: x.y, textSlot: x.textSlot,
+                                                                   ...(x.record ? { record: true } : {}) }));   // (live: the player's record)
 const clonePuzzle = pz => pz && JSON.parse(JSON.stringify(pz));
 const POSE_FALLBACK = { idle2: 'idle', idle3: 'idle', hit_back: 'hit_l', slip: 'idle', jab_mid: 'jab_tell', hook_mid: 'hook_tell', kd_stagger: 'hit_body', kd_fall: 'fall',
                         kd_down: 'down', kd_kneel: 'fall', arm_pop: 'hit_body', guard_low: 'guard',

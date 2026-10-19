@@ -1,186 +1,50 @@
 {
- "00": {
+ "30|": {
   "flash": false,
-  "frame": 116,
-  "looks": 9,
+  "frame": -1000,
+  "looks": 15,
   "missing": false,
-  "score": 0.98,
-  "state": "40"
- },
- "04": {
-  "flash": false,
-  "frame": 261,
-  "looks": 9,
-  "missing": false,
-  "score": 0.983,
-  "state": "40"
- },
- "06": {
-  "flash": false,
-  "frame": 254,
-  "looks": 9,
-  "missing": false,
-  "score": 0.978,
-  "state": "40"
- },
- "08": {
-  "flash": false,
-  "frame": 39,
-  "looks": 9,
-  "missing": false,
-  "score": 0.979,
-  "state": "40"
- },
- "0A": {
-  "flash": false,
-  "frame": 1,
-  "looks": 9,
-  "missing": false,
-  "score": 0.98,
-  "state": "40"
- },
- "0C": {
-  "flash": false,
-  "frame": 123,
-  "looks": 9,
-  "missing": false,
-  "score": 0.981,
-  "state": "40"
- },
- "0E|": {
-  "flash": false,
-  "frame": 150,
-  "looks": 9,
-  "missing": false,
-  "score": 0.979,
-  "state": "40"
- },
- "10": {
-  "flash": false,
-  "frame": 2687,
-  "looks": 9,
-  "missing": false,
-  "score": 0.979,
-  "state": "08"
- },
- "12": {
-  "flash": false,
-  "frame": 4896,
-  "looks": 9,
-  "missing": false,
-  "score": 0.98,
-  "state": "05"
- },
- "14": {
-  "flash": false,
-  "frame": 2719,
-  "looks": 9,
-  "missing": false,
-  "score": 0.982,
-  "state": "03"
- },
- "18": {
-  "flash": false,
-  "frame": 2938,
-  "looks": 9,
-  "missing": false,
-  "score": 0.98,
-  "state": "15"
- },
- "1A": {
-  "flash": false,
-  "frame": 2944,
-  "looks": 9,
-  "missing": false,
-  "score": 0.982,
-  "state": "15"
- },
- "22|": {
-  "flash": false,
-  "frame": 14951,
-  "looks": 9,
-  "missing": false,
-  "score": 0.983,
+  "score": 0.627,
   "state": "0D"
  },
- "3A": {
+ "32|": {
   "flash": false,
-  "frame": 3657,
-  "looks": 9,
+  "frame": -1000,
+  "looks": 15,
   "missing": false,
-  "score": 0.983,
-  "state": "41"
+  "score": 0.65,
+  "state": "0D"
  },
- "3C|": {
+ "42|": {
   "flash": false,
-  "frame": 3005,
-  "looks": 9,
+  "frame": -1000,
+  "looks": 15,
   "missing": false,
-  "score": 0.98,
-  "state": "1C"
- },
- "3E|": {
-  "flash": false,
-  "frame": 3011,
-  "looks": 9,
-  "missing": false,
-  "score": 0.989,
-  "state": "1C"
- },
- "4A": {
-  "flash": false,
-  "frame": 125,
-  "looks": 9,
-  "missing": false,
-  "score": 0.979,
-  "state": "40"
- },
- "52|": {
-  "flash": false,
-  "frame": 152,
-  "looks": 9,
-  "missing": false,
-  "score": 0.979,
-  "state": "40"
+  "score": 0.628,
+  "state": "13"
  },
  "54|": {
   "flash": false,
-  "frame": 24890,
-  "looks": 4,
+  "frame": 18882,
+  "looks": 15,
   "missing": false,
-  "score": 0.535,
+  "score": 0.548,
   "state": "04"
  },
- "80": {
+ "C0": {
   "flash": false,
-  "frame": 615,
-  "looks": 9,
+  "frame": 1,
+  "looks": 15,
   "missing": false,
-  "score": 0.984,
-  "state": "40"
+  "score": 0.501,
+  "state": "01"
  },
- "82": {
+ "C2": {
   "flash": false,
-  "frame": 2818,
-  "looks": 9,
+  "frame": 10,
+  "looks": 15,
   "missing": false,
-  "score": 0.982,
-  "state": "15"
- },
- "C4": {
-  "flash": false,
-  "frame": 247,
-  "looks": 9,
-  "missing": false,
-  "score": 0.98,
-  "state": "40"
- },
- "CC": {
-  "flash": false,
-  "frame": 3672,
-  "looks": 9,
-  "missing": false,
-  "score": 0.983,
-  "state": "41"
+  "score": 0.542,
+  "state": "01"
  }
 }

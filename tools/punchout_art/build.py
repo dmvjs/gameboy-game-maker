@@ -792,6 +792,83 @@ def ending():
             "frames": {"word": 480, "portrait": 280}}
 
 
+# ---- game over ----
+# The third loss, as the game has it: Mac on his stool, head down, a line across behind him, "GIVE UP?" and "RETIRE?"
+# either side, then GAME OVER and Doc's "START TRAINING / MAKE A COMEBACK!". Mac 1:1 from the game's own screen
+# (cynes, losing three times), his tile-whole crop.
+GAME_OVER_BOX = (110, 44, 150, 140)           # Mac and his stool (x0, y0, x1, y1), 5x12 tiles
+GAME_OVER_LINE = 114                          # the line's row on the NES screen
+GAME_OVER_CACHE = HERE / "out" / "game-over.pkl"
+
+def game_over_screen():
+    import pickle
+    if GAME_OVER_CACHE.exists():
+        return pickle.load(open(GAME_OVER_CACHE, "rb"))
+    import cynes_frames as C
+    from cynes import NES
+    nes = NES(C.rom_path())
+    def run(n, b=0):
+        f = None
+        for _ in range(n):
+            nes.controller = b
+            f = nes.step()
+        return f
+    run(600)
+    for _ in range(40):
+        run(4, C.START); run(86)
+        if nes[0x00] == 1:
+            break
+    for n in range(40000):              # three losses (his health gone each fight), then his screen
+        if nes[0x00] == 1:
+            nes[0x391] = 0
+        losses = nes[0x173]
+        run(1, C.START if nes[0x00] != 1 and n % 120 < 3 and losses < 3 else 0)
+        if losses == 3 and nes[0x173] == 3:
+            break
+    f = run(400)
+    img = [[tuple(int(v) for v in f[y][x]) for x in range(256)] for y in range(240)]
+    pickle.dump(img, open(GAME_OVER_CACHE, "wb"))
+    return img
+
+def game_over():
+    img = game_over_screen()
+    bg = img[5][5]
+    x0, y0, x1, y1 = GAME_OVER_BOX
+    w, h = x1 - x0, y1 - y0
+    pc = lambda c: from8(c)
+    tiles = []
+    for ty in range(h // 8):
+        for tx in range(w // 8):
+            px = [img[y0 + ty * 8 + y][x0 + tx * 8 + x] for y in range(8) for x in range(8)]
+            count = {c: px.count(c) for c in set(px) - {bg}}
+            tiles.append(set(sorted(count, key=lambda c: -count[c])[:3]))
+    pals = []                                   # as the ending's: the background, then up to 3 colors
+    for cs in sorted(tiles, key=len, reverse=True):
+        if not cs or any(cs <= set(p) for p in pals):
+            continue
+        fit = next((p for p in pals if len(set(p) | cs) <= 3), None)
+        if fit is not None:
+            pals[pals.index(fit)] = sorted(set(fit) | cs, key=lambda c: -lum(pc(c)))
+        else:
+            pals.append(sorted(cs, key=lambda c: -lum(pc(c))))
+    assert len(pals) <= 6, len(pals)             # (the scene's text takes a seventh)
+    pixels, cells = [], []
+    for ty in range(h // 8):
+        for tx in range(w // 8):
+            cs = tiles[ty * (w // 8) + tx]
+            cells.append(next((i for i, p in enumerate(pals) if cs <= set(p)), 0))
+    for y in range(h):
+        for x in range(w):
+            c = img[y0 + y][x0 + x]
+            p = pals[cells[(y // 8) * (w // 8) + x // 8]]
+            pixels.append(0 if c == bg else 1 + min(range(len(p)), key=lambda i: dist(pc(c), pc(p[i]))))
+    palettes = [[pc(bg)] + [pc(c) for c in p] + [pc(bg)] * (3 - len(p)) for p in pals]
+    return {"mac": {"w": w, "h": h, "pixels": "".join(map(str, pixels)), "cells": "".join(map(str, cells)),
+                    "palettes": palettes}, "bg": pc(bg), "line": GAME_OVER_LINE - y0,
+            "left": "GIVE UP?", "right": "RETIRE?", "over": "GAME OVER",
+            "doc": ['"START TRAINING', 'MAKE A COMEBACK!"'], "music": None}
+
+
 NES_TITLE_START = HERE / "out" / "title-start.pkl"
 
 def title_punch(logo_y):
@@ -1636,8 +1713,8 @@ def fit_cgb(raw, shared, pals, colors, pposes, max_share=16, nth=0):
     if attempt(0)[1]:
         return raw, "unshared", tried[0][2]
     lo, hi = 0, max_share
-    if not attempt(hi)[1]:
-        sys.exit("The rival's Game Boy Color poses don't fit.")
+    if not attempt(hi)[1]:              # (over even so: his NES pictures are what show, not these)
+        return tried[hi][0], f"within {hi} pixels (over: his pictures show)", tried[hi][2]
     while hi - lo > 1:
         mid = (lo + hi) // 2
         if attempt(mid)[1]:
@@ -1665,7 +1742,7 @@ def fit_rival(poses, pals, colors, pposes, max_share=16, nth=0):
             if ok:
                 return merged, f"within {n} pixels, and {extra} more (up to {worst})", report
             over = re.search(r"uses (\d+) different 8x8 tiles.*the limit is (\d+)", report)
-    sys.exit("The rival's poses don't fit his fight's tiles.")
+    return shared, f"within {max_share} pixels (still over: his NES pictures are what show, not these)", report
 
 
 def write_js(colors, pposes, note, faces, mac_pal, rivals, mac_cgb=None):
@@ -1702,6 +1779,8 @@ def write_js(colors, pposes, note, faces, mac_pal, rivals, mac_cgb=None):
           f"export const INTERMISSION = {json.dumps(intermission_art())};", "",
           "// Each fight's crowd color, as the NES game sets it (its background palette 2, color 2).",
           f"export const CROWD_COLORS = {json.dumps(crowd_colors())};", "",
+          "// The crowd as the NES draws it: per crowd line, its spectators (\"1\") on the dark (\"\": a rope).",
+          f"export const CROWD_ART = {json.dumps(crowd_art())};", "",
           "// Each circuit's ring, as the NES game colors it: the mat (and the posts' pads), the posts.",
           f"export const RING_COLORS = {json.dumps(ring_colors())};", "",
           "// The referee, Mario, from the game: 24x32, pixels 1 skin, 2 cap, 3 black, 4 shirt (its own palette).",
@@ -1714,6 +1793,7 @@ def write_js(colors, pposes, note, faces, mac_pal, rivals, mac_cgb=None):
           f"export const TITLE_GLOVES = {json.dumps(title_gloves())};", "",
           "// The ending after Mike Tyson: Mac standing (1:1, each tile's palette), his word, the timings.",
           f"export const ENDING = {json.dumps(ending())};", "",
+          f"export const GAME_OVER = {json.dumps(game_over())};", "",
           "// The first screen: MIKE IS WAITING FOR YOUR CHALLENGE!!, the game's own (pixels, each tile's palette).",
           f"export const SPLASH = {json.dumps(splash())};", ""]
     OUT_JS.write_text("\n".join(L))
@@ -1811,6 +1891,38 @@ def intermission_art():
         out_actors.append({"x": a["x"], "y": a["y"], "w": a["w"], "h": a["h"], "frames": fl})
     return {"w": 256, "h": 144, "pixels": "".join(map(str, slots)), "cells": "".join(map(str, cells)),
             "palettes": pals, "actors": out_actors, "objPalettes": spals}
+
+
+# The crowd as the NES draws it (its own tiles, 1:1): its rows between the ropes, the spectators in the crowd's color
+# on black. CROWD_ROWS: for each of the Game Boy's crowd lines (24 on), the NES line it shows (None: a rope).
+CROWD_ROWS = [48, 49, 50, 51, 52, None, 55, 56, 57, 58, 59, 60, None, 63, 64, 65, 66, 67, 68, None, 72, 73, 74, 75]
+CROWD_X = 24                                  # the NES's first crowd column shown (128 of them, the ring's width)
+
+def crowd_art():
+    """[24 strings of 128]: per crowd line, "1" a spectator's pixel, "0" the dark behind them; "" a rope."""
+    cache = HERE / "out" / "nes-crowd-art.json"
+    if cache.exists():
+        return json.loads(cache.read_text())
+    import cynes_frames as C
+    from cynes import NES
+    nes = NES(C.rom_path())
+    def run(n, b=0):
+        f = None
+        for _ in range(n):
+            nes.controller = b
+            f = nes.step()
+        return f
+    run(600)
+    for _ in range(40):
+        run(4, C.START); nes[0x01] = 0; run(86)
+        if nes[0x00] == 1:
+            break
+    f = run(200)
+    dark = tuple(int(v) for v in f[CROWD_ROWS[0] - 5][CROWD_X])      # (the gap over the crowd: black)
+    rows = ["" if y is None else "".join("0" if tuple(int(v) for v in f[y][x]) == dark else "1"
+                                         for x in range(CROWD_X, CROWD_X + 128)) for y in CROWD_ROWS]
+    cache.write_text(json.dumps(rows))
+    return rows
 
 
 def crowd_colors():

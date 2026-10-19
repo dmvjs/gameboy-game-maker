@@ -1,42 +1,10 @@
 {
- "28": {
-  "flash": false,
-  "frame": 7535,
-  "looks": 9,
-  "missing": false,
-  "score": 0.619,
-  "state": "10"
- },
- "30|": {
-  "flash": false,
-  "frame": 4190,
-  "looks": 9,
-  "missing": false,
-  "score": 0.567,
-  "state": "0D"
- },
- "32|": {
-  "flash": false,
-  "frame": 4740,
-  "looks": 9,
-  "missing": false,
-  "score": 0.619,
-  "state": "0F"
- },
- "42|": {
-  "flash": false,
-  "frame": 4735,
-  "looks": 9,
-  "missing": false,
-  "score": 0.602,
-  "state": "0F"
- },
  "80": {
   "flash": true,
-  "frame": 459,
-  "looks": 9,
+  "frame": 72,
+  "looks": 15,
   "missing": false,
   "score": 0.68,
-  "state": "40"
+  "state": "16"
  }
 }

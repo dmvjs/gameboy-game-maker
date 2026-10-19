@@ -13,11 +13,16 @@ Tyson, on Game Boy Color and the original Game Boy.
   itself and shown as they are, mirrored ones included. On the original Game Boy, each fighter gets his own grey
   shading.
 - **The NES's music and sound effects**, played on the Game Boy's own sound channels.
-- **The whole game around the fights**: title, pass key, challenger screens, the corner between rounds (Select
-  there, once per match, for a refill), knockdowns with the referee's count, TKOs, decisions on points and rematches.
+- **The whole game around the fights**: title, challenger screens, the corner between rounds (Select there, once
+  per match, for a refill), knockdowns with the referee's count, TKOs, decisions on points, rematches, dropping down
+  the ranks, and game over on the third loss, all by the NES's rules.
+- **The NES's pass keys.** Mac's record is kept fight to fight, and the training runs show its pass key, worked out
+  by the NES's own algorithm (ported, and checked against the original). Keys from the NES work on CONTINUE: try
+  005 737 5423, or 007 373 5963 for Mike Tyson.
 - **Checked against real hardware timing.** Every fight runs in SameBoy with no video writes outside the time the
   hardware allows, on both machines. In the test suite, a bot that only presses buttons beats every fighter within
-  two rounds.
+  two rounds, then plays the whole game from power-on to THE END; every opponent frame is compared with what the
+  NES draws (`tools/punchout_art/frame_audit.py`).
 
 It's a 4 MB MBC5 cartridge (`joe-vs-mac.gb`) that runs in any Game Boy emulator.
 

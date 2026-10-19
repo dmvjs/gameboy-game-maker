@@ -201,6 +201,10 @@ wFtBankSwapCgb: db
 wFtBankHeads: db            ; his top rows as sprites (a rope row: he stands in front of it), their bank (0: none)
 wFtBankPics: db             ; Color, an NES fighter: his pictures' bank (their header at $4000: FT_PIC_*; 0: none)
 wFtBankPicsDmg: db          ; the original's: those pictures in greys (FT_DPIC_*; 0: none; their frame map: the above)
+wFtCareer: db               ; Punch-Out!!'s circuits: CAREER_* (a title bout, a circuit's first, the last fight)
+wFtRematchScene: db         ; lost: the rematch; lost it (or a title bout), down the ranks to this scene ($FF: none)
+wFtDropScene: db
+wFtOverScene: db            ; the third loss (or the last fight's): game over
 wFtFightEnd:
 wRvNesX: db                 ; NES rival: his offset from his place (pixels right, down)
 wRvNesY: db
@@ -225,6 +229,13 @@ wFtSelectUsed: db           ; the corner's Select refill is once per match
 wFtRoom: db                 ; loading with the display on (FT_LOAD_ON): this VBlank's time left (FtRoom)
 wFtRoomN: db                ; (FtCopy: blocks this time, their bytes)
 wFtRoomBytes: dw
+
+SECTION "Career", WRAM0       ; Mac's record, kept from fight to fight (the title clears it: RecReset)
+wRecWins: db
+wRecLosses: db
+wRecKOs: db
+wRecLost: db                ; lost to the one he faces: his next loss to him is a rematch lost
+wRecNext: db                ; where the loss screen goes: the rematch, down the ranks, or game over
 
 SECTION "Fight OAM", WRAM0, ALIGN[8]
 wFtOAM: ds 256              ; 40 sprites go to OAM; a busy frame's extras land in the spare room and aren't shown
@@ -905,6 +916,9 @@ ENDC
     cp FT_VBL_LAST - 144
     ret nc
     call FtCrowdDraw
+IF DEF(FT_NES)
+    call FtCrowdPulse
+ENDC
     ldh a, [rLY]
     sub 144
     cp FT_VBL_LAST - 144
@@ -959,6 +973,10 @@ ENDC
     ld a, $FF
     ld [wPlRareWant], a
 .refPose:
+    ldh a, [rLY]            ; (a step's 4 tiles take about 5 lines: none started past line 147, or past VBlank)
+    sub 144
+    cp 148 - 144
+    ret nc
     ld a, [wFtRefLoad]
     cp $FF
     jp nz, FtRefStep
@@ -4701,8 +4719,136 @@ FtEndPause:
     dec [hl]
     jp nz, FtFrame
     ; (his band keeps its scroll through the fade: FtStop, as the next scene loads)
+    call FtCareerResult
     call FtResultScene
     jp StartTransition
+
+; Mac's record and where a loss takes him, as Punch-Out!!'s: a win counts (a KO or TKO a KO too); a loss
+; counts, then the third (or the last fight's) is game over, a title bout's drops him down the ranks, a first
+; loss to him is a rematch, a lost rematch drops him a place (not below his circuit's first: a rematch again).
+FtCareerResult:
+    ld a, [wFtCareer]
+    and a
+    ret z                   ; (no circuits)
+    ld a, [wFtResult]
+    cp FT_WIN_SCENE
+    jr nz, .notWin
+    ld hl, wRecWins
+    call .count
+    ld a, [wFtCount]
+    cp COUNT_TKO
+    jr c, .points
+    ld hl, wRecKOs
+    call .count
+.points:
+    xor a
+    ld [wRecLost], a
+    ret
+.notWin:
+    cp FT_LOSE_SCENE
+    ret nz                  ; (the corner)
+    ld hl, wRecLosses
+    call .count
+    ld a, [wFtOverScene]
+    ld b, a
+    ld a, [wRecLosses]
+    cp 3
+    jr nc, .next
+    ld a, [wFtCareer]
+    bit CAREER_FINAL, a
+    jr nz, .next
+    ld c, a
+    ld a, [wFtDropScene]
+    ld b, a
+    bit CAREER_TITLE, c
+    jr nz, .dropped
+    ld hl, wRecLost
+    ld a, [wFtRematchScene]
+    ld b, a
+    ld a, [hl]
+    and a
+    jr z, .first
+    bit CAREER_FIRST, c
+    jr nz, .next
+    ld a, [wFtDropScene]
+    ld b, a
+.dropped:
+    xor a
+    ld [wRecLost], a
+    jr .next
+.first:
+    inc [hl]
+.next:
+    ld a, b
+    ld [wRecNext], a
+    ret
+.count:                     ; [HL] + 1, at most 99
+    ld a, [hl]
+    cp 99
+    ret nc
+    inc [hl]
+    ret
+
+; A new career: no wins, no losses.
+RecReset::
+    xor a
+    ld hl, wRecWins
+    ld [hl+], a
+    ld [hl+], a
+    ld [hl+], a
+    ld [hl+], a
+    ret
+
+; Mac's record as the challenger screen shows it, "W-L KKO", over the label it's baked as (screen off): HL = its
+; first cell in the map, DE = its glyph tiles (0-9, "-", "K", "O", blank). Nine cells, the rest blank.
+RecordDraw::
+    ld b, 9
+    ld a, [wRecWins]
+    call .num
+    ld a, 10
+    call .glyph
+    ld a, [wRecLosses]
+    call .num
+    ld a, 13
+    call .glyph
+    ld a, [wRecKOs]
+    call .num
+    ld a, 11
+    call .glyph
+    ld a, 12
+    call .glyph
+.pad:
+    ld a, b
+    and a
+    ret z
+    ld a, 13
+    call .glyph
+    jr .pad
+.num:                       ; A (0-99): its digits, no leading zero
+    cp 10
+    jr c, .glyph
+    ld c, -1
+.tens:
+    inc c
+    sub 10
+    jr nc, .tens
+    add 10
+    push af
+    ld a, c
+    call .glyph
+    pop af
+.glyph:                     ; [HL+] = glyph A's tile
+    push de
+    add e
+    ld e, a
+    adc d
+    sub e
+    ld d, a
+    ld a, [de]
+    ld [hl+], a
+    pop de
+    dec b
+    ret
 
 ; A = the scene the fight goes on to, from its result (won, lost, the corner): this fight's own (FtFights).
 FtResultScene:
@@ -4847,7 +4993,11 @@ FtCrowd:
     add b
     inc a
     ld [wFtRand], a
+IF DEF(FT_NES)
+    and 15                  ; a new flash now and then (Punch-Out!!'s: every 16-21 frames)
+ELSE
     and 3                   ; a new flash every few frames
+ENDC
     ret nz
     ld hl, wFtBulbs + 3
     ld a, [hl]
@@ -4885,8 +5035,49 @@ FtCrowd:
     ld [hl+], a
     ld a, b
     ld [hl+], a
+IF DEF(FT_NES)
+    ld a, [wFtRand]         ; frames lit (Punch-Out!!'s: 2 to 8)
+    and 7
+    cp 7
+    jr c, .lit
+    dec a
+.lit:
+    add 2
+    ld [hl], a
+ELSE
     ld [hl], 4              ; frames lit
+ENDC
     ret
+
+IF DEF(FT_NES)
+; During VBlank (Color), his KO: the crowd going wild, as Punch-Out!!'s, its color stepping through CrowdPulse.
+FtCrowdPulse:
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    ld a, [wNes + $00]      ; him counted out or stopped ($FE, $FC)
+    cp $FC
+    jr z, .wild
+    cp $FE
+    ret nz
+.wild:
+    ld hl, CrowdPulse
+    ld a, [hl+]
+    ldh [rBCPS], a
+    ldh a, [hFrame]         ; a step every 4 frames
+    and %1100
+    srl a
+    add l
+    ld l, a
+    adc h
+    sub l
+    ld h, a
+    ld a, [hl+]
+    ldh [rBCPD], a
+    ld a, [hl]
+    ldh [rBCPD], a
+    ret
+ENDC
 
 ; During VBlank: light or put back each flash (two map writes at most).
 FtCrowdDraw:
@@ -5898,8 +6089,29 @@ FtNesFrame:
     ld a, [wFtBankData]
     ld [$2000], a
     call FtCueBuild         ; (his dodge cue's palettes, ready for VBlank)
+    call FtNesCameras
     call FtNesPresent
     jp FtNesHud
+
+; The crowd's cameras, as Punch-Out!!'s: flashing while either is down (and on through the count, his KO) and as he
+; walks in.
+FtNesCameras:
+    ld a, [wNes + $05]      ; down
+    and a
+    jr nz, .flash
+    ld a, [wNes + $90]      ; his walk-in (waiting for the bell)
+    and $7F
+    cp $40
+    jr z, .flash
+    cp $41
+    ret nz
+.flash:
+    ld hl, wFtExcite        ; (frames they keep at it: two at least)
+    ld a, [hl]
+    cp 2
+    ret nc
+    ld [hl], 2
+    ret
 
 ; The fight kit's presentation from the NES state: the referee, the count, the clock, the ending.
 FtNesPresent:
@@ -6069,6 +6281,7 @@ IF DEF(FT_NES_SOUND)
     ldh [hNesSound], a
     xor a
 ENDC
+    call FtCareerResult
     call FtResultScene
     jp StartTransition
 

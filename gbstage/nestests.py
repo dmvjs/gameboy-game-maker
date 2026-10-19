@@ -79,7 +79,7 @@ class Gb:
         self.wnes = self.sym["wNes"][1]
         self.m.write(0x2000, self.sym["NesFighter"][0])
         fight = next(s for s in project["scenes"] if s.get("fight"))["fight"]   # the fight's own values, as
-        for name, value in (("wFtBankNes", self.sym["NesFighter"][0]), ("wFtBankData", self.sym["RivalMaps"][0]),
+        for name, value in (("wFtBankNes", self.sym["NesFighter"][0]), ("wFtBankData", self.sym["RivalPalSlots"][0]),
                             ("wFtNesOffset", fight["nes"]["offset"])):        # FightLoad sets them
             self.m.write(self.sym[name][1], value)
 
@@ -140,6 +140,8 @@ def run(log=print):
     jobs = [(name, title, fn, kw) for name in FIGHTERS for title, fn, kw in CHECKS]
     jobs.append(("Glass Joe", "the sound engine: effects, music and samples at random", "sound",
                  dict(frames=6000, seed=2)))
+    jobs.append(("Glass Joe", "pass keys: read and written as the NES's (keys at random, every kind of record)",
+                 "passkeys", dict(seed=1)))
     ok = True
     with ProcessPoolExecutor() as pool:
         last = None
@@ -291,6 +293,44 @@ def full(log, title, frames, seed, low=False, idle=False, style=None):
         f" (Joe {', '.join(f'{s:02X}' for s in sorted(seen))}; Mac {', '.join(f'{s:02X}' for s in sorted(macs))})")
     for f in failures:
         log("      " + f)
+    return ok
+
+
+def passkeys(log, title, seed, count=1500):
+    """Punch-Out!!'s pass keys (kit_passkey.asm) against the NES's own (bank 7, $8EC1 and $8FF0): random digits
+    and real keys read, every kind of record written, both byte for byte."""
+    import random
+    sys.path.insert(0, str(ROOT / "tools" / "punchout_art"))
+    import passwords
+    gb = Gb(fighter_project(FIGHTER)[0])
+    nes = Nes(7)
+    w = gb.sym["wPw"][1]
+    rng = random.Random(seed)
+    keys = [[rng.randrange(10) for _ in range(10)] for _ in range(count)]
+    keys += [passwords.encode(*r) for r in ((rng.randrange(3, 60), rng.randrange(3), 0, rng.randrange(3))
+                                            for _ in range(count // 2))]
+    bad = 0
+    for d in keys:
+        for i, v in enumerate(d):
+            nes.nes.ram[0x120 + i] = v
+            gb.m.write(w + 0x20 + i, v)
+        nes.nes.ram[0x132] = 0
+        nes.call(0x8EC1)
+        gb.call("PwDecode", bank="PwDecode")
+        a, b = nes.nes.cpu.a, gb.m.cpu.r[7]
+        rn, rg = [nes.nes.ram[0x130 + i] for i in range(8)], [gb.m.read(w + 0x30 + i) for i in range(8)]
+        bad += a != b or (a == 0 and rn != rg)
+    for _ in range(count):
+        wins = rng.randrange(100)
+        rec = (wins, rng.randrange(3), rng.randrange(wins + 1), rng.randrange(3))
+        digits = [rec[0] // 10, rec[0] % 10, 0, rec[1], rec[2] // 10, rec[2] % 10]
+        for i, v in enumerate(digits):
+            gb.m.write(w + 0x30 + i, v)
+        gb.m.cpu.r[0] = rec[3]                  # (B)
+        gb.call("PwEncode", bank="PwEncode")
+        bad += passwords.encode(*rec) != [gb.m.read(w + 0x10 + i) for i in range(10)]
+    ok = bad == 0
+    log(f"  {'✓' if ok else '✗'} {title}: {len(keys)} read, {count} written" + ("" if ok else f", {bad} differ"))
     return ok
 
 

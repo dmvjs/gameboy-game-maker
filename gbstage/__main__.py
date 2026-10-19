@@ -135,11 +135,11 @@ def cmd_build(args):
     return 0
 
 
-STAGES = ("goldens", "kit", "nes", "bot")
+STAGES = ("goldens", "kit", "nes", "bot", "career")
 
 
 def cmd_test(args):
-    stages = set(args.stage or STAGES) - ({"bot"} if args.no_bot else set())
+    stages = set(args.stage or STAGES) - ({"bot", "career"} if args.no_bot else set())
     if args.cases:
         stages = {"goldens"}
     ok = True
@@ -158,6 +158,10 @@ def cmd_test(args):
         from . import bottests
         print("\nEvery fighter beatable: the bot, buttons only, wins each fight inside two rounds\n")
         ok = bottests.run() and ok
+    if "career" in stages:
+        from . import careertests
+        print("\nThe whole game: every fight in turn to the end, losing, and CONTINUE's pass key\n")
+        ok = careertests.run() and ok
     if args.cpu_roms:
         from . import cputests
         print()

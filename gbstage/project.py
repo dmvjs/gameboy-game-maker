@@ -20,7 +20,7 @@ from pathlib import Path
 
 W, H, CELL = 160, 144, 8
 CW, CH = W // CELL, H // CELL
-MAX_BG_PALETTES = 128                # in a project; each scene uses 8 at most (the hardware holds 8)
+MAX_BG_PALETTES = 192                # in a project; each scene uses 8 at most (the hardware holds 8)
 SCENE_BG_PALETTES = 8
 MAX_OBJ_PALETTES = 8
 MAX_TILES = 256
@@ -807,6 +807,9 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
     win_tko = ft.get("winTko")                  # (optional) the win scene when he's out on a TKO
     if win_tko is not None and not (isinstance(win_tko, int) and 0 <= win_tko < scene_count and win_tko != index):
         errors.append(f"{where}: the TKO win scene doesn't exist."); win_tko = None
+    game_over = ft.get("gameOver")              # (optional, Punch-Out!!'s circuits) the third loss's scene
+    if game_over is not None and not (isinstance(game_over, int) and 0 <= game_over < scene_count and game_over != index):
+        errors.append(f"{where}: the game over scene doesn't exist."); game_over = None
     nes = _nes_fighter(ft.get("nes"), where, errors)
     fx = ft.get("effects") or {}
     if not (isinstance(fx, dict) and set(fx) <= set(kit.EFFECTS) and all(isinstance(v, bool) for v in fx.values())):
@@ -821,7 +824,7 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
             "referee": {"palette": ref.get("palette"), "shirt_palette": shirt, "poses": rposes_ref},
             "text_slot": slots[0], "bar_slot": slots[1], "crowd_row": crowd, "opening": opening, "loop": loop, "timed": timed,
             **({"rope_row": rope} if rope else {}), **({"side_rope": [ord(c) - 48 for c in side]} if side else {}),
-            "win": ft["win"], "lose": ft["lose"], "corner": corner, "win_tko": win_tko,
+            "win": ft["win"], "lose": ft["lose"], "corner": corner, "win_tko": win_tko, "game_over": game_over,
             "effects": {k: fx.get(k, True) for k in kit.EFFECTS}, "nes": nes}
 
 
@@ -1114,7 +1117,7 @@ def _texts(texts, where, errors):
         elif slot not in (0, 1, 2, 3):
             errors.append(f'{where}: the text "{label}" needs a color slot 1-4.')
         else:
-            out.append({"label": label, "x": x, "y": y, "text_slot": slot})
+            out.append({"label": label, "x": x, "y": y, "text_slot": slot, **({"record": True} if t.get("record") else {})})
     return out
 
 
@@ -1232,6 +1235,9 @@ def menu_text_pixels(menu):
     return out
 
 
+PASS_SPECIAL = {"0073735963", "1357924680", "1061130120", "0755416113", "8004222602", "2068822040"}   # the NES's
+
+
 def cell_key(pixels, c):
     x0, y0 = (c % CW) * CELL, (c // CW) * CELL
     return tuple(pixels[(y0 + y) * W + x0 + x] for y in range(CELL) for x in range(CELL))
@@ -1272,6 +1278,17 @@ def _compose_cutscene(scene):
                     key[y * CELL + x] = box["text_slot"]
                 c = (box["y"] + 1 + n) * 32 + box["x"] + 1 + k
                 scene["cut_typed"].append((c, tile_of(tuple(key))))
+        scene["cut_key"] = None         # Punch-Out!!'s pass key line (not a special one): typed as it's worked out
+        for n, line in enumerate(box["lines"]):
+            if re.fullmatch(r"\d{3} \d{3} \d{4}", line) and line.replace(" ", "") not in PASS_SPECIAL:
+                first = sum(len(l.replace(" ", "")) for l in box["lines"][:n])
+                glyphs = []
+                for d in range(10):
+                    key = [box["bg_slot"]] * 64
+                    for x, y in text_ink(str(d), 0, 0):
+                        key[y * CELL + x] = box["text_slot"]
+                    glyphs.append(tile_of(tuple(key)))
+                scene["cut_key"] = {"first": first, "glyphs": glyphs}
     obj, oindex, frames = [], {}, []
     for a in cs["actors"]:
         per = []
@@ -1397,6 +1414,18 @@ def compose(scene):
                 tiles_c.append(tile_of(cell_key(img, c)))
             per_cell.append(tiles_c + [tile_of(cell_key(scene["pixels"], c))])
         scene["pass_tiles"] = per_cell
+    rec = []                        # Mac's record (Punch-Out!!'s): each glyph it's written in, on its background
+    for t in scene.get("texts") or []:
+        if t.get("record"):
+            c0 = t["y"] * CW + t["x"]
+            glyphs = []
+            for ch in "0123456789-KO":
+                img = list(scene["pixels"])
+                for x, y in text_ink(ch, t["x"], t["y"]):
+                    img[y * W + x] = t["text_slot"]
+                glyphs.append(tile_of(cell_key(img, c0)))
+            rec.append((t["x"], t["y"], glyphs + [tile_of(cell_key(scene["pixels"], c0))]))
+    scene["record_glyphs"] = rec
     if opts:
         base = list(composed)
         for r in opts["rows"]:
@@ -1480,9 +1509,12 @@ def _rival_pixels(scene, pose, which="poses"):
 
 
 def _fight_compose_base(scene, composed):
-    """Bake the idle pose and the clock's colon into the scene."""
+    """Bake the idle pose (not with his NES pictures: the first comes up as the fight loads) and the clock's colon
+    into the scene."""
     ft = scene["fight"]
     px, cells = _rival_pixels(scene, "idle")
+    if (ft.get("nes") or {}).get("pictures"):
+        px = []
     for i, v in px:
         composed[i] = v
     for c, pal in cells:
@@ -1719,6 +1751,9 @@ def _fight_swap(scene):
     rope = scene["fight"].get("rope_row")
     region = {(scene["fight"]["y"] + r) * CW + scene["fight"]["x"] + c for r in range(kit.REGION_H) for c in range(kit.REGION_W)}
     blank = tiles[scene["cell_tiles"][min(region)]] if rope else None   # (his area's background: the mat)
+    if (scene["fight"].get("nes") or {}).get("pictures"):     # his NES pictures, on both machines: none of his poses'
+        mat = tiles[scene["cell_tiles"][min(region)]]          # tiles kept (every pose his area's mat)
+        keys = {pose: [mat] * len(k) for pose, k in keys.items()}
     scene_keys = [tiles[t] for t in scene["cell_tiles"]] + [tiles[t] for t in scene["fight_lut"]] + [tiles[scene["fight_flash_tile"]]]
     scene_keys += [tiles[t] for t in scene.get("fight_rope_tiles", [])]
     always = list(scene_keys)

@@ -314,7 +314,9 @@ export function boxingGame(pack) {
         { label: circuitOf(rv), x: 0, y: 0, textSlot: 1 },
         ...(rematch ? [{ label: 'REMATCH', x: 0, y: 1, textSlot: 1 }] : rv.titleBout ? [{ label: 'TITLE BOUT', x: 1, y: 1, textSlot: 1 }] : []),
         right(rv.rank, 1, 2), right(rv.name, 2, 0),
-        ...record.map((label, n) => ({ label, x: 0, y: 3 + n, textSlot: 0 })).filter(t => t.label),
+        ...record.map((label, n) => ({ label, x: 0, y: 3 + n, textSlot: 0,     // (your record: as it stands,
+                                       ...(/^\d+-\d+ \d+KO$/.test(label) ? { record: true } : {}) }))   // live)
+              .filter(t => t.label),
         { label: rv.playerRank || P.rank, x: 0, y: 8, textSlot: 2 }, { label: P.name, x: 0, y: 9, textSlot: 0 },
         { label: 'VS.', x: PT + 1, y: 10, textSlot: 1 },
         ...rv.lines.map((label, n) => right(label, 11 + n, 0)),
@@ -338,7 +340,7 @@ export function boxingGame(pack) {
         { label: circuitOf(rv), x: 0, y: 0, textSlot: 1 },
         ...(rv.titleBout ? [{ label: 'TITLE BOUT', x: 1, y: 1, textSlot: 1 }] : []),
         right(rv.rank, 1, 2), right(rv.name, 2, 0),
-        { label: playerRecord, x: 0, y: 9, textSlot: 0 },                       // Mac's record and name over
+        { label: playerRecord, x: 0, y: 9, textSlot: 0, record: true },                       // Mac's record and name over
         { label: P.name, x: 0, y: 10, textSlot: 2 }, right(rv.lines[0], 10, 0),   // him, the rival's record
       ];                                                                        // under his portrait
       const DOC = { x: 0, y: 3, w: M.CW - PT, h: 6 }, RIVAL = { x: PT + 1, y: M.CH - PT, w: M.CW - PT - 1, h: 6 };
@@ -428,13 +430,15 @@ export function boxingGame(pack) {
       // front of them); the posts' cells their own (the floor's blue outside the ring). The bottom 8 lines are the
       // rope row (the band over his area's first row, his head in front of it: sprites).
       const CROWD = 24, crowdPx = new Uint8Array(M.W * CROWD).fill(3);
+      const CROWD_REPEAT = 128;                             // (the crowd's art: the ring's width of it, 1:1)
       const put = (x, y, slot) => { crowdPx[(y - 24) * M.W + x] = slot; };
       const ropes = [29, 36, 43];
       for (let y = 24; y < 24 + CROWD; y++) {
         if (ropes.includes(y)) continue;
-        const r4 = (y - 24) % 5, shift = Math.floor((y - 24) / 5) % 2 ? 2 : 0;
+        const art = pack.crowdArt?.[y - 24];              // Punch-Out!!'s own spectators (1:1), else a pattern
         for (let x = 16; x < M.W - 16; x++) {
-          const k = (x + shift) % 4;
+          if (art) { if (art[(x - 16) % CROWD_REPEAT] === '1') put(x, y, 1); continue; }   // (its first stretch, again:
+          const r4 = (y - 24) % 5, shift = Math.floor((y - 24) / 5) % 2 ? 2 : 0, k = (x + shift) % 4;
           if ((r4 < 2 && k < 2) || (r4 === 2 && k < 3) || (r4 === 3 && k === 1)) put(x, y, 1);
         }
       }
@@ -594,7 +598,7 @@ export function boxingGame(pack) {
     for (let i = 0; i < E.mac.w * E.mac.h; i++) end.pixels[(my + (i / E.mac.w | 0)) * M.W + mx + i % E.mac.w] = +E.mac.pixels[i];
     [...E.mac.cells].forEach((c, k) => { end.cellPal[((my >> 3) + (k / (E.mac.w >> 3) | 0)) * M.CW + (mx >> 3) + k % (E.mac.w >> 3)] = macPals[+c]; });
     const record = last.playerLines[last.playerLines.length - 1].replace(/^(\d+)-(\d+) (\d+)KO$/, (_, w, l, ko) => `${+w + 1}-${l} ${+ko + 1}KO`);
-    end.texts = [{ label: record, x: centered(record) >> 3, y: 15, textSlot: 3 }];
+    end.texts = [{ label: record, x: centered(record) >> 3, y: 15, textSlot: 3, record: true }];   // (his, as it stands)
     end.typed = { every: 15, pick: 'random', groups: [[[{ x: centered('THE END') >> 3, y: 17, w: 7, h: 1, lines: ['THE END'],
                                                            textSlot: 3, sound: null, pause: 0 }]]] };
     end.pressStart = { target: 0, flashes: 1, area: null, quiet: true };
@@ -609,6 +613,28 @@ export function boxingGame(pack) {
       sc.notes = 'Punch-Out!!\'s ending begins: his word to Mac. It goes on by itself; the end music the fight '
         + 'started as he went down plays on (as the game\'s: none of its ending screens starts a song).';
     }
+  }
+
+  // ---- Game over (Punch-Out!!'s: the third loss, or losing the last fight): Mac on his stool, head down, the game's
+  // own picture; GIVE UP? and RETIRE? either side of him, GAME OVER, and Doc's word. Start goes back to the title. ----
+  if (pack.gameOver) {
+    const G = pack.gameOver;
+    const go = { name: 'Game over', pixels: new Uint8Array(M.W * M.H), cellPal: new Uint8Array(M.CW * M.CH),
+      menu: null, pressStart: null, pressed: null, options: null, puzzle: null, fight: null, passKey: null, back: null, texts: [] };
+    const goPal = addPal('Game over', [G.bg, [0, 0, 0], [31, 31, 31], [31, 31, 31]]);   // (the line black, the words white)
+    go.cellPal.fill(goPal);
+    const macPals = G.mac.palettes.map((c, k) => addPal(`Game over Mac ${k + 1}`, c));
+    const mx = 64, my = 8;
+    for (let x = 0; x < M.W; x++) go.pixels[(my + G.line) * M.W + x] = 1;
+    for (let i = 0; i < G.mac.w * G.mac.h; i++) go.pixels[(my + (i / G.mac.w | 0)) * M.W + mx + i % G.mac.w] = +G.mac.pixels[i];
+    [...G.mac.cells].forEach((c, k) => { go.cellPal[((my >> 3) + (k / (G.mac.w >> 3) | 0)) * M.CW + (mx >> 3) + k % (G.mac.w >> 3)] = macPals[+c]; });
+    go.texts = [{ label: G.left, x: 0, y: 3, textSlot: 3 }, { label: G.right, x: M.CW - G.right.length, y: 3, textSlot: 3 },
+                { label: G.over, x: centered(G.over) >> 3, y: 14, textSlot: 3 },
+                ...G.doc.map((label, n) => ({ label, x: centered(label) >> 3, y: 16 + n, textSlot: 3 }))];
+    go.pressStart = { target: 0, flashes: 1, area: null };
+    go.notes = 'Punch-Out!!\'s game over: the third loss, or losing to the last fighter. Start goes back to the title.';
+    const goId = p.scenes.push(go) - 1;
+    for (const lid of ids) S[lid.fight].fight.gameOver = goId;
   }
 
   // ---- First screen: Punch-Out!!'s from power-on, MIKE IS WAITING FOR YOUR CHALLENGE!!, its song playing (on
