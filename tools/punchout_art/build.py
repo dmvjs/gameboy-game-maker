@@ -1342,9 +1342,10 @@ def joe_from_nes(s, shapes=None, opponent=0):
 
 def pictures_from_nes(s, shapes, opponent, blank=()):
     """Every picture of his the NES game draws, each its own 64x80 frame (Game Boy Color shows exactly these:
-    no pose standing in for another): {key: frame}, plain ones scaled as joe_from_nes scales poses, a mirrored
-    one its plain one flipped whole (the NES draws it so; Color stores its tiles once). Keys as the frame maps'
-    ("C0", "56|"). A mirrored picture caught alone gives its plain one too, flipped back."""
+    no pose standing in for another): {key: frame}, scaled as joe_from_nes scales poses; a mirrored one from its
+    own capture (the NES's mirrored frames are often drawings of their own; one never caught: joe_shapes gives
+    its plain one flipped). Keys as the frame maps' ("C0", "56|"). A mirrored picture caught alone gives its plain
+    one too, flipped back."""
     step = 10 if abs(s - 0.7) < 1e-9 else 1
     ax, ay = round(JOE_ANCHOR[0] / s), round(JOE_ANCHOR[1] / s)
     W, H = round(RW / s), round(RH / s)
@@ -1373,9 +1374,9 @@ def pictures_from_nes(s, shapes, opponent, blank=()):
             out["%02X" % f] = make(shapes[(f, 0)])
     for (f, mi) in blank:               # (frames the NES draws him in as nothing: Tiger gone in his dash)
         out["%02X%s" % (f, "|" if mi else "")] = [[None] * RW for _ in range(RH)]
-    for (f, mi) in sorted(shapes):
-        if mi and "%02X|" % f not in out:
-            out["%02X|" % f] = [list(reversed(row)) for row in out["%02X" % f]]
+    for (f, mi) in sorted(shapes):       # a mirrored one: as the NES draws it (often its own drawing: Tyson's head
+        if mi and "%02X|" % f not in out:    # snapped back, not his fist-up 22 turned round), from its own capture
+            out["%02X|" % f] = make(shapes[(f, 1)])
     return out
 
 

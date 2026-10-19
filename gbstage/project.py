@@ -12,6 +12,7 @@ A menu draws its labels with the built-in font in one palette slot of whatever p
 already uses, so text can never break the one-palette-per-tile rule.
 """
 
+import collections
 import contextlib
 import re
 import threading
@@ -264,7 +265,9 @@ def validate(data):
     }
     with using_font(font):
         for s in project["scenes"]:
+            s["_palettes"] = project["palettes"]    # (a fighter's greys are picked from his colors)
             compose(s)
+            s.pop("_palettes", None)
             if len(s["tiles"]) > MAX_TILES:
                 extra = (" (the rival's always-there poses, plus room for his largest pose set, and the HUD's digits "
                          f"and bars; sets: {s['fight_swap']['sizes']})") if s.get("fight") else ""
@@ -1458,6 +1461,7 @@ def compose(scene):
         _fight_swap(scene)
         if (scene["fight"].get("nes") or {}).get("pictures"):
             _fight_pics(scene)          # (Color: his NES pictures, exact, streamed: no finer poses needed)
+            _fight_pics_dmg(scene)      # (and the original's: the same pictures, in its greys)
         elif scene["fight"].get("cgb_poses"):
             _fight_cgb(scene)
     return scene
@@ -1552,8 +1556,13 @@ def _fight_compose_tiles(scene, tile_of):
                     out.append((by * 8, bx * 8, kit.OBJ_FIRST_TILE + t, attr | flip))
         return out
     pal = ft["player"]["palette"]
-    sprites = {pose: sprite_list(ft["player"]["poses"][pose], kit.PLAYER_W, kit.PLAYER_H, pal)
-               for pose in kit.PLAYER_POSES if pose not in kit.PLAYER_RARE}
+    mac_pics = (ft.get("nes") or {}).get("mac_pictures")
+    if mac_pics:                                # the NES's Mac, his exact pictures on both (no poses): on the
+        obj.extend([(0,) * 64] * (2 * MAC_DMG_ROOM))    # original, two areas of his streamed tiles, first
+        sprites = {pose: [] for pose in kit.PLAYER_POSES if pose not in kit.PLAYER_RARE}
+    else:
+        sprites = {pose: sprite_list(ft["player"]["poses"][pose], kit.PLAYER_W, kit.PLAYER_H, pal)
+                   for pose in kit.PLAYER_POSES if pose not in kit.PLAYER_RARE}
     # Tiles loaded as they're needed (two areas past the rest, sized to what they hold): the player's rare poses
     # (one at a time) and the referee's (two areas: the next pose loads into the one not shown). A tile already
     # kept for good, or (the referee's) used by more than one of his poses, is kept for good instead.
@@ -1573,7 +1582,8 @@ def _fight_compose_tiles(scene, tile_of):
                     k = slot.setdefault(key, len(slot))
                     out.append((by * 8, bx * 8, (area, k), attr))
         return out, list(slot)
-    rare = {pose: slot_list(ft["player"]["poses"][pose], kit.PLAYER_W, kit.PLAYER_H, lambda k: pal, lambda k: k, (), "pl")
+    rare = {pose: ([], []) if mac_pics else
+            slot_list(ft["player"]["poses"][pose], kit.PLAYER_W, kit.PLAYER_H, lambda k: pal, lambda k: k, (), "pl")
             for pose in kit.PLAYER_RARE}
     ref_attr = ft["referee"]["palette"] | 0x10          # Color: its palette; original: OBP1
     shirt = ft["referee"].get("shirt_palette")
@@ -1896,6 +1906,7 @@ def _fight_cgb(scene):
 
 
 MAC_PIC_ROOM = 32                       # Color: tiles a picture of Mac's may have (each of its two copies' room)
+MAC_DMG_ROOM = 18                       # the original's: each of its two copies' room (sprite tiles OBJ_FIRST_TILE on)
 
 
 def _mac_pics(mp, pal):
@@ -1931,8 +1942,8 @@ def _mac_pics(mp, pal):
                     tiles.append(cell)
                     f = 0
                 sprites.append((v["y"] + r * 8, v["x"] + c * 8, t, pal | f | 0x08))
-        if len(tiles) > MAC_PIC_ROOM:
-            raise ProjectError([f"Mac's NES picture has {len(tiles)} tiles; a picture of his can have {MAC_PIC_ROOM}."])
+        if len(tiles) > min(MAC_PIC_ROOM, MAC_DMG_ROOM):
+            raise ProjectError([f"Mac's NES picture has {len(tiles)} tiles; a picture of his can have {MAC_DMG_ROOM}."])
         pics.append({"tiles": tiles, "sprites": sprites})
     return {"frames": frame_pic, "pics": pics, "idle": frame_pic[0]}
 
@@ -2004,6 +2015,95 @@ def _fight_pics(scene):
     out["frame_map"], out["places"] = frame_map, place
     out["idle"] = index.get("C0", 0)
     scene["fight_pics"] = out
+
+
+def _grey_shades(scene, beta=3.0):
+    """The original Game Boy: each color of his pictures (wherever it's used) to a grey, 1-3 (0 the mat, white):
+    of every assignment, the one keeping brightness best (by use) while telling touching areas apart (by how much
+    they touch); his darkest stays black. {rgb: grey}."""
+    import itertools
+    from . import fight as kit
+    ft = scene["fight"]
+    pics = ft["nes"]["pictures"]["poses"]
+    W, H = kit.REGION_W * CELL, kit.REGION_H * CELL
+    color = {}
+    for kind, idx in ft["palettes"].items():
+        for slot in (1, 2, 3):
+            color[(kind, slot)] = tuple(scene["_palettes"][idx][slot])
+    use, touch = collections.Counter(), collections.Counter()
+    for v in pics.values():
+        px, cells = v["pixels"], v["cells"]
+        key = lambda i: color[(cells[(i // W // CELL) * kit.REGION_W + (i % W) // CELL], int(px[i]))]
+        for i, ch in enumerate(px):
+            if ch == "0":
+                continue
+            k = key(i)
+            use[k] += 1
+            for j in ((i + 1) if (i + 1) % W else None, i + W):
+                if j is not None and j < W * H and px[j] != "0":
+                    q = key(j)
+                    if q != k:
+                        touch[(min(k, q), max(k, q))] += 1
+    lum = lambda c: (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) / 31
+    keys = sorted(use, key=lum)
+    target = {1: 0.62, 2: 0.33, 3: 0.05}
+    total, ttot = sum(use.values()) or 1, sum(touch.values()) or 1
+    best = None
+    for vals in itertools.product((1, 2, 3), repeat=len(keys)):
+        m = dict(zip(keys, vals))
+        if keys and m[keys[0]] != 3:
+            continue
+        if any(vals[i] < vals[j] and lum(keys[j]) - lum(keys[i]) > 0.15
+               for i in range(len(keys)) for j in range(i + 1, len(keys))):
+            continue                    # (a clearly lighter color never a darker grey)
+        cost = sum(use[k] * (lum(k) - target[m[k]]) ** 2 for k in keys) / total
+        cost += beta * sum(w for (a, b), w in touch.items() if m[a] == m[b]) / ttot
+        if best is None or cost < best[0]:
+            best = (cost, m)
+    return best[1] if best else {}
+
+
+def _fight_pics_dmg(scene):
+    """The original Game Boy, a fighter from the NES game: his Color pictures (fight_pics' order: its frame map and
+    places serve both) in greys (_grey_shades), each its own tiles (no mirrored ones: the original's background
+    can't flip), his area's map for each of his tiles' two copies (PIC_BASE on, or 64 further), his top rows as
+    sprites (a rope row). Streamed in, out of the frame's work (kit_fight.asm, FT_DMG_PICS)."""
+    from . import fight as kit
+    ft = scene["fight"]
+    pics = ft["nes"]["pictures"]["poses"]
+    order = scene["fight_pics"]["order"]
+    grey = _grey_shades(scene)
+    color = {(kind, slot): tuple(scene["_palettes"][idx][slot]) for kind, idx in ft["palettes"].items() for slot in (1, 2, 3)}
+    W = kit.REGION_W * CELL
+    out = {"tiles": [], "maps": [], "heads": [], "grey": {f"{k}": v for k, v in grey.items()}}
+    pose_of = {k: n for k, n in (ft["nes"].get("frame_names") or {}).items()}
+    for key in order:
+        v = pics[key]
+        px, cells = v["pixels"], v["cells"]
+        cell_tiles = []
+        for r in range(kit.REGION_H):
+            for c in range(kit.REGION_W):
+                kind = cells[r * kit.REGION_W + c]
+                t = []
+                for y in range(CELL):
+                    for x in range(CELL):
+                        sl = int(px[(r * CELL + y) * W + c * CELL + x])
+                        t.append(grey.get(color[(kind, sl)], 3) if sl else 0)
+                cell_tiles.append(tuple(t))
+        rows = kit.HEAD_ROWS_TALL if pose_of.get(key.rstrip("|")) in kit.HEAD_TALL else kit.HEAD_ROWS
+        own = []
+        for t in cell_tiles[:rows * kit.REGION_W] + cell_tiles:     # (his top rows' first)
+            if t not in own:
+                own.append(t)
+        if len(own) > PIC_ROOM:
+            raise ProjectError([f'Scene "{scene["name"]}": the rival\'s NES picture {key} has {len(own)} tiles in greys; '
+                                f"a picture can have {PIC_ROOM}."])
+        local = {t: n for n, t in enumerate(own)}
+        out["tiles"].append(own)
+        out["maps"].append([PIC_BASE + local[t] for t in cell_tiles])
+        out["heads"].append([(i // kit.REGION_W * CELL, i % kit.REGION_W * CELL, PIC_BASE + local[cell_tiles[i]])
+                             for i in range(rows * kit.REGION_W) if any(cell_tiles[i])])
+    scene["fight_pics_dmg"] = out
 
 
 def fade_palettes(colors, step, to):

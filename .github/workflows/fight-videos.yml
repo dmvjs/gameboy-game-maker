@@ -1,0 +1,91 @@
+# Every fight of the Joe vs Mac example, start to knockout, on Game Boy Color and the original Game Boy:
+# the bot plays the ROM built from this commit (tools/fight_videos.py), and the videos go up on GitHub Pages.
+name: Fight videos
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "gbstage/**"
+      - "examples/joe-vs-mac.gbstage.json"
+      - "tools/fight_videos.py"
+      - ".github/workflows/fight-videos.yml"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: fight-videos
+  cancel-in-progress: true
+
+env:
+  PYTHON_DEPS: pyboy==2.7.0 numpy==2.0.2 pillow==11.3.0 imageio-ffmpeg==0.6.0
+
+jobs:
+  rom:
+    runs-on: ubuntu-latest
+    outputs:
+      fights: ${{ steps.list.outputs.fights }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m gbstage install rgbds
+      - run: python tools/fight_videos.py rom fights.gbc
+      - id: list
+        run: echo "fights=$(python tools/fight_videos.py list | python -c 'import json,sys; print(json.dumps([f["key"] for f in json.load(sys.stdin)]))')" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rom
+          path: fights.gbc*
+
+  record:
+    needs: rom
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        fight: ${{ fromJSON(needs.rom.outputs.fights) }}
+        screen: [color, grey]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install $PYTHON_DEPS
+      - uses: actions/download-artifact@v4
+        with:
+          name: rom
+      - run: python tools/fight_videos.py record fights.gbc ${{ matrix.fight }} out/${{ matrix.fight }}-${{ matrix.screen }}.mp4 ${{ matrix.screen == 'grey' && '--grey' || '' }}
+        env:
+          SDL_AUDIODRIVER: dummy
+      - uses: actions/upload-artifact@v4
+        with:
+          name: video-${{ matrix.fight }}-${{ matrix.screen }}
+          path: out/
+
+  pages:
+    needs: record
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: video-*
+          path: site
+          merge-multiple: true
+      - run: python tools/fight_videos.py site site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

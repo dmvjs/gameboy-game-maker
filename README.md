@@ -13,6 +13,39 @@ npm start
 
 Then press **▶ Test**. More in [DEMO.md](DEMO.md).
 
+### Every fight, start to knockout
+
+The bot plays each fight on the ROM this repo builds, buttons only, on Game Boy Color and the original Game Boy.
+CI renders the videos on every change ([fight-videos.yml](.github/workflows/fight-videos.yml)). Click a preview for
+the whole fight with sound, or [watch them all](https://dmvjs.github.io/gameboy-game-maker/).
+
+| | Game Boy Color | Game Boy |
+|---|---|---|
+| **Great Tiger** | [<img src="https://dmvjs.github.io/gameboy-game-maker/tiger-color.gif" width="320" alt="Great Tiger, Game Boy Color">](https://dmvjs.github.io/gameboy-game-maker/#tiger) | [<img src="https://dmvjs.github.io/gameboy-game-maker/tiger-grey.gif" width="320" alt="Great Tiger, Game Boy">](https://dmvjs.github.io/gameboy-game-maker/#tiger) |
+| **Bald Bull** | [<img src="https://dmvjs.github.io/gameboy-game-maker/bull-color.gif" width="320" alt="Bald Bull, Game Boy Color">](https://dmvjs.github.io/gameboy-game-maker/#bull) | [<img src="https://dmvjs.github.io/gameboy-game-maker/bull-grey.gif" width="320" alt="Bald Bull, Game Boy">](https://dmvjs.github.io/gameboy-game-maker/#bull) |
+| **Mike Tyson** | [<img src="https://dmvjs.github.io/gameboy-game-maker/tyson-color.gif" width="320" alt="Mike Tyson, Game Boy Color">](https://dmvjs.github.io/gameboy-game-maker/#tyson) | [<img src="https://dmvjs.github.io/gameboy-game-maker/tyson-grey.gif" width="320" alt="Mike Tyson, Game Boy">](https://dmvjs.github.io/gameboy-game-maker/#tyson) |
+
+<details><summary>All 14 fights</summary>
+
+| | Game Boy Color | Game Boy |
+|---|---|---|
+| Glass Joe | [<img src="https://dmvjs.github.io/gameboy-game-maker/joe-color.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#joe) | [<img src="https://dmvjs.github.io/gameboy-game-maker/joe-grey.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#joe) |
+| Von Kaiser | [<img src="https://dmvjs.github.io/gameboy-game-maker/kaiser-color.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#kaiser) | [<img src="https://dmvjs.github.io/gameboy-game-maker/kaiser-grey.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#kaiser) |
+| Piston Honda | [<img src="https://dmvjs.github.io/gameboy-game-maker/honda-color.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#honda) | [<img src="https://dmvjs.github.io/gameboy-game-maker/honda-grey.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#honda) |
+| Don Flamenco | [<img src="https://dmvjs.github.io/gameboy-game-maker/don-color.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#don) | [<img src="https://dmvjs.github.io/gameboy-game-maker/don-grey.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#don) |
+| King Hippo | [<img src="https://dmvjs.github.io/gameboy-game-maker/hippo-color.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#hippo) | [<img src="https://dmvjs.github.io/gameboy-game-maker/hippo-grey.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#hippo) |
+| Great Tiger | [<img src="https://dmvjs.github.io/gameboy-game-maker/tiger-color.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#tiger) | [<img src="https://dmvjs.github.io/gameboy-game-maker/tiger-grey.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#tiger) |
+| Bald Bull | [<img src="https://dmvjs.github.io/gameboy-game-maker/bull-color.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#bull) | [<img src="https://dmvjs.github.io/gameboy-game-maker/bull-grey.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#bull) |
+| Piston Honda II | [<img src="https://dmvjs.github.io/gameboy-game-maker/honda2-color.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#honda2) | [<img src="https://dmvjs.github.io/gameboy-game-maker/honda2-grey.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#honda2) |
+| Soda Popinski | [<img src="https://dmvjs.github.io/gameboy-game-maker/soda-color.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#soda) | [<img src="https://dmvjs.github.io/gameboy-game-maker/soda-grey.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#soda) |
+| Bald Bull II | [<img src="https://dmvjs.github.io/gameboy-game-maker/bull2-color.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#bull2) | [<img src="https://dmvjs.github.io/gameboy-game-maker/bull2-grey.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#bull2) |
+| Don Flamenco II | [<img src="https://dmvjs.github.io/gameboy-game-maker/don2-color.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#don2) | [<img src="https://dmvjs.github.io/gameboy-game-maker/don2-grey.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#don2) |
+| Mr. Sandman | [<img src="https://dmvjs.github.io/gameboy-game-maker/sandman-color.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#sandman) | [<img src="https://dmvjs.github.io/gameboy-game-maker/sandman-grey.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#sandman) |
+| Super Macho Man | [<img src="https://dmvjs.github.io/gameboy-game-maker/macho-color.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#macho) | [<img src="https://dmvjs.github.io/gameboy-game-maker/macho-grey.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#macho) |
+| Mike Tyson | [<img src="https://dmvjs.github.io/gameboy-game-maker/tyson-color.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#tyson) | [<img src="https://dmvjs.github.io/gameboy-game-maker/tyson-grey.gif" width="160" alt="">](https://dmvjs.github.io/gameboy-game-maker/#tyson) |
+
+</details>
+
 ## Getting started
 
 You need Python 3.9 or newer. Nothing else is required up front.

@@ -2176,6 +2176,16 @@ EnvTicks:
 
 ; Writes that start something: $4003, $4007, $400B, $400F (length; envelope or linear counter).
 ApuTake:
+    ld hl, wApuNew          ; (most frames: nothing started, the four channels' and the DMC's flags all clear)
+    ld a, [hl+]
+    or [hl]
+    inc hl
+    or [hl]
+    inc hl
+    or [hl]
+    inc hl
+    or [hl]
+    jr z, .pulses
     ld e, 0
 .channel:
     ld hl, wApuNew
