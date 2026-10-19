@@ -231,6 +231,19 @@ def _db(values, per_line=16):
                      for i in range(0, len(values), per_line))
 
 
+def _pic_next(s, pics):
+    """The original's grey pictures: per picture (by number), the one likely next ($FF: none known), the picture
+    before it that changes that, and the one next then (pic_next.py's, from the bot's fights)."""
+    order = pics["order"]
+    nxt = (s["fight"].get("nes") or {}).get("pictures", {}).get("next") or {}
+    num = lambda k: order.index(k) if k in order else 0xFF
+    out = []
+    for k in range(128):
+        v = nxt.get(order[k]) if k < len(order) else None
+        out += [num(v[0]), num(v[1]), num(v[2])] if v else [0xFF] * 3
+    return out
+
+
 def _crowd_pulse(s, project):
     """The crowd going wild at his KO, as Punch-Out!!'s: its color a brightness down every 4 frames, twice, and
     back up ($26, $16, $06, $16): its palette's hardware slot (as BCPS: color 1), then the four colors."""
@@ -2322,8 +2335,11 @@ PicHeaderDmg{suffix}:           ; his pictures in greys: count; per picture its 
     ds 15
 {entries}
     ds {6 * (128 - n)}
+PicNextDmg{suffix}:             ; per picture: the one likely next, then (the picture before it this one) the one then
+{_db(_pic_next(s, pics))}
 {heads}
 ASSERT PicHeaderDmg{suffix} == $4000
+ASSERT PicNextDmg{suffix} == $4310
 {nl.join(body)}
 """
     if not shared:                      # a later fight: its scene's update, its own data under its own labels

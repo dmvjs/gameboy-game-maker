@@ -967,7 +967,10 @@ def _nes_fighter(nes, where, errors):
                                                  for k, v in pl.items())):
             errors.append(f"{where}: the NES pictures are each his area's pixels and palettes, and where each sits.")
             return None
-        pictures = {"poses": pp, "places": {k: tuple(v) for k, v in pl.items()}}
+        nx = (pictures or {}).get("next") or {}     # (the original: per picture, the one likely next: pic_next.py)
+        nx = {k: v for k, v in nx.items() if k in pp and isinstance(v, list) and len(v) == 3
+              and all(c in pp for c in v)} if isinstance(nx, dict) else {}
+        pictures = {"poses": pp, "places": {k: tuple(v) for k, v in pl.items()}, **({"next": nx} if nx else {})}
     return {"bank": bank, "offset": offset, "frames": frames, "places": places, "home": home, "scale": float(scale),
             **({"pictures": pictures, "frame_names": {str(k): v for k, v in (nes.get("frames") or {}).items()}}
                if pictures else {}),

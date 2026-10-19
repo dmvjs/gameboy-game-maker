@@ -1677,6 +1677,9 @@ def mac_down_colors(colors, inks=None):
     return out
 
 
+PIC_NEXT = HERE / "out" / "pic-next.json"     # per rival: per picture, the one likely after it (pic_next.py)
+
+
 def rival_art(key, s, colors, pposes, max_share=24):
     """A rival after Joe (NES_RIVALS) from the game's own frames: his poses (shared down only as far as his fight's
     tiles need, and finer for Color), palettes and where each frame sits."""
@@ -1696,6 +1699,9 @@ def rival_art(key, s, colors, pposes, max_share=24):
         every = joe_shapes(r["opp"], everything=True)
         frames_ = pictures_from_nes(s, every, r["opp"], blank_frames(r["opp"]))
         art["pictures"] = {"poses": import_pictures(frames_, pals), "places": picture_places(frames_, s, every)}
+        nxt = json.loads(PIC_NEXT.read_text()).get(key) if PIC_NEXT.exists() else None
+        if nxt:                         # (the original: the picture likely next, loaded early: pic_next.py)
+            art["pictures"]["next"] = {k: v for k, v in nxt.items() if k in frames_ and v[0] in frames_}
         write_sheet(HERE / "out" / f"{key}-pictures.png", [frames_[k] for k in sorted(frames_)], RW, RH, cols=13)
         print(f"{r['name']}: {len(frames_)} pictures, exact for Color")
     return art
@@ -1812,7 +1818,9 @@ def _rival_js(key, art):
             + ["};"]
             + ([f"export const {up}_PICTURES = {{ poses: {{"]      # (Color: each NES picture of his, exact)
                + [f"  '{k}':" + pose(v)[1:] for k, v in sorted(art["pictures"]["poses"].items())]
-               + [f"}}, places: {json.dumps(art['pictures']['places'])} }};"] if art.get("pictures") else [])
+               + [f"}}, places: {json.dumps(art['pictures']['places'])}"
+                  + (f", next: {json.dumps(art['pictures']['next'])}" if art["pictures"].get("next") else "") + " };"]
+               if art.get("pictures") else [])
             + [f"export const {up}_NES = {{ bank: '{base64.b64encode(bank).decode()}', offset: {r['offset']},",
                f"  frames: {json.dumps(r['frames'])}, home: [135, 182], scale: {SCALE_JOE},",
                f"  places: {json.dumps(art['places'])}" + (f", pictures: {up}_PICTURES" if art.get("pictures") else "") + " };"]

@@ -221,6 +221,7 @@ wFtExcite: db               ; frames the crowd's cameras keep flashing
 wFtRand: db
 wFtBulbs: ds 4 * 2          ; per flash: map address, the tile it covers, state (0 free, frames left, $FF restore)
 wFtOAMEnd: ds 3             ; per sprite list (wFtOAM, wFtOAM2, wFtOAM3): where it ended last time (slots past it hidden)
+wRvPicPrev: db              ; (the original: the picture shown before the shown one)
 wFtEnd:
 
 SECTION "Fight between rounds", WRAM0   ; kept while the corner scene shows
@@ -832,6 +833,7 @@ DEF FT_PIC_VRAM2 EQU $8C00
 DEF FT_VBL_LAST EQU 149        ; the last line VBlank's lesser work (a HUD redraw, 4 tiles of the referee's) may start
 DEF FT_MAC_PIC_ROOM EQU 32     ; Mac's: each copy's tiles (bank 1's sprite tiles, 0 on)
 DEF FT_DMG_MAC_ROOM EQU 18     ; the original's: each copy's (sprite tiles FT_OBJ_FIRST on)
+DEF FT_DPIC_NEXT EQU $4310     ; (and per picture its likely next: PicNextDmg)
 DEF FT_DPIC_TABLE EQU $4010    ; the original's grey pictures: per picture its tiles (address, bank, count), sprites
 DEF FT_PIC_WHOLE EQU 44        ; a picture of up to this many tiles goes up in one VBlank, its tiles and all
 
@@ -1680,10 +1682,10 @@ FtDmgDecide:
     ld a, [wRvPic]
     ld hl, wRvPicShown
     cp [hl]
-    jr z, .keep
+    jr z, .shown
     ld hl, wRvPicLoad
     cp [hl]
-    jr z, .loading
+    jr z, .wanted
     ld [hl], a              ; another: from its first tile (the copy not shown), and where it'll sit
     ld a, [wRvPicWantX]
     ld [wRvPicLoadX], a
@@ -1703,7 +1705,14 @@ FtDmgDecide:
     call FtDmgEntry
     ld a, e
     ld [wRvPicDone], a
+    jr .loading
+.wanted:                    ; (the one coming in, perhaps early: where it sits now it's wanted)
+    ld a, [wRvPicWantX]
+    ld [wRvPicLoadX], a
+    ld a, [wRvPicWantY]
+    ld [wRvPicLoadY], a
 .loading:
+    ld a, [wRvPicLoad]      ; (its entry: its count)
     call FtDmgEntry
     ld a, [wRvPicDone]
     cp e
@@ -1720,6 +1729,8 @@ FtDmgDecide:
     ld a, [wRvPicLoadY]
     ld [wRvPlaceY], a
     jr .out
+.shown:
+    call FtDmgPrefetch
 .keep:
     ld a, [wRvPicShown]
     ld [wRvPicHeads], a
@@ -1728,6 +1739,48 @@ FtDmgDecide:
 .out:
     ld a, [wFtBankNes]
     ld [$2000], a
+    ret
+
+; The one wanted up, the copy not shown idle: the picture likely next (FT_DPIC_NEXT) into it, early.
+FtDmgPrefetch:
+    ld a, [wRvPicLoad]
+    ld hl, wRvPicShown
+    cp [hl]
+    ret nz                  ; (one coming in, or in, already)
+    ld a, [wFtBankPicsDmg]
+    ld [$2000], a
+    ld a, [hl]
+    ld l, a
+    ld h, 0
+    ld b, h
+    ld c, l
+    add hl, hl
+    add hl, bc
+    ld bc, FT_DPIC_NEXT
+    add hl, bc
+    ld a, [hl+]             ; its next; or, after the one before it, the one then
+    ld b, a
+    ld a, [hl+]
+    ld c, a
+    ld a, [wRvPicPrev]
+    cp c
+    ld a, b
+    jr nz, .got
+    ld a, [hl]
+.got:
+    cp $FF
+    ret z
+    ld hl, wRvPicShown
+    cp [hl]
+    ret z
+    ld hl, wRvPicHidden     ; (whole in that copy already)
+    cp [hl]
+    ret z
+    ld [wRvPicLoad], a
+    xor a
+    ld [wRvPicDone], a
+    dec a
+    ld [wRvPicHidden], a
     ret
 
 ; VBlank's first: the picture readied onto the map (his area's 10 rows of 8, from its tiles' copy's rows).
@@ -1763,6 +1816,7 @@ FtDmgSwitch:
     ld [wRvPicBuf], a
     ld a, [wRvPicShown]     ; (the one going down: whole in the copy now not shown)
     ld [wRvPicHidden], a
+    ld [wRvPicPrev], a
     ld a, [wRvPicLoad]
     ld [wRvPicShown], a
     ld a, [wFtBankData]
@@ -1841,6 +1895,7 @@ FtDmgPicsStart:
     ld a, [wFtBankData]
     ld [$2000], a
     ret
+
 
 ; The next tiles to stream (Mac's first: his few, then his rival's): HL their source (bank mapped), DE where they
 ; go, wFtStreamN the picture's count, wFtStreamDone its count in so far. Z: none.
@@ -5430,6 +5485,7 @@ ENDC
     ld a, [hl+]
     ld d, [hl]
     ld e, a
+.list:                      ; (DE: the list)
     pop hl
     ld a, [de]
     inc de
