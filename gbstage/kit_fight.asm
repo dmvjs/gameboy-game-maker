@@ -205,6 +205,10 @@ wFtCareer: db               ; Punch-Out!!'s circuits: CAREER_* (a title bout, a 
 wFtRematchScene: db         ; lost: the rematch; lost it (or a title bout), down the ranks to this scene ($FF: none)
 wFtDropScene: db
 wFtOverScene: db            ; the third loss (or the last fight's): game over
+wFtWinNext: db              ; won: on to (the win screen's way on)
+wFtAwCareer: db             ; Punch-Out!!'s Another World Circuit (bit 7: in it): its first, its last (CAREER_*);
+wFtAwNext: db               ; won there: on to; lost (a rematch lost): down to
+wFtAwDrop: db
 wFtFightEnd:
 wRvNesX: db                 ; NES rival: his offset from his place (pixels right, down)
 wRvNesY: db
@@ -236,7 +240,8 @@ wRecWins: db
 wRecLosses: db
 wRecKOs: db
 wRecLost: db                ; lost to the one he faces: his next loss to him is a rematch lost
-wRecNext: db                ; where the loss screen goes: the rematch, down the ranks, or game over
+wAw: db                     ; Punch-Out!!'s Another World Circuit on (its pass key)
+wRecNext: db                ; where the result's screen goes: on, the rematch, down the ranks, or game over
 
 SECTION "Fight OAM", WRAM0, ALIGN[8]
 wFtOAM: ds 256              ; 40 sprites go to OAM; a busy frame's extras land in the spare room and aren't shown
@@ -2024,7 +2029,7 @@ FtDmgStreamVBlank:
     ldh a, [rLY]
     sub 144
     jr c, .stop
-    cp 151 - 144            ; (a tile's about a line: done by its last)
+    cp 153 - 144            ; (a tile's under a line: done by VBlank's last)
     jr nc, .stop
     ld b, 2
 .half:
@@ -4798,6 +4803,18 @@ FtCareerResult:
 .points:
     xor a
     ld [wRecLost], a
+    ld a, [wFtWinNext]      ; on: the next (in the Another World Circuit, its next)
+    ld b, a
+    ld a, [wAw]
+    and a
+    jr z, .on
+    ld a, [wFtAwNext]
+    cp $FF
+    jr z, .on
+    ld b, a
+.on:
+    ld a, b
+    ld [wRecNext], a
     ret
 .notWin:
     cp FT_LOSE_SCENE
@@ -4809,12 +4826,20 @@ FtCareerResult:
     ld a, [wRecLosses]
     cp 3
     jr nc, .next
+    ld a, [wAw]             ; (the Another World Circuit's ranks, if it's on)
+    and a
     ld a, [wFtCareer]
-    bit CAREER_FINAL, a
-    jr nz, .next
     ld c, a
     ld a, [wFtDropScene]
-    ld b, a
+    jr z, .ranks
+    ld a, [wFtAwCareer]
+    ld c, a
+    ld a, [wFtAwDrop]
+.ranks:
+    ld d, a                 ; (D: down to)
+    bit CAREER_FINAL, c
+    jr nz, .next            ; (B: game over)
+    ld b, d
     bit CAREER_TITLE, c
     jr nz, .dropped
     ld hl, wRecLost
@@ -4825,8 +4850,7 @@ FtCareerResult:
     jr z, .first
     bit CAREER_FIRST, c
     jr nz, .next
-    ld a, [wFtDropScene]
-    ld b, a
+    ld b, d
 .dropped:
     xor a
     ld [wRecLost], a
@@ -4852,12 +4876,38 @@ RecReset::
     ld [hl+], a
     ld [hl+], a
     ld [hl+], a
+    ld [hl+], a             ; (Another World off)
     ret
 
-; Mac's record as the challenger screen shows it, "W-L KKO", over the label it's baked as (screen off): HL = its
-; first cell in the map, DE = its glyph tiles (0-9, "-", "K", "O", blank). Nine cells, the rest blank.
+; Punch-Out!!'s Another World Circuit's words over the screen's (HL: how many, then each cell's address and tile);
+; the display on, a few a VBlank.
+AwPatch::
+    ld a, [hl+]
+    ld b, a
+.cell:
+    ld a, b
+    and 7
+    jr nz, .now
+    ldh a, [hLoadOn]
+    and a
+    call nz, VWait
+.now:
+    ld a, [hl+]
+    ld e, a
+    ld a, [hl+]
+    ld d, a
+    ld a, [hl+]
+    ld [de], a
+    dec b
+    jr nz, .cell
+    ret
+
+; Mac's record as the challenger screen shows it, the NES's "WW-LL KKKO" (each two wide, a space before one digit),
+; over the label it's baked as: HL = its first cell in the map, DE = its glyph tiles (0-9, "-", "K", "O", blank).
 RecordDraw::
-    ld b, 9
+    ldh a, [hLoadOn]        ; (the display on: in a VBlank)
+    and a
+    call nz, VWait
     ld a, [wRecWins]
     call .num
     ld a, 10
@@ -4871,17 +4921,8 @@ RecordDraw::
     ld a, 11
     call .glyph
     ld a, 12
-    call .glyph
-.pad:
-    ld a, b
-    and a
-    ret z
-    ld a, 13
-    call .glyph
-    jr .pad
-.num:                       ; A (0-99): its digits, no leading zero
-    cp 10
-    jr c, .glyph
+    jr .glyph
+.num:                       ; A (0-99): two cells, a space for no tens
     ld c, -1
 .tens:
     inc c
@@ -4890,6 +4931,10 @@ RecordDraw::
     add 10
     push af
     ld a, c
+    and a
+    jr nz, .tensDigit
+    ld a, 13
+.tensDigit:
     call .glyph
     pop af
 .glyph:                     ; [HL+] = glyph A's tile
@@ -4902,7 +4947,6 @@ RecordDraw::
     ld a, [de]
     ld [hl+], a
     pop de
-    dec b
     ret
 
 ; A = the scene the fight goes on to, from its result (won, lost, the corner): this fight's own (FtFights).
@@ -5514,8 +5558,8 @@ ENDC
     jr nc, .full            ; (no room left)
     ld a, [hl+]             ; dy
     add c
-    cp FT_HEAD_LIMIT        ; his band shows this row
-    jr nc, .skip3
+    cp FT_HEAD_LIMIT        ; his band shows this row (and every one after: the lists go top row first)
+    jr nc, .full
     ld [de], a
     ld a, [hl+]             ; dx
     add b
@@ -5533,8 +5577,6 @@ ENDC
     ld [de], a
     inc e
     jr .next
-.skip3:
-    inc hl
 .skip2:
     inc hl
     inc hl

@@ -242,7 +242,7 @@ const TYSON = {
   circuit: 'THE DREAM FIGHT', ring: RING_COLORS.dream,   // (his own ring: the game's last)
   lines: ['31-0 27KO', 'FROM', 'CATSKILL,', 'N.Y.', 'AGE: 21', 'WEIGHT:220'],
   playerRank: 'CHAMPION',               // Mac, the World Circuit's champion
-  playerLines: ['"WORLD"', '"MAJOR"', '"MINOR"', 'TITLEHOLDER', '13-0 13KO'],
+  playerLines: ['"WORLD"', '"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER', '13-0 13KO'],
   winRank: 'THE CHAMPION!',
   palettes: TYSON_PALETTES,
   poses: TYSON_POSES,
@@ -272,6 +272,7 @@ export const JOE_VS_MAC = {
   titleGloves: TITLE_GLOVES,
   ending: ENDING,
   gameOver: GAME_OVER,
+  anotherWorld: ['Hippo', 'Tiger', 'Honda2', 'Soda', 'Bull2', 'Don2', 'Sandman', 'Macho', 'Tyson'],   // (its pass key's)
   crowdArt: CROWD_ART,
   circuit: 'MINOR CIRCUIT',
   intermission: INTERMISSION,           // the training run between circuits

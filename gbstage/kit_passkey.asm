@@ -416,8 +416,8 @@ PwEncode::
     ret
 
 ; The title's pass key, as Punch-Out!!'s CONTINUE (ten digits at wPkDigits): A = the scene it starts at, Mac's record
-; set from it; $FF: no pass key. The Tyson code, the credits' (A, B and Select held), else a pass key's circuit:
-; its next one's first challenger (PwStarts: Major, World, the World title bout, Tyson, the ending).
+; set from it; $FF: no pass key; $FE: a busy signal. The Tyson code, the credits' and the Another World Circuit's (Select held), else a pass key's circuit:
+; its next one's first challenger (PwStarts: Major, World, the World title bout, Tyson, the ending, Another World).
 PwContinue::
     ld de, PwTyson
     call .same
@@ -428,15 +428,38 @@ PwContinue::
     ld a, [PwStarts + 3]
     ret
 .notTyson:
-    ldh a, [hPad]
-    and PADF_A | PADF_B | PADF_SELECT
-    cp PADF_A | PADF_B | PADF_SELECT
-    jr nz, .notCredits
+    ldh a, [hPad]           ; (the NES's A, B and Select held: here Select held as the last digit's pressed)
+    and PADF_SELECT
+    jr z, .notCredits
     ld de, PwCredits
     call .same
     ld a, [PwStarts + 4]
     ret z
+    ld de, PwAnother        ; the Another World Circuit: 0-0, its first challenger
+    call .same
+    jr nz, .notCredits
+    call RecReset
+    ld a, 1
+    ld [wAw], a
+    ld a, [PwStarts + 5]
+    ret
 .notCredits:
+    ld de, PwBusy           ; the three busy signals: $FE
+    ld c, 3
+.busy:
+    push bc
+    call .same
+    pop bc
+    ld a, $FE
+    ret z
+    ld a, e                 ; (the next ten: .same left DE B short of them)
+    add b
+    ld e, a
+    jr nc, .busyOn
+    inc d
+.busyOn:
+    dec c
+    jr nz, .busy
     ld hl, wPkDigits        ; a pass key?
     ld de, wPw + $20
     ld b, 10
@@ -487,10 +510,16 @@ PwContinue::
     jr nz, .digit
     ret
 
+PwBusy:                     ; ($8DA2) the busy signals: 075 541 6113, 800 422 2602, 206 882 2040
+    db 0, 7, 5, 5, 4, 1, 6, 1, 1, 3
+    db 8, 0, 0, 4, 2, 2, 2, 6, 0, 2
+    db 2, 0, 6, 8, 8, 2, 2, 0, 4, 0
 PwTyson:                    ; ($8DD4) 007 373 5963
     db 0, 0, 7, 3, 7, 3, 5, 9, 6, 3
 PwCredits:                  ; ($8DCA) 106 113 0120
     db 1, 0, 6, 1, 1, 3, 0, 1, 2, 0
+PwAnother:                  ; ($8DC0) 135 792 4680
+    db 1, 3, 5, 7, 9, 2, 4, 6, 8, 0
 
 ; Mac's record's pass key for circuit B (the training run's, between circuits): its digits at wPw+$10.
 PwKeyFromRecord::

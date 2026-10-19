@@ -360,7 +360,10 @@ Scene{i}Map:"""
 Scene{i}Attr:               ; palette number per tile (Game Boy Color only)
 {_db(s['cell_pal'] if s.get('cutscene') else _pad_rows(s['cell_pal'], bool(s.get('fight'))), 32)}
 """ + "".join(f"Scene{i}Record{n}:             ; Mac's record's glyphs: 0-9, -, K, O, blank\n    db {', '.join(map(str, g))}\n"
-              for n, (_, _, g) in enumerate(s.get("record_glyphs") or ()))
+              for n, (_, _, g) in enumerate(s.get("record_glyphs") or ())) + (
+        f"Scene{i}Aw:                 ; Another World Circuit's words: cells, then each's address and tile\n    db {len(s['aw_patch'])}\n"
+        + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n    db {tile}\n" for c, tile in s["aw_patch"])
+        if s.get("aw_patch") else "")
 
 
 # ---- palettes per scene ----------------------------------------------------------
@@ -766,6 +769,8 @@ def _scene_load(i, s, sprites, opt_index=None, markers=False):
         lines += [f"    ld hl, Scene{i}Tiles + 128 * 16", "    ld de, $8800            ; tiles 128-255",
                   f"    ld c, {n - 128}", "    call CopyTiles"]
     lines += [f"    ld hl, Scene{i}Map", "    call CopyMap", f"    ld hl, Scene{i}Attr", "    call CopyAttr"]
+    if s.get("aw_patch"):               # (Punch-Out!!'s Another World Circuit on: its words)
+        lines += ["    ld a, [wAw]", "    and a", "    jr z, .notAw", f"    ld hl, Scene{i}Aw", "    call AwPatch", ".notAw:"]
     for n, (x, y, _) in enumerate(s.get("record_glyphs") or ()):    # Mac's record, as it stands
         lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Record{n}", "    call RecordDraw"]
     if s.get("_rec_reset"):
@@ -1758,7 +1763,11 @@ def _career(scenes, fights, index_of):
         back = 2 if title[f] and sum(title[g] for g in fights[:k]) >= 2 else 1
         drop = chal.get(fights[max(0, k - back)], rematch[f]) if k else rematch[f]
         over = index_of.get(scenes[f]["fight"].get("game_over"), 0)
-        out[f] = (flags, rematch[f], drop, over)
+        win_next = press(index_of[scenes[f]["fight"]["win"]])
+        aw = scenes[f]["fight"].get("another_world") or {}
+        aw_flags = (0x80 | (2 if aw.get("first") else 0) | (4 if aw.get("final") else 0)) if aw else 0
+        out[f] = (flags, rematch[f], drop, over, win_next if win_next is not None else 255, aw_flags,
+                  index_of.get(aw.get("next"), 255), index_of.get(aw.get("drop"), 255))
     return out
 
 
@@ -1779,7 +1788,7 @@ def _fight_entry(i, s, index_of, suffix, all_pics=False, career=None):
             f"    db {f'BANK(RivalHeads{suffix})' if ft.get('rope_row') and not all_pics else '0'}\n"
             f"    db {f'BANK(PicHeader{suffix})' if s.get('fight_pics') else '0'}\n"
             f"    db {f'BANK(PicHeaderDmg{suffix})' if s.get('fight_pics_dmg') and s.get('fight_pics') else '0'}\n"
-            f"    db {', '.join(str(v) for v in (career or (0, 255, 255, 255)))}")
+            f"    db {', '.join(str(v) for v in (career or (0, 255, 255, 255, 255, 0, 255, 255)))}")
 
 
 def _heads_data(s, suffix):
@@ -2448,6 +2457,12 @@ def _pk_menu_code(i, pk, beep=True):
     call PlaySfx
     jp .pkShow
 .pkNotLR:
+    ld a, [wPkEdit]         ; (Select while typing: held for a special key, not a move)
+    and a
+    jr z, .pkAny
+    bit 2, b
+    jp nz, .cursor
+.pkAny:
     ld a, b
     and PADF_A | PADF_B | PADF_START
     jp z, .menu
@@ -3157,6 +3172,32 @@ TypeStep::
 def _pk_nes():
     """The title's pass key as Punch-Out!!'s: the NES's own (PwContinue), when none of the menu's codes matched."""
     return """    call PwContinueFar
+    cp $FE
+    jr nz, .pkNotBusy
+    ld c, 10                ; a busy signal, as the NES's: its beep ten times, a beat apart; then the key forgotten
+.pkBusy:
+    push bc
+    ld a, SFX_PASS_DIGIT
+    call PlaySfx
+    ld c, 48
+.pkBeat:                    ; (a frame: out of VBlank, then into the next)
+    ldh a, [rLY]
+    cp 144
+    jr nc, .pkBeat
+.pkFrame:
+    ldh a, [rLY]
+    cp 144
+    jr c, .pkFrame
+    push bc
+    call SfxUpdate
+    pop bc
+    dec c
+    jr nz, .pkBeat
+    pop bc
+    dec c
+    jr nz, .pkBusy
+    jr .pkNotNes
+.pkNotBusy:
     cp $FF
     jr z, .pkNotNes
     ld [wPkTarget], a
@@ -3707,21 +3748,25 @@ def generate_asm(project):
         keyed = [sc for sc in scenes if sc.get("cut_key")]     # the training runs' pass keys: circuit by circuit
         for n, sc in enumerate(keyed[:3]):
             sc["cut_key"]["circuit"] = n
-    pw_starts = [255] * 5               # where a pass key starts (PwContinue): the World title bout, the World
+    pw_starts = [255] * 6               # where a pass key starts (PwContinue): the World title bout, the World
     if career:                          # circuit, the Major (by circuit), Tyson, the ending
         ttl = [f for f in fights if career[f][0] & 1]
         chal_of = {f: next((j for j, sc in enumerate(scenes) if sc.get("press") and not sc.get("fight")
                             and index_of.get(sc["press"]["target"]) == f and j != career[f][1]), 255) for f in fights}
         last_win = index_of[scenes[fights[-1]]["fight"]["win"]]
         if len(ttl) == 3:
+            aw_first = next((f for f in fights if (scenes[f]["fight"].get("another_world") or {}).get("first")), None)
             pw_starts = [chal_of[fights[fights.index(ttl[0]) + 1]], chal_of[fights[fights.index(ttl[1]) + 1]],
-                         chal_of[ttl[2]], chal_of[fights[-1]], index_of.get(scenes[last_win]["press"]["target"], 255)]
-    for f in career or ():              # (a loss's screen goes where FtCareerResult says)
-        scenes[index_of[scenes[f]["fight"]["lose"]]]["_rec_next"] = True
+                         chal_of[ttl[2]], chal_of[fights[-1]], index_of.get(scenes[last_win]["press"]["target"], 255),
+                         chal_of[aw_first] if aw_first is not None else 255]
+    for f in career or ():              # (a loss's screen, a win's, go where FtCareerResult says)
+        for key in ("lose", "win", "win_tko"):
+            if scenes[f]["fight"].get(key) is not None:
+                scenes[index_of[scenes[f]["fight"][key]]]["_rec_next"] = True
     fight_table = "\n".join(_fight_entry(f, scenes[f], index_of, "" if k == 0 else f"_F{k}", _all_pics(project),
                                          (career or {}).get(f)) for k, f in enumerate(fights))
     fight_table += ("\nPwStarts::                  ; a pass key's starts: Major, World, the World title bout, Tyson, the"
-                    "\n    db " + ", ".join(map(str, pw_starts)) + "      ; ending ($FF: none)")
+                    "\n    db " + ", ".join(map(str, pw_starts)) + "      ; ending, Another World ($FF: none)")
     scene_code = []
     in_bank = {i: [] for i in range(len(scenes))}   # a banked game: a press-start screen's code and patches go in
     for i, s in enumerate(scenes):                  # its own data bank, mapped while it runs (ROM0 stays free)
@@ -4405,8 +4450,24 @@ OptionDefaults:
     db {", ".join(str(r["default"]) for r in opt_rows)}
 """)
     nes_sound = any((s.get("fight") or {}).get("nes", {}).get("sound") for s in scenes)
-    out.append(KIT_SFX if nes_sound else re.sub(r"IF DEF\(FT_NES_SOUND\)\n.*?ENDC\n", "", KIT_SFX, flags=re.S))
-    out.append('SECTION "Data: Sound effects", ROM0\n' + sfx_data + "\n")
+    kit_sfx = KIT_SFX if nes_sound else re.sub(r"IF DEF\(FT_NES_SOUND\)\n.*?ENDC\n", "", KIT_SFX, flags=re.S)
+    if banked:                      # (a banked game: the effects' data in a bank of its own, mapped while they run)
+        kit_sfx = re.sub(r"^PlaySfx:", "PlaySfxIn:", kit_sfx, flags=re.M)
+        kit_sfx = re.sub(r"^SfxUpdate:", "SfxUpdateIn:", kit_sfx, flags=re.M)
+        kit_sfx += "\n".join(f"""
+{name}:                  ; ({name}In, the effects' bank mapped, then the one that was: hBank)
+    push af
+    ld a, BANK(SfxData)
+    ld [$2100], a
+    pop af
+    call {name}In
+    push af
+    ldh a, [hBank]
+    ld [$2100], a
+    pop af
+    ret""" for name in ("PlaySfx", "SfxUpdate")) + "\n"
+    out.append(kit_sfx)
+    out.append(f'SECTION "Data: Sound effects", {"ROMX" if banked else "ROM0"}\n{"SfxData:" + chr(10) if banked else ""}' + sfx_data + "\n")
     if nes_sound:                   # each effect's counterpart in the NES game (an SQ1 effect; 0: none)
         out.append("SfxNes:\n" + _db([NES_SFX.get(n, 0) for n in sfx.effects(project.get("sound", "arcade"), sfx_groups(scenes))]) + "\n")
     for i, s in enumerate(scenes):      # (a banked game: a scene's load in its own bank, but a fight's: it maps its own)

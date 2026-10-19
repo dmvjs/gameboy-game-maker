@@ -26,7 +26,7 @@ NAMES = {"joe": "Glass Joe", "kaiser": "Von Kaiser", "honda": "Piston Honda", "d
 DMG_LCD = [(0xE0, 0xF8, 0xD0), (0x88, 0xC0, 0x70), (0x34, 0x68, 0x56), (0x08, 0x18, 0x20)]
 FPS = 59.7275
 RATE = 48000
-PREVIEW = (20, 8)               # the preview: seconds in, seconds long
+PREVIEW = (2.5, 8)              # the preview: seconds past his last knockdown it ends at, seconds long
 
 
 def fights():
@@ -92,6 +92,10 @@ def record(rom, key, out, grey=False):
         s = numpy.stack([numpy.interp(x, numpy.arange(len(a)), a[:, c]) for c in (0, 1)], axis=1)
         state["written"] += want
         wav.writeframes((numpy.round(s).astype("int16") + 128).clip(0, 255).astype("uint8").tobytes())
+        down = self.hram("hScene") == scene and self.nes(0x05) == 1     # (him down: the NES's $05)
+        if down and not state.get("down"):
+            state["ko"] = state["n"]        # (his last knockdown's first frame: where the preview's built round)
+        state["down"] = down
         state["n"] += 1
 
     def stop(self):
@@ -115,7 +119,9 @@ def record(rom, key, out, grey=False):
     subprocess.run([ff, "-y", "-loglevel", "error", "-i", tmp + ".mp4", "-i", tmp + ".wav", "-c:v", "copy",
                     "-c:a", "aac", "-b:a", "160k", "-shortest", out], check=True)
     gif = str(Path(out).with_suffix(".gif"))
-    subprocess.run([ff, "-y", "-loglevel", "error", "-ss", str(PREVIEW[0]), "-t", str(PREVIEW[1]), "-i", tmp + ".mp4",
+    ko = state.get("ko", state["n"]) / FPS  # the run-up to his last knockdown and his fall: the fight's best seconds
+    start = max(0.0, ko - PREVIEW[1] + PREVIEW[0])
+    subprocess.run([ff, "-y", "-loglevel", "error", "-ss", f"{start:.2f}", "-t", str(PREVIEW[1]), "-i", tmp + ".mp4",
                     "-vf", "fps=30,scale=320:288:flags=neighbor,split[a][b];[a]palettegen=max_colors=64[p];"
                     "[b][p]paletteuse=dither=none", gif], check=True)
     for p in (tmp + ".mp4", tmp + ".wav"):

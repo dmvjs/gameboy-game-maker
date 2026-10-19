@@ -175,6 +175,7 @@ def validate(data):
         if fight and back is not None:
             errors.append(f"{where}: B punches in a fight, so it can't also go back.")
         texts = _texts((s or {}).get("texts"), where, errors)
+        aw_texts = _texts((s or {}).get("awTexts"), where, errors) if (s or {}).get("awTexts") else None
         used = set(cell_pal)
         if len(used) > SCENE_BG_PALETTES:
             errors.append(f"{where} uses {len(used)} background palettes; a scene can use {SCENE_BG_PALETTES}.")
@@ -196,6 +197,7 @@ def validate(data):
         scenes.append({"name": name, "pixels": pixels, "cell_pal": cell_pal, "menu": menu, "press": press, "nes_dmc": dmc,
                        **({"nes_music": music} if music else {}),
                        "options": options, "puzzle": puzzle, "fight": fight, "back": back, "texts": texts,
+                       **({"aw_texts": aw_texts} if aw_texts else {}),
                        "slide": slide, **({"pass_key": pass_key} if pass_key else {}),
                        **({"cutscene": cutscene} if cutscene else {}), **({"typed": typed} if typed else {})})
 
@@ -810,6 +812,14 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
     game_over = ft.get("gameOver")              # (optional, Punch-Out!!'s circuits) the third loss's scene
     if game_over is not None and not (isinstance(game_over, int) and 0 <= game_over < scene_count and game_over != index):
         errors.append(f"{where}: the game over scene doesn't exist."); game_over = None
+    aw = ft.get("anotherWorld")                 # (optional) Punch-Out!!'s Another World Circuit: its next and the one
+    if aw is not None:                          # before (scenes), first, last
+        ok = isinstance(aw, dict) and all(aw.get(k) is None or (isinstance(aw.get(k), int) and 0 <= aw[k] < scene_count)
+                                          for k in ("next", "drop"))
+        aw = {"next": aw.get("next"), "drop": aw.get("drop"), "first": bool(aw.get("first")),
+              "final": bool(aw.get("final"))} if ok else None
+        if not ok:
+            errors.append(f"{where}: the Another World Circuit's scenes don't exist.")
     nes = _nes_fighter(ft.get("nes"), where, errors)
     fx = ft.get("effects") or {}
     if not (isinstance(fx, dict) and set(fx) <= set(kit.EFFECTS) and all(isinstance(v, bool) for v in fx.values())):
@@ -825,6 +835,7 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
             "text_slot": slots[0], "bar_slot": slots[1], "crowd_row": crowd, "opening": opening, "loop": loop, "timed": timed,
             **({"rope_row": rope} if rope else {}), **({"side_rope": [ord(c) - 48 for c in side]} if side else {}),
             "win": ft["win"], "lose": ft["lose"], "corner": corner, "win_tko": win_tko, "game_over": game_over,
+            **({"another_world": aw} if aw else {}),
             "effects": {k: fx.get(k, True) for k in kit.EFFECTS}, "nes": nes}
 
 
@@ -1429,6 +1440,21 @@ def compose(scene):
                 glyphs.append(tile_of(cell_key(img, c0)))
             rec.append((t["x"], t["y"], glyphs + [tile_of(cell_key(scene["pixels"], c0))]))
     scene["record_glyphs"] = rec
+    scene["aw_patch"] = []          # Punch-Out!!'s Another World Circuit: its words over these, cell by cell
+    if scene.get("aw_texts"):
+        aw = list(scene["pixels"])
+        for t in scene["aw_texts"]:
+            for x, y in text_ink(t["label"], t["x"], t["y"]):
+                aw[y * W + x] = t["text_slot"]
+        if press and press["prompt"]:
+            pr = press["prompt"]
+            for k, row in enumerate(pr["label"].split("\n")):
+                for x, y in text_ink(row, pr["x"], pr["y"] + k):
+                    aw[y * W + x] = pr["text_slot"]
+        for c in range(CW * CH):
+            key = cell_key(aw, c)
+            if key != tiles[scene["cell_tiles"][c]]:
+                scene["aw_patch"].append((c, tile_of(key)))
     if opts:
         base = list(composed)
         for r in opts["rows"]:

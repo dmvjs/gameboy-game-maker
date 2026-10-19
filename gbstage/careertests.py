@@ -114,6 +114,53 @@ def losses(rom):
                   + ("" if good else f" (wanted {' > '.join(want)})")]
 
 
+def _lose_from(rom, fight, losses, stop):
+    """Straight into a fight (bot.Game's way in), Mac's health gone each time it runs: the scenes it goes on to,
+    till one named stop (or `losses` losses)."""
+    from . import bot
+    names, _ = _scenes()
+    g = bot.Game(rom, fight)
+    S = g.S
+    seq, lost, last = [], 0, None
+    for f in range(30000):
+        sc = g.hram("hScene")
+        if sc != last:
+            seq.append(names[sc])
+            last = sc
+            if names[sc].endswith("wins"):
+                lost += 1
+            if lost >= losses and names[sc] == stop:
+                break
+        if g.hram("hFtActive") == 1:
+            g.m[g.w + 0x391] = 0
+        g.hold(["start"] if f % 50 < 3 and g.hram("hFtActive") != 1 else [])
+        g.tick(False)
+    g.stop()
+    return seq[seq.index(names[fight]):] if names[fight] in seq else seq
+
+
+def routes(rom):
+    """Losing as Punch-Out!!'s rules have it: a rematch lost (down a place), a title bout lost (down a place; in the
+    World circuit two), the last fight lost (game over)."""
+    cases = [("Kaiser: a rematch, then down to Glass Joe", 10, 2,
+              ["Fight: Kaiser", "Kaiser wins", "Rematch: Kaiser", "Fight: Kaiser", "Kaiser wins", "Challenger"]),
+             ("Honda (the Minor title): down to Von Kaiser", 17, 1,
+              ["Fight: Honda", "Honda wins", "Challenger: Kaiser"]),
+             ("Bald Bull (the Major title): down to Great Tiger", 45, 1,
+              ["Fight: Bull", "Bull wins", "Challenger: Tiger"]),
+             ("Super Macho Man (the World title): down two, to Don Flamenco", 87, 1,
+              ["Fight: Macho", "Macho wins", "Challenger: Don2"]),
+             ("Mike Tyson: game over", 94, 1, ["Fight: Tyson", "Tyson wins", "Game over"])]
+    lines, ok = [], True
+    for title, fight, losses, want in cases:
+        seq = _lose_from(rom, fight, losses, want[-1])
+        good = seq[:len(want)] == want
+        ok = ok and good
+        lines.append(f"    {'✓' if good else '✗'} {title}: {' > '.join(seq[:len(want)])}"
+                     + ("" if good else f" (wanted {' > '.join(want)})"))
+    return ok, lines
+
+
 def pass_key(rom):
     """005 737 5423 (3-0, 3 KOs, the Major Circuit's) typed on the title, as a player types it: Don Flamenco's
     challenger, Mac's record 3-0 3KO."""
@@ -146,6 +193,85 @@ def pass_key(rom):
     return good, [f"    {'✓' if good else '✗'} pass key 005 737 5423: {names[scene]}, record {rec[0]}-{rec[1]} {rec[2]}KO"]
 
 
+def another_world(rom):
+    """Punch-Out!!'s Another World Circuit: 135 792 4680 typed with Select held on its last digit (the NES's A, B
+    and Select): King Hippo's challenger, the circuit on, 0-0; won there, on to its next (Piston Honda, not Bald
+    Bull); its rematch lost, down its ranks (Great Tiger)."""
+    from pyboy import PyBoy
+    from . import bot
+    names, _ = _scenes()
+    S, _ = bot._symbols(rom)
+    pb = PyBoy(rom, window="null", cgb=True)
+    pb.set_emulation_speed(0)
+    m = pb.memory
+
+    def tap(b):
+        pb.button_press(b); pb.tick(3, False); pb.button_release(b); pb.tick(5, False)
+    f = 0
+    while (m[S["hScene"]] != 0 or f < 400) and f < 6000:
+        pb.tick(1, False)
+        f += 1
+    pb.tick(240, False)
+    tap("down")
+    pb.tick(20, False)
+    tap("right")
+    for k, ch in enumerate("1357924680"):
+        for _ in range(int(ch)):
+            tap("right")
+        if k == 9:
+            pb.button_press("select"); pb.tick(4, False)
+        tap("a")
+    pb.button_release("select")
+    pb.tick(600, False)
+    scene, on = names[m[S["hScene"]]], m[S["wAw"]]
+    pb.stop(save=False)
+    good = scene == "Challenger: Hippo" and on == 1
+    lines = [f"    {'✓' if good else '✗'} 135 792 4680: {scene}, the circuit {'on' if on else 'off'}"]
+
+    def aw_on(g, fight):
+        tick = g.tick
+
+        def t(*a, **k):
+            if g.hram("hScene") == fight:
+                g.m[g.S["wAw"]] = 1
+            return tick(*a, **k)
+        g.tick = t
+    fight = names.index("Fight: Tiger")                 # won there
+    g = bot.Game(rom, fight)
+    aw_on(g, fight)
+    g.stop = lambda: None
+    game, bot.Game = bot.Game, lambda *a, **k: g
+    try:
+        r = bot.play(rom, fight)
+    finally:
+        bot.Game = game
+    nxt = g.m[g.S["wRecNext"]]
+    win = r["won"] and nxt < len(names) and names[nxt] == "Challenger: Honda2"
+    lines.append(f"    {'✓' if win else '✗'} Great Tiger beaten there: on to {names[nxt] if nxt < len(names) else nxt}")
+    fight = names.index("Fight: Honda2")                # lost twice there
+    g = bot.Game(rom, fight)
+    aw_on(g, fight)
+    seq, lost, last = [], 0, None
+    for f in range(30000):
+        sc = g.hram("hScene")
+        if sc != last:
+            seq.append(names[sc])
+            last = sc
+            lost += names[sc].endswith("wins")
+            if lost >= 2 and names[sc].startswith("Challenger"):
+                break
+        if g.hram("hFtActive") == 1:
+            g.m[g.w + 0x391] = 0
+        g.hold(["start"] if f % 50 < 3 and g.hram("hFtActive") != 1 else [])
+        g.tick(False)
+    g.stop()
+    seq = seq[seq.index("Fight: Honda2"):] if "Fight: Honda2" in seq else seq
+    want = ["Fight: Honda2", "Honda2 wins", "Rematch: Honda2", "Fight: Honda2", "Honda2 wins", "Challenger: Tiger"]
+    drop = seq[:len(want)] == want
+    lines.append(f"    {'✓' if drop else '✗'} Piston Honda's rematch lost there: {' > '.join(seq[:len(want)])}")
+    return good and win and drop, lines
+
+
 def _job(args):
     name, rom = args
     return globals()[name](rom)
@@ -163,7 +289,8 @@ def run(log=print):
     rom.write_bytes(build.rom)
     Path(str(rom) + ".sym").write_text(build.sym)
     ok = True
-    titles = {"career": "The whole game, won (power-on to THE END)", "losses": "Losing", "pass_key": "CONTINUE"}
+    titles = {"career": "The whole game, won (power-on to THE END)", "losses": "Losing", "routes": "Down the ranks",
+              "pass_key": "CONTINUE", "another_world": "The Another World Circuit"}
     with ProcessPoolExecutor() as pool:
         for name, (good, lines) in zip(titles, pool.map(_job, [(n, str(rom)) for n in titles])):
             log(f"  {titles[name]}:")

@@ -83,6 +83,9 @@ export function boxingGame(pack) {
   const R = pack.rival, P = pack.player;
   const ringOf = rv => rv.ring || pack.ring;              // his ring's colors (Punch-Out!!'s change by circuit)
   const circuitOf = rv => rv.circuit || pack.circuit;     // his circuit's name
+  const nesText = l => l.replace(/^(\d+)-(\d+) (\d+)KO$/, (_, w, l2, k) => `${w.padStart(2)}-${l2.padStart(2)} ${k.padStart(2)}KO`)
+    .replace(/^RANKED NO\.(\d+)$/, 'RANKED: #$1');      // (a record and a rank as the NES writes them: "12- 1 10KO")
+  const titleX = l => /^"/.test(l) || l === 'TITLE-' ? 1 : l === 'HOLDER' ? 2 : 0;   // (Mac's titles: indented, the NES's)
   const matOf = rv => ringOf(rv)?.mat || MAT;
   const ROLE = { s: 3, g: 4, h: 5, t: 6 };               // portrait cells: these letters, or a digit k for portraitPalettes[k]
   const portraitPal = [];                                // portraitPalettes[k]'s palette (one with the same colors shared)
@@ -307,20 +310,43 @@ export function boxingGame(pack) {
       fillRect(lay, 0, 0, M.W, M.H, 3);
       portrait(scene, lay, rv.portrait, M.CW - PT, 3);
       portrait(scene, lay, P.portrait, 0, 10);
-      const right = (label, y, textSlot) => ({ label, x: M.CW - label.length, y, textSlot });
+      const right = (text, y, textSlot) => {
+        const label = nesText(text);
+        return { label, x: M.CW - label.length, y, textSlot };
+      };
       const lines = rv.playerLines || P.lines;          // (your record as it stands by then)
       const record = rematch ? lines.map(l => l.replace(/^(\d+)-(\d+) /, (_, w, l2) => `${w}-${+l2 + 1} `)) : lines;
       scene.texts = [
         { label: circuitOf(rv), x: 0, y: 0, textSlot: 1 },
         ...(rematch ? [{ label: 'REMATCH', x: 0, y: 1, textSlot: 1 }] : rv.titleBout ? [{ label: 'TITLE BOUT', x: 1, y: 1, textSlot: 1 }] : []),
         right(rv.rank, 1, 2), right(rv.name, 2, 0),
-        ...record.map((label, n) => ({ label, x: 0, y: 3 + n, textSlot: 0,     // (your record: as it stands,
-                                       ...(/^\d+-\d+ \d+KO$/.test(label) ? { record: true } : {}) }))   // live)
+        ...record.map((label, n) => ({ label: nesText(label), y: 8 - record.length + n, textSlot: 0,   // (your record: as it
+                                       x: /^FROM /.test(record[n - 1] || '') && !label.includes(':')    // stands, live; a
+                                         ? record[n - 1].length - label.length : titleX(label),        // place under its
+                                       ...(/^\d+-\d+ \d+KO$/.test(label) ? { record: true } : {}) }))   // FROM, its end's)
               .filter(t => t.label),
-        { label: rv.playerRank || P.rank, x: 0, y: 8, textSlot: 2 }, { label: P.name, x: 0, y: 9, textSlot: 0 },
+        { label: nesText(rv.playerRank || P.rank), x: 0, y: 8, textSlot: 2 }, { label: P.name, x: 0, y: 9, textSlot: 0 },
         { label: 'VS.', x: PT + 1, y: 10, textSlot: 1 },
-        ...rv.lines.map((label, n) => right(label, 11 + n, 0)),
+        ...(rv.lines.length < 6 ? [rv.lines[0], '"PROFILE"', ...rv.lines.slice(1)] : rv.lines)   // ("PROFILE", the NES's,
+          .map((label, n) => right(label, 11 + n, 0)),                                          // where it fits)
       ];
+      const aw = (pack.anotherWorld || []).indexOf(rv.short);   // Punch-Out!!'s Another World Circuit: the same
+      if (aw >= 0) {                                       // screen with its words (shown when that circuit's on)
+        const last = aw === pack.anotherWorld.length - 1, n = pack.anotherWorld.length;
+        const rank = scene.texts.find(t => t.label === nesText(rv.rank) && t.y === 1);
+        const macRank = rv.playerRank || P.rank;
+        scene.awTexts = [
+          { label: 'ANOTHER WORLD', x: 0, y: 0, textSlot: 1 }, { label: 'CIRCUIT', x: 0, y: 1, textSlot: 1 },
+          ...(rematch ? [{ label: 'REMATCH', x: 0, y: 2, textSlot: 1 }] : last ? [{ label: 'TITLE BOUT', x: 0, y: 2, textSlot: 1 }] : []),
+          ...scene.texts.filter(t => t.y > 1 && !(t.x === 0 && t.y >= 3 && t.y <= 8)),
+          ...(rank ? [right(last ? 'CHAMPION' : `RANKED: #${n - 1 - aw}`, 1, 2)] : []),
+          ...(rematch || last ? ['"WORLD"', '"MAJOR"', '"MINOR"', 'TITLE-HOLDER'].map((label, j) => ({ label, x: j < 3 ? 1 : 0, y: 3 + j, textSlot: 0 }))
+                              : ['"WORLD"', '"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER'].map((label, j) =>   // (the NES's: its
+                                  ({ label, x: j < 4 ? 1 : 2, y: 2 + j, textSlot: 0 }))),          // lines indented)
+          { label: nesText('0-0 0KO'), x: 0, y: 7, textSlot: 0, record: true },
+          { label: nesText(macRank).replace(/\d+$/, String(n - aw)), x: 0, y: 8, textSlot: 2 },
+        ];
+      }
       scene.pressStart = { target: id.fight, flashes: 3, area: null, prompt: { label: 'PUSH START!', x: 9, y: 17, textSlot: 1, blink: true },
                            ...(rv.nes?.sound ? { nesDmc: 1 } : {}),      // Start sets the crowd off, as in Punch-Out!!,
                            ...(CARD !== null ? { card: card([{ label: 'ROUND', dots: dots(1) }]) }   // and the round card
@@ -334,8 +360,11 @@ export function boxingGame(pack) {
     function nesCorner(scene, lay) {
       portrait(scene, lay, rv.portrait, M.CW - PT, 3);   // his top right, Mac's bottom left
       portrait(scene, lay, P.portrait, 0, M.CH - PT);
-      const right = (label, y, textSlot) => ({ label, x: M.CW - label.length, y, textSlot });
-      const playerRecord = (rv.playerLines || P.lines).at(-1);
+      const right = (text, y, textSlot) => {             // (a record too wide beside his name: kept short)
+        const label = /^\d+-\d+ \d+KO$/.test(text) && nesText(text).length + P.name.length >= M.CW ? text : nesText(text);
+        return { label, x: M.CW - label.length, y, textSlot };
+      };
+      const playerRecord = nesText((rv.playerLines || P.lines).at(-1));
       scene.texts = [
         { label: circuitOf(rv), x: 0, y: 0, textSlot: 1 },
         ...(rv.titleBout ? [{ label: 'TITLE BOUT', x: 1, y: 1, textSlot: 1 }] : []),
@@ -571,6 +600,15 @@ export function boxingGame(pack) {
   S[5].passKey = { x: 4, y: 8, textSlot: 0, target: 1 };
   S[5].back = 0;
 
+  // ---- Punch-Out!!'s Another World Circuit (its pass key): these fights in this order, each on to the next's
+  // challenger, a loss down to the one before's ----
+  const awOrder = (pack.anotherWorld || []).map(short => rivals.findIndex(rv => rv.short === short)).filter(k => k >= 0);
+  awOrder.forEach((k, j) => {
+    S[ids[k].fight].fight.anotherWorld = {
+      next: j + 1 < awOrder.length ? ids[awOrder[j + 1]].challenger : null,
+      drop: j > 0 ? ids[awOrder[j - 1]].challenger : null, first: j === 0, final: j === awOrder.length - 1 };
+  });
+
   // ---- The ending, after the last rival (Punch-Out!!'s, after Mike Tyson): his word to Mac under his portrait (his
   // win screens become it), each fighter's portrait and name in turn (the ten, no rematches), then Mac standing on
   // blue (the game's own picture), his record and THE END typed under him. Its song plays from the first; Start
@@ -597,7 +635,7 @@ export function boxingGame(pack) {
     const mx = (M.W - E.mac.w) >> 1, my = 8;
     for (let i = 0; i < E.mac.w * E.mac.h; i++) end.pixels[(my + (i / E.mac.w | 0)) * M.W + mx + i % E.mac.w] = +E.mac.pixels[i];
     [...E.mac.cells].forEach((c, k) => { end.cellPal[((my >> 3) + (k / (E.mac.w >> 3) | 0)) * M.CW + (mx >> 3) + k % (E.mac.w >> 3)] = macPals[+c]; });
-    const record = last.playerLines[last.playerLines.length - 1].replace(/^(\d+)-(\d+) (\d+)KO$/, (_, w, l, ko) => `${+w + 1}-${l} ${+ko + 1}KO`);
+    const record = last.playerLines[last.playerLines.length - 1].replace(/^(\d+)-(\d+) (\d+)KO$/, (_, w, l, ko) => nesText(`${+w + 1}-${l} ${+ko + 1}KO`));
     end.texts = [{ label: record, x: centered(record) >> 3, y: 15, textSlot: 3, record: true }];   // (his, as it stands)
     end.typed = { every: 15, pick: 'random', groups: [[[{ x: centered('THE END') >> 3, y: 17, w: 7, h: 1, lines: ['THE END'],
                                                            textSlot: 3, sound: null, pause: 0 }]]] };

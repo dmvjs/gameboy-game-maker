@@ -18,7 +18,8 @@ Tyson, on Game Boy Color and the original Game Boy.
   the ranks, and game over on the third loss, all by the NES's rules.
 - **The NES's pass keys.** Mac's record is kept fight to fight, and the training runs show its pass key, worked out
   by the NES's own algorithm (ported, and checked against the original). Keys from the NES work on CONTINUE: try
-  005 737 5423, or 007 373 5963 for Mike Tyson.
+  005 737 5423, or 007 373 5963 for Mike Tyson. The NES's secrets too: 135 792 4680 (hold Select as you enter the last
+  digit) for the Another World Circuit, and the busy signals (075 541 6113).
 - **Checked against real hardware timing.** Every fight runs in SameBoy with no video writes outside the time the
   hardware allows, on both machines. In the test suite, a bot that only presses buttons beats every fighter within
   two rounds, then plays the whole game from power-on to THE END; every opponent frame is compared with what the

@@ -272,7 +272,7 @@ export function addScene(p) {
 export function sceneReferences(p, s) {
   const refs = [];
   if (p.start === s) refs.push('it is the start scene');
-  p.scenes.forEach((sc, i) => {
+  p.scenes.forEach(sc => {
     if (sc.back === s) refs.push(`B on "${sc.name}" goes here`);
     sc.menu?.items.forEach(it => { if (it.target === s) refs.push(`"${it.label}" on "${sc.name}" goes here`); });
     if (sc.pressStart?.target === s) refs.push(`Start on "${sc.name}" goes here`);
@@ -283,6 +283,7 @@ export function sceneReferences(p, s) {
     if (sc.fight?.win === s) refs.push(`winning the fight on "${sc.name}" goes here`);
     if (sc.fight?.lose === s) refs.push(`losing the fight on "${sc.name}" goes here`);
     if (sc.fight?.corner === s) refs.push(`between rounds on "${sc.name}" goes here`);
+    if (sc.fight?.gameOver === s) refs.push(`the last loss on "${sc.name}" goes here`);
   });
   return refs;
 }
@@ -876,6 +877,7 @@ const cloneScene = s => ({ name: s.name, pixels: s.pixels.slice(), cellPal: s.ce
                            pressStart: clonePress(s.pressStart), pressed: s.pressed && s.pressed.slice(), back: s.back,
                            options: cloneOptions(s.options), puzzle: clonePuzzle(s.puzzle),
                            fight: cloneFight(s.fight), passKey: clonePass(s.passKey || null), texts: cloneTexts(s.texts),
+                           ...(s.awTexts ? { awTexts: cloneTexts(s.awTexts) } : {}),
                            slideIn: !!s.slideIn, nesDmc: s.nesDmc || 0, notes: s.notes || '',
                            ...(s.nesMusic ? { nesMusic: s.nesMusic } : {}),
                            ...(s.cutscene ? { cutscene: JSON.parse(JSON.stringify(s.cutscene)) } : {}),
@@ -906,6 +908,7 @@ export function serialize(p) {
       ...(s.passKey ? { passKey: clonePass(s.passKey) } : {}),
       back: s.back,
       ...(s.texts?.length ? { texts: cloneTexts(s.texts) } : {}),
+      ...(s.awTexts?.length ? { awTexts: cloneTexts(s.awTexts) } : {}),   // (Another World Circuit's words)
       ...(s.slideIn ? { slideIn: true } : {}),
       ...(s.nesDmc ? { nesDmc: s.nesDmc } : {}),
       ...(s.nesMusic ? { nesMusic: s.nesMusic } : {}),
@@ -964,6 +967,7 @@ export function deserialize(raw) {
         ? Uint8Array.from(s.pressed, ch => ch.charCodeAt(0) - 48) : null,
       back: Number.isInteger(s.back) ? s.back : null,
       texts: cloneTexts(s.texts),
+      ...(Array.isArray(s.awTexts) ? { awTexts: cloneTexts(s.awTexts) } : {}),
       slideIn: s.slideIn === true && !s.fight,
       nesDmc: Number.isInteger(s.nesDmc) ? s.nesDmc : 0,
       ...(Number.isInteger(s.nesMusic) && s.nesMusic > 0 ? { nesMusic: s.nesMusic } : {}),
