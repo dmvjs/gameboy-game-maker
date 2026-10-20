@@ -1,17 +1,22 @@
 ; ---- Punch-Out!!'s crowd, recorded: its NES sample played on the wave channel (off the fight) ---------------
 ; The NES plays its crowd as a sample (the DMC); the GB has no such channel, but its wave channel plays 32
-; four-bit steps over and over. So: the sample (CrowdPcm: the NES's own, decoded and taken to 16384 Hz, 4 bits),
-; 32 steps at a time, the wave channel retriggered on each with the next 32, by the timer (512 a second: 16384 /
-; 32), read from its bank (mapped, then hBank's again: it's set before every switch, so an interrupt never
-; leaves the wrong one). In the fight the noise channel's stands in for it (kit_nes_sound.asm, DmcStep).
+; four-bit steps over and over. So: the sample (CrowdPcm: the NES's own, decoded and taken to 10923 Hz, 4 bits),
+; 32 steps at a time, the wave channel retriggered on each with the next 32, by the timer (341 a second). It's
+; played from WRAMX (copied there the first time), so the interrupt never touches a ROM bank: the far calls map
+; theirs without noting it, and it couldn't put the right one back. In the fight the noise channel's stands in
+; for it (kit_nes_sound.asm, DmcStep).
 
 DEF rTIMA EQU $FF05
 DEF rTMA EQU $FF06
 DEF rTAC EQU $FF07
 DEF _AUD3WAVERAM EQU $FF30
 
+SECTION "Crowd PCM buffer", WRAMX[$D000]
+wPcm: ds CROWD_PCM_SIZE
+
 SECTION "Crowd PCM state", WRAM0
 wPcmOn: db                  ; playing
+wPcmLoaded: db              ; (copied to wPcm)
 wPcmPtr: dw                 ; the next 16 bytes
 
 SECTION "Crowd PCM, from any bank", ROM0
@@ -22,7 +27,28 @@ PcmMaybeFar::
     ldh a, [hFtActive]
     and a
     ret nz
+    ld a, [wPcmLoaded]
+    and a
+    jr nz, .loaded
+    ld a, BANK(CrowdPcm)    ; (its first time: into WRAMX, the caller's bank back after)
+    ld [$2100], a
     ld hl, CrowdPcm
+    ld de, wPcm
+    ld bc, CROWD_PCM_SIZE
+.copy:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec bc
+    ld a, b
+    or c
+    jr nz, .copy
+    ldh a, [hBank]
+    ld [$2100], a
+    ld a, 1
+    ld [wPcmLoaded], a
+.loaded:
+    ld hl, wPcm
     ld a, l
     ld [wPcmPtr], a
     ld a, h
@@ -30,7 +56,7 @@ PcmMaybeFar::
     ld a, 1
     ld [wPcmOn], a
     call PcmFill
-    ld a, 256 - 128         ; (65536 Hz, counting: 512 overflows a second)
+    ld a, 256 - 192         ; (65536 Hz, counting: 341 overflows a second)
     ldh [rTMA], a
     ldh [rTIMA], a
     ld a, %110
@@ -54,8 +80,6 @@ PcmTick::
 
 ; The wave channel off, its RAM the next 16 bytes, on again from the first (8192 steps a second: 2048 - 256).
 PcmFill::
-    ld a, BANK(CrowdPcm)
-    ld [$2100], a
     ld a, [wPcmPtr]
     ld l, a
     ld a, [wPcmPtr + 1]
@@ -70,22 +94,20 @@ PcmFill::
     ldh [rAUD3ENA], a
     ld a, $20               ; (all of it)
     ldh [rAUD3LEVEL], a
-    ld a, $80
+    ld a, $40
     ldh [rAUD3LOW], a
-    ld a, $87               ; (restart: 2048 - $780 = 128)
+    ld a, $87               ; (restart: 2048 - $740 = 192)
     ldh [rAUD3HIGH], a
-    ldh a, [hBank]
-    ld [$2100], a
     ld a, l
-    cp LOW(CrowdPcm + CROWD_PCM_SIZE)
+    cp LOW(wPcm + CROWD_PCM_SIZE)
     jr nz, .on
     ld a, h
-    cp HIGH(CrowdPcm + CROWD_PCM_SIZE)
+    cp HIGH(wPcm + CROWD_PCM_SIZE)
     jr nz, .on
     ld a, [wDmcLoop]        ; its end: again, if it loops, else done
     and a
     jr z, PcmStop
-    ld hl, CrowdPcm
+    ld hl, wPcm
 .on:
     ld a, l
     ld [wPcmPtr], a

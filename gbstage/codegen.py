@@ -101,13 +101,13 @@ def _noise_centroids(rate, per):
 _NOISE = {}
 
 
-PCM_RATE = 16384                # (kit_pcm.asm: the wave channel's 2048 - 128, the timer's 256 - 128)
+PCM_RATE = 2097152 / 192        # (kit_pcm.asm: the wave channel's 2048 - 192, the timer's 256 - 192: 10923 Hz)
 
 
 def _crowd_pcm(nes):
     """Punch-Out!!'s crowd (its first DMC sample), recorded, for the wave channel (kit_pcm.asm): the NES's 1-bit
     delta stream decoded at the rate the game plays it (33144 Hz), averaged down to 8192 Hz, 4 bits a step, two
-    to a byte (the first high), whole 32-step buffers (16384 Hz: the NES's own sound up to 8 kHz)."""
+    to a byte (the first high), whole 32-step buffers (10923 Hz: 4 KB, the original's WRAMX)."""
     fixed, data = nes["sound_fixed"], nes["samples"]
     a, n = fixed[0x368], fixed[0x369] * 16 + 1
     start = 0xC000 + a * 64 - 0xE000
@@ -134,7 +134,7 @@ def _crowd_pcm(nes):
         rot += [blk[-1]] + blk[:-1]
     packed = [rot[i] << 4 | rot[i + 1] for i in range(0, len(rot), 2)]
     return (f"DEF CROWD_PCM_SIZE EQU {len(packed)}\nSECTION \"Data: Crowd PCM\", ROMX\n"
-            f"CrowdPcm:                   ; the crowd, recorded: {PCM_RATE} Hz, 4 bits ({len(steps)} steps)\n{_db(packed)}\n")
+            f"CrowdPcm:                   ; the crowd, recorded: {round(PCM_RATE)} Hz, 4 bits ({len(steps)} steps)\n{_db(packed)}\n")
 
 
 def _dmc_tables(nes):
@@ -170,10 +170,6 @@ def _dmc_tables(nes):
                 held = v
             steady.append(held)
         smooth = [sorted(rates[max(0, i - 1):i + 2])[len(rates[max(0, i - 1):i + 2]) // 2] for i in range(len(rates))]
-        import os
-        if os.environ.get("GBSTAGE_DMC_STEADY"):          # (experiment: one brightness for the whole sample)
-            mean = sum(r * v for r, v in zip(rates, vols)) / max(1, sum(vols))
-            smooth = [mean] * len(rates)
         addrs.append(a)
         envs.append([x for v, r in zip(steady, smooth) for x in (v, clock(r))])
     lines = ["DmcAddr:                    ; each sample's $4012, as the engine starts it", _db(addrs),

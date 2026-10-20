@@ -17,6 +17,9 @@ On each console, note anything that looks or sounds different from the emulator.
 - [ ] Camera flashes in the crowd while he's down; on Color, the crowd pulses after his KO.
 - [ ] Get-ups: his head over the crowd, no crowd showing through him.
 - [ ] Between rounds (the corner) and back: the fight carries on where it was.
+- [ ] The corner: Doc's mouth and hand move as on the NES; press Select once and he rubs faster (once per fight).
+- [ ] The crowd on the challenger screen and in the corner: the NES's recorded roar (not a hiss); no clicks or buzz.
+- [ ] Challenger and corner close-ups at the NES's full size; on the original Game Boy, no light blocks in them.
 - [ ] Lose a fight on purpose: DON'T CRY, MAC!, then REMATCH with 0-1 0KO.
 - [ ] Lose three times: the game over screen (Mac on his stool), then the title.
 - [ ] Beat Piston Honda: the training run's pass key; write it down.
