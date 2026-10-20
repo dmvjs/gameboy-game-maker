@@ -134,6 +134,7 @@ def record(rom, key, out, grey=False):
 
 def site(d):
     d = Path(d)
+    d.mkdir(parents=True, exist_ok=True)    # (no videos downloaded: a page saying so, not a crash)
     rows = []
     for key, _, name in fights():
         cells = "".join(

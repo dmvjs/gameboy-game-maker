@@ -50,38 +50,54 @@ NES_RGB = [(84, 84, 84), (0, 30, 116), (8, 16, 144), (48, 0, 136), (68, 0, 100),
            (236, 238, 236), (168, 204, 236), (188, 188, 236), (212, 178, 236), (236, 174, 236), (236, 174, 212), (236, 180, 176),
            (228, 196, 144), (204, 210, 120), (180, 222, 120), (168, 226, 144), (152, 226, 180), (160, 214, 228), (160, 162, 160), (0, 0, 0), (0, 0, 0)]
 
+def _fft(x):
+    """An FFT (radix 2, len(x) a power of two), plain Python."""
+    import cmath
+    n = len(x)
+    if n == 1:
+        return list(x)
+    even, odd = _fft(x[0::2]), _fft(x[1::2])
+    out = [0j] * n
+    for k in range(n // 2):
+        w = cmath.exp(-2j * cmath.pi * k / n) * odd[k]
+        out[k], out[k + n // 2] = even[k] + w, even[k] - w
+    return out
+
+
 def _centroid(c, rate):
-    """A frame's brightness: its spectrum's centroid (Hz), Hann-windowed."""
-    import numpy as np
-    c = np.asarray(c, float)
-    s = np.abs(np.fft.rfft((c - c.mean()) * np.hanning(len(c))))
-    f = np.fft.rfftfreq(len(c), 1 / rate)
-    return float((f * s).sum() / s.sum()) if s.sum() > 0 else 0.0
-
-
-_NOISE = {}
+    """A frame's brightness: its spectrum's centroid (Hz), Hann-windowed (zero-padded to a power of two)."""
+    import math
+    n = len(c)
+    m = sum(c) / n
+    win = [(v - m) * (0.5 - 0.5 * math.cos(2 * math.pi * i / (n - 1))) for i, v in enumerate(c)]
+    size = 1 << (n - 1).bit_length()
+    spec = _fft(win + [0.0] * (size - n))
+    mags = [abs(spec[k]) for k in range(size // 2 + 1)]
+    total = sum(mags)
+    return sum(k * rate / size * v for k, v in enumerate(mags)) / total if total else 0.0
 
 
 def _noise_centroids(rate, per):
     """Each GB noise clock (NR43, the 15-step LFSR) and its brightness measured as _centroid measures a sample's
-    frame: the LFSR simulated, held at its clock, sampled at the NES sample's rate."""
-    import numpy as np
-    if (rate, per) not in _NOISE:
-        lfsr, bits = 0x7FFF, []
-        for _ in range(32767):
-            bits.append(~lfsr & 1)
-            x = (lfsr ^ (lfsr >> 1)) & 1
-            lfsr = (lfsr >> 1) | (x << 14)
-        bits = np.array(bits, float) * 2 - 1
-        out = []
-        for s in range(14):
-            for r in range(8):
-                hz = 524288 / (0.5 if r == 0 else r) / 2 ** (s + 1)
-                n = per * 8
-                x = bits[(np.floor(np.arange(n) * hz / rate).astype(np.int64)) % 32767]
-                out.append((s << 4 | r, float(np.mean([_centroid(x[i * per:(i + 1) * per], rate) for i in range(8)]))))
-        _NOISE[(rate, per)] = out
-    return _NOISE[(rate, per)]
+    frame: the LFSR simulated, held at its clock, sampled at the NES sample's rate (once a build)."""
+    if (rate, per) in _NOISE:
+        return _NOISE[(rate, per)]
+    lfsr, bits = 0x7FFF, []
+    for _ in range(32767):
+        bits.append(1.0 if ~lfsr & 1 else -1.0)
+        x = (lfsr ^ (lfsr >> 1)) & 1
+        lfsr = (lfsr >> 1) | (x << 14)
+    out = []
+    for s in range(14):
+        for r in range(8):
+            hz = 524288 / (0.5 if r == 0 else r) / 2 ** (s + 1)
+            x = [bits[int(i * hz / rate) % 32767] for i in range(per * 8)]
+            out.append((s << 4 | r, sum(_centroid(x[i * per:(i + 1) * per], rate) for i in range(8)) / 8))
+    _NOISE[(rate, per)] = out
+    return out
+
+
+_NOISE = {}
 
 
 def _dmc_tables(nes):
@@ -117,6 +133,10 @@ def _dmc_tables(nes):
                 held = v
             steady.append(held)
         smooth = [sorted(rates[max(0, i - 1):i + 2])[len(rates[max(0, i - 1):i + 2]) // 2] for i in range(len(rates))]
+        import os
+        if os.environ.get("GBSTAGE_DMC_STEADY"):          # (experiment: one brightness for the whole sample)
+            mean = sum(r * v for r, v in zip(rates, vols)) / max(1, sum(vols))
+            smooth = [mean] * len(rates)
         addrs.append(a)
         envs.append([x for v, r in zip(steady, smooth) for x in (v, clock(r))])
     lines = ["DmcAddr:                    ; each sample's $4012, as the engine starts it", _db(addrs),
@@ -402,6 +422,8 @@ Scene{i}Attr:               ; palette number per tile (Game Boy Color only)
         for n, (_, _, g) in enumerate(s.get("aw_record_glyphs") or ())) + "".join(
         f"Scene{i}Time{n}:               ; the fight's time's glyphs: each digit's cell, 0-9\n    db {', '.join(str(v) for g in cells for v in g)}\n"
         for n, (_, _, cells) in enumerate(s.get("time_glyphs") or ())) + (
+        f"Scene{i}Greys:              ; the original's: tiles whose palette has greys of its own, each's map (2 bits a slot)\n"
+        f"    db {len(s['dmg_remap'])}\n" + "".join(f"    db {tl}, ${m:02X}\n" for tl, m in s["dmg_remap"]) if s.get("dmg_remap") else "") + (
         f"Scene{i}Doc:                ; Doc's states (Punch-Out!!'s corner): cells, then each's address, then each state's tiles\n"
         f"    db {len(s['doc_patch']['cells'])}\n" + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n" for c in s["doc_patch"]["cells"])
         + "".join(f"    db {', '.join(map(str, row))}\n" for row in s["doc_patch"]["tiles"]) if s.get("doc_patch") else "") + (
@@ -812,6 +834,8 @@ def _scene_load(i, s, sprites, opt_index=None, markers=False):
     if n > 128:
         lines += [f"    ld hl, Scene{i}Tiles + 128 * 16", "    ld de, $8800            ; tiles 128-255",
                   f"    ld c, {n - 128}", "    call CopyTiles"]
+    if s.get("dmg_remap"):              # (the original Game Boy: its close-ups' tiles in their own greys)
+        lines += ["    ldh a, [hIsCGB]", "    and a", "    jr nz, .greysDone", f"    ld hl, Scene{i}Greys", "    call DmgRemap", ".greysDone:"]
     lines += [f"    ld hl, Scene{i}Map", "    call CopyMap", f"    ld hl, Scene{i}Attr", "    call CopyAttr"]
     for n, (x, y, _) in enumerate(s.get("record_glyphs") or ()):    # Mac's record, as it stands
         lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Record{n}", "    call RecordDraw"]

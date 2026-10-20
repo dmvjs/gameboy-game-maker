@@ -239,6 +239,7 @@ wDocHand: db
 wDocDirty: db
 wDocAddr: ds 32
 wDocTile: ds 64
+wRemap: ds 4                ; (DmgRemap: a row's pixels of each slot)
 wFtRoom: db                 ; loading with the display on (FT_LOAD_ON): this VBlank's time left (FtRoom)
 wFtRoomN: db                ; (FtCopy: blocks this time, their bytes)
 wFtRoomBytes: dw
@@ -3435,6 +3436,88 @@ DocVBlank::
     pop hl
     dec c
     jr nz, .cell
+    ret
+
+; The original Game Boy, a scene loading (screen off): tiles whose palette has its own greys put in them (HL: how
+; many, then each one's number and map, 2 bits a slot). A row at a time: each slot's pixels, then the greys'.
+DmgRemap::
+    ld a, [hl+]
+    and a
+    ret z
+    ld b, a
+.tile:
+    push bc
+    ld a, [hl+]
+    ld c, [hl]
+    inc hl
+    push hl
+    ld l, a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    bit 7, a                ; (0-127 from $9000, 128-255 from $8800)
+    ld a, $90
+    jr z, .low
+    ld a, $80
+.low:
+    add h
+    ld h, a
+    ld b, 8
+.row:
+    ld e, [hl]
+    inc hl
+    ld d, [hl]
+    ld a, e
+    or d
+    cpl
+    ld [wRemap], a          ; slot 0's pixels
+    ld a, d
+    cpl
+    and e
+    ld [wRemap + 1], a
+    ld a, e
+    cpl
+    and d
+    ld [wRemap + 2], a
+    ld a, e
+    and d
+    ld [wRemap + 3], a
+    push bc
+    push hl
+    ld hl, wRemap
+    ld de, 0                ; (D the new high plane, E the low)
+    ld b, 4
+.slot:
+    ld a, [hl+]
+    rr c
+    jr nc, .noLow
+    push af
+    or e
+    ld e, a
+    pop af
+.noLow:
+    rr c
+    jr nc, .noHigh
+    or d
+    ld d, a
+.noHigh:
+    dec b
+    jr nz, .slot
+    pop hl
+    pop bc
+    ld [hl], d
+    dec hl
+    ld [hl], e
+    inc hl
+    inc hl
+    dec b
+    jr nz, .row
+    pop hl
+    pop bc
+    dec b
+    jr nz, .tile
     ret
 
 ; Leaving it ($A8B7): unused, it's armed again next time; used, never again this fight.

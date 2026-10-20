@@ -578,6 +578,74 @@ def exact_palettes(tiles, limit):
     return out
 
 
+FULL_GREYS = {}
+
+
+def _grey_levels(pals, tiles):
+    """Each palette's slots as greys (0 white to 3 black) for the original Game Boy: the picture's colors split into
+    4 by brightness (k-means, by use), each color the grey of its group."""
+    lum = lambda c: 2 * c[0] + 4 * c[1] + c[2]
+    use = {}
+    for tl in tiles:
+        for c in tl:
+            use[tuple(c)] = use.get(tuple(c), 0) + 1
+    vals = sorted({lum(v) for v in use})
+    centers = [vals[int((len(vals) - 1) * q)] for q in (0, 1 / 3, 2 / 3, 1)]
+    for _ in range(20):
+        groups = [[] for _ in range(4)]
+        for c, n in use.items():
+            groups[min(range(4), key=lambda k: abs(lum(c) - centers[k]))].append((lum(c), n))
+        centers = sorted(sum(l * n for l, n in g) / sum(n for _, n in g) if g else centers[k] for k, g in enumerate(groups))
+    return [[3 - min(range(4), key=lambda k: abs(lum(c) - centers[k])) for c in p] for p in pals]
+
+
+def _grey_slots(pals, tiles):
+    """Palettes reordered so a color's slot is its grey on the original Game Boy (one map for every palette): the
+    picture's colors split by brightness into 4 levels (by use, k-means), each palette's colors put at their
+    level's slot (a clash moved to the nearest free one), a palette's unused slots its neighbors' colors."""
+    lum = lambda c: 2 * c[0] + 4 * c[1] + c[2]
+    use = {}
+    for tl in tiles:
+        for c in tl:
+            use[tuple(c)] = use.get(tuple(c), 0) + 1
+    vals = sorted(use, key=lum)
+    cuts = [lum(vals[int(len(vals) * q)]) for q in (0.25, 0.5, 0.75)] if len(vals) >= 4 else [0, 0, 0]
+    centers = sorted({lum(v) for v in vals})
+    centers = [centers[int((len(centers) - 1) * q)] for q in (0, 1 / 3, 2 / 3, 1)]
+    for _ in range(20):                                   # (k-means on brightness, weighted by use)
+        groups = [[] for _ in range(4)]
+        for c, n in use.items():
+            groups[min(range(4), key=lambda k: abs(lum(c) - centers[k]))].append((lum(c), n))
+        centers = [sum(l * n for l, n in g) / sum(n for _, n in g) if g else centers[k] for k, g in enumerate(groups)]
+        centers.sort()
+    level = lambda c: 3 - min(range(4), key=lambda k: abs(lum(c) - centers[k]))   # (0 lightest: slot 0 white)
+    sets = [{tuple(c) for c in p} for p in pals]
+    gslot = {}                                            # (each color one slot in every palette: the commonest
+    mid = (centers[0] + centers[3]) / 2                   # first: the darkest and lightest, then the rest by use)
+    for c in sorted({c for s in sets for c in s}, key=lambda c: (-abs(lum(c) - mid) // 40, -use.get(c, 0))):
+        for d in (0, 1, -1, 2, -2, 3, -3):
+            s = level(c) + d
+            if 0 <= s < 4 and all(gslot.get(o) != s for st in sets if c in st for o in st if o != c):
+                gslot[c] = s
+                break
+    out = []
+    for p in pals:
+        cols = sorted({tuple(c) for c in p}, key=lum, reverse=True)
+        slots = [None] * 4
+        for c in cols:
+            want = gslot.get(c, level(c))
+            for d in (0, 1, -1, 2, -2, 3, -3):
+                s = want + d
+                if 0 <= s < 4 and slots[s] is None:
+                    slots[s] = c
+                    break
+        for s in range(4):                                # (unused: the nearest filled slot's color)
+            if slots[s] is None:
+                slots[s] = next(slots[s + d] for d in (1, -1, 2, -2, 3, -3) if 0 <= s + d < 4 and slots[s + d] is not None)
+        out.append([list(c) for c in slots])
+    return out
+
+
 def _draw_wh(px, pals, w, h, cells_given=None):
     slots, cells = [0] * (w * h), []
     for k, tile in enumerate(_tiles_wh(px, w, h)):
@@ -608,8 +676,9 @@ def _full_portraits(palettes):
     for name, imgs in groups:
         tiles = [t for img in imgs for t in _tiles_wh(img, FULL_W, FULL_H)]
         pals = exact_palettes(tiles, 3)     # (3 each: with the text's and the round card's, a screen's 8)
-        pals = [sorted(p, key=lambda c: -(2 * c[0] + 4 * c[1] + c[2])) for p in pals]   # (lightest first: the
-                                                                                         # original's one grey map)
+        pals = [sorted(p, key=lambda c: -(2 * c[0] + 4 * c[1] + c[2])) for p in pals]   # (lightest first)
+        for k, g in enumerate(_grey_levels(pals, tiles)):    # (each slot's grey on the original, this picture's:
+            FULL_GREYS[len(palettes) + k] = g                #  the scene's tiles put in them as it loads there)
         per = [_tiles_wh(img, FULL_W, FULL_H) for img in imgs]   # (one palette per tile, the best through every state)
         cells = [min(range(len(pals)), key=lambda p: sum(_tile_err(ts[k], pals[p]) for ts in per)) for k in range(len(per[0]))]
         drawn = [_draw_wh(img, pals, FULL_W, FULL_H, cells) for img in imgs]
@@ -1899,6 +1968,7 @@ def write_js(colors, pposes, note, faces, mac_pal, rivals, mac_cgb=None, full=No
     L += [f"  {n}: '{v}'," for n, v in (mac_cgb or pposes).items()]
     L += ["};", "", "// Close-ups, 48x48: pixels are slots; cells are each tile's palette, a digit into PORTRAIT_PALETTES.",
           f"export const TEXT_PALETTE = {json.dumps(TEXT_PALETTE)};", f"export const PORTRAIT_PALETTES = {json.dumps(mac_pal)};",
+          f"export const PORTRAIT_GREYS = {json.dumps([FULL_GREYS.get(k) for k in range(len(mac_pal))])};   // (the original's greys, per slot)",
           "export const PORTRAITS = {"]
     L += [f"  {n}: {{ pixels: '{v['pixels']}', cells: '{v['cells']}' }}," for n, v in faces.items()]
     L += ["};", "", "// The NES's close-ups at full size (80x72): each rival's, and Doc and Mac (docmac) with the corner's four states.",

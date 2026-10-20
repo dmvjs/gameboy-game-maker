@@ -122,8 +122,9 @@ export function boxingGame(pack) {
   const [title, passKey] = [M.layerOf(p, 0), M.layerOf(p, 5)];
   const LOGO = p.palettes.length - 1;                    // the title logo's palette (when there is one)
   (pack.portraitPalettes || []).forEach((colors, k) => {
-    const at = p.palettes.findIndex(q => JSON.stringify(q.colors) === JSON.stringify(colors));
-    portraitPal.push(at >= 7 ? at : p.palettes.push(pal(`Portrait ${k + 1}`, colors)) - 1);
+    const greys = pack.portraitGreys?.[k];               // (the original Game Boy's greys for its slots, if not as is)
+    const at = p.palettes.findIndex(q => JSON.stringify(q.colors) === JSON.stringify(colors) && JSON.stringify(q.greys) === JSON.stringify(greys || undefined));
+    portraitPal.push(at >= 7 ? at : p.palettes.push({ ...pal(`Portrait ${k + 1}`, colors), ...(greys ? { greys } : {}) }) - 1);
   });
   const S = p.scenes;
 

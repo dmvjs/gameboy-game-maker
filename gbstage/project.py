@@ -269,6 +269,8 @@ def validate(data):
     project = {
         "name": str(data.get("name") or "Untitled"),
         "palettes": [p["colors"] for p in bg],
+        "palette_greys": [p["greys"] if isinstance(p.get("greys"), list) and len(p["greys"]) == 4
+                          and all(g in (0, 1, 2, 3) for g in p["greys"]) else None for p in bg],
         "palette_names": [str(p.get("name") or f"Palette {i + 1}") for i, p in enumerate(bg)],
         "obj_palettes": [p["colors"] for p in obj],
         "obj_palette_names": [str(p.get("name") or f"Sprite palette {i + 1}") for i, p in enumerate(obj)],
@@ -284,6 +286,14 @@ def validate(data):
             s["_palettes"] = project["palettes"]    # (a fighter's greys are picked from his colors)
             compose(s)
             s.pop("_palettes", None)
+            remap, seen = [], set()     # (the original Game Boy: tiles in a palette with greys of its own, put in those)
+            for c, tl in enumerate(s.get("cell_tiles") or []):
+                g = project["palette_greys"][s["cell_pal"][c]] if s["cell_pal"][c] < len(project["palette_greys"]) else None
+                if tl in seen or not g or g == [0, 1, 2, 3]:
+                    continue
+                seen.add(tl)
+                remap.append((tl, sum(((g[k] & 1) | (g[k] >> 1) << 1) << (2 * k) for k in range(4))))
+            s["dmg_remap"] = remap
             if len(s["tiles"]) > MAX_TILES:
                 extra = (" (the rival's always-there poses, plus room for his largest pose set, and the HUD's digits "
                          f"and bars; sets: {s['fight_swap']['sizes']})") if s.get("fight") else ""

@@ -36,7 +36,7 @@ export const OBJ_PRESETS = [
   { name: 'Hero', colors: [[31, 31, 31], [31, 24, 18], [10, 18, 31], [2, 2, 8]] },
 ];
 
-const clonePalette = p => ({ name: p.name, colors: p.colors.map(c => [...c]) });
+const clonePalette = p => ({ name: p.name, colors: p.colors.map(c => [...c]), ...(p.greys ? { greys: [...p.greys] } : {}) });
 
 // ---- font (shared with the code generator: gbstage/font.txt) ---------------
 
@@ -982,7 +982,8 @@ export function deserialize(raw) {
   const c = data.cursor;
   return {
     name: String(data.name || 'Untitled'),
-    palettes: bg.map(pal => ({ name: String(pal.name || 'Palette'), colors: pal.colors.map(x => [...x]) })),
+    palettes: bg.map(pal => ({ name: String(pal.name || 'Palette'), colors: pal.colors.map(x => [...x]),
+                               ...(Array.isArray(pal.greys) && pal.greys.length === 4 ? { greys: pal.greys.map(Number) } : {}) })),
     objPalettes: obj.map(pal => ({ name: String(pal.name || 'Sprite palette'), colors: pal.colors.map(x => [...x]) })),
     cursor: c && typeof c.pixels === 'string' && c.pixels.length === 64
       ? { palette: c.palette | 0, pixels: Uint8Array.from(c.pixels, ch => ch.charCodeAt(0) - 48) } : null,
