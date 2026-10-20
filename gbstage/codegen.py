@@ -28,6 +28,7 @@ KIT_FIGHT = __import__("pathlib").Path(__file__).with_name("kit_fight.asm").read
 KIT_NES = __import__("pathlib").Path(__file__).with_name("kit_nes.asm").read_text()
 KIT_NES_SOUND = __import__("pathlib").Path(__file__).with_name("kit_nes_sound.asm").read_text()
 KIT_PASSKEY = __import__("pathlib").Path(__file__).with_name("kit_passkey.asm").read_text()
+KIT_PCM = __import__("pathlib").Path(__file__).with_name("kit_pcm.asm").read_text()
 
 
 # The template's effects as Punch-Out!!'s (its SQ1 effect numbers): what plays when a project has its engine.
@@ -98,6 +99,42 @@ def _noise_centroids(rate, per):
 
 
 _NOISE = {}
+
+
+PCM_RATE = 16384                # (kit_pcm.asm: the wave channel's 2048 - 128, the timer's 256 - 128)
+
+
+def _crowd_pcm(nes):
+    """Punch-Out!!'s crowd (its first DMC sample), recorded, for the wave channel (kit_pcm.asm): the NES's 1-bit
+    delta stream decoded at the rate the game plays it (33144 Hz), averaged down to 8192 Hz, 4 bits a step, two
+    to a byte (the first high), whole 32-step buffers (16384 Hz: the NES's own sound up to 8 kHz)."""
+    fixed, data = nes["sound_fixed"], nes["samples"]
+    a, n = fixed[0x368], fixed[0x369] * 16 + 1
+    start = 0xC000 + a * 64 - 0xE000
+    level, seq = 64, []
+    for b in data[start:start + n]:
+        for i in range(8):
+            level = min(level + 2, 126) if b >> i & 1 and level <= 125 else (level - 2 if not b >> i & 1 and level >= 2 else level)
+            seq.append(level)
+    src = 1789773 / 54
+    steps = []
+    k = 0
+    while True:
+        lo, hi = int(k * src / PCM_RATE), int((k + 1) * src / PCM_RATE)
+        if hi > len(seq):
+            break
+        chunk = seq[lo:hi] or [seq[-1]]
+        steps.append(min(15, round(sum(chunk) / len(chunk) * 15 / 126)))
+        k += 1
+    while len(steps) % 32:
+        steps.append(steps[-1])
+    rot = []                            # (a restart plays from its second step: each 32 rotated a step, its last first)
+    for i in range(0, len(steps), 32):
+        blk = steps[i:i + 32]
+        rot += [blk[-1]] + blk[:-1]
+    packed = [rot[i] << 4 | rot[i + 1] for i in range(0, len(rot), 2)]
+    return (f"DEF CROWD_PCM_SIZE EQU {len(packed)}\nSECTION \"Data: Crowd PCM\", ROMX\n"
+            f"CrowdPcm:                   ; the crowd, recorded: {PCM_RATE} Hz, 4 bits ({len(steps)} steps)\n{_db(packed)}\n")
 
 
 def _dmc_tables(nes):
@@ -422,11 +459,13 @@ Scene{i}Attr:               ; palette number per tile (Game Boy Color only)
         for n, (_, _, g) in enumerate(s.get("aw_record_glyphs") or ())) + "".join(
         f"Scene{i}Time{n}:               ; the fight's time's glyphs: each digit's cell, 0-9\n    db {', '.join(str(v) for g in cells for v in g)}\n"
         for n, (_, _, cells) in enumerate(s.get("time_glyphs") or ())) + (
+        "PUSHS\nSECTION FRAGMENT \"Screens far\", ROMX     ; (with DmgRemapIn: read in its bank)\n"
         f"Scene{i}Greys:              ; the original's: tiles whose palette has greys of its own, each's map (2 bits a slot)\n"
-        f"    db {len(s['dmg_remap'])}\n" + "".join(f"    db {tl}, ${m:02X}\n" for tl, m in s["dmg_remap"]) if s.get("dmg_remap") else "") + (
+        f"    db {len(s['dmg_remap'])}\n" + "".join(f"    db {tl}, ${m:02X}\n" for tl, m in s["dmg_remap"]) + "POPS\n" if s.get("dmg_remap") else "") + (
+        "PUSHS\nSECTION FRAGMENT \"Screens far\", ROMX     ; (with DocLoadIn: read in its bank)\n"
         f"Scene{i}Doc:                ; Doc's states (Punch-Out!!'s corner): cells, then each's address, then each state's tiles\n"
         f"    db {len(s['doc_patch']['cells'])}\n" + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n" for c in s["doc_patch"]["cells"])
-        + "".join(f"    db {', '.join(map(str, row))}\n" for row in s["doc_patch"]["tiles"]) if s.get("doc_patch") else "") + (
+        + "".join(f"    db {', '.join(map(str, row))}\n" for row in s["doc_patch"]["tiles"]) + "POPS\n" if s.get("doc_patch") else "") + (
         f"Scene{i}Aw:                 ; Another World Circuit's words: cells, then each's address and tile\n    db {len(s['aw_patch'])}\n"
         + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n    db {tile}\n" for c, tile in s["aw_patch"])
         if s.get("aw_patch") else "")
@@ -2081,6 +2120,8 @@ NesSndFix:                  ; and its tables in the fixed bank, NES $F400-$F8FF
 {_db(list(nes["sound_fixed"]))}
 {_dmc_tables(nes)}
 {sound_code}
+{_crowd_pcm(nes)}
+{KIT_PCM}
 """
     # his band's last two rows without him: the scene's own tiles, his columns filled from the one beside them
     tail_t, tail_p = [], []
@@ -3953,7 +3994,7 @@ MACRO SET_UPDATE            ; run \\1 every frame from now on
     ldh [hUpdateJump + 2], a
 ENDM
 
-{"SECTION " + chr(34) + "Interrupt: VBlank" + chr(34) + ", ROM0[$40]" + nl + "    reti                    ; VBlank only wakes HALT; the work runs in the main loop" + nl + nl + "SECTION " + chr(34) + "Interrupt: STAT" + chr(34) + ", ROM0[$48]" + nl + "    jp FtStat               ; the fight's mid-frame scroll for the rival's band" + nl + nl if fights else ""}SECTION "Header", ROM0[$100]
+{"SECTION " + chr(34) + "Interrupt: VBlank" + chr(34) + ", ROM0[$40]" + nl + "    reti                    ; VBlank only wakes HALT; the work runs in the main loop" + nl + nl + "SECTION " + chr(34) + "Interrupt: STAT" + chr(34) + ", ROM0[$48]" + nl + "    jp FtStat               ; the fight's mid-frame scroll for the rival's band" + nl + nl if fights else ""}{"SECTION " + chr(34) + "Interrupt: Timer" + chr(34) + ", ROM0[$50]" + nl + "    jp PcmTick              ; Punch-Out!!'s crowd, recorded: the wave channel's next 32 steps" + nl + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}SECTION "Header", ROM0[$100]
     nop
     jp Start
     ds $150 - @, 0

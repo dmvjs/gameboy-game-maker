@@ -2181,6 +2181,18 @@ ApuQuiet::
 ; Once a frame, after NesSound: the frame's clocks around its writes, then the GB channels. The game's $C0
 ; to $4017 clocks a quarter and a half frame at once; before the next one come three quarters and a half.
 ApuOut:
+    ld a, [wPcmOn]          ; the crowd recorded: done in the fight, or once its sample's over
+    and a
+    jr z, .noPcm
+    ldh a, [hFtActive]
+    and a
+    jr nz, .pcmStop
+    ld a, [wDmcSample]
+    cp 1
+    jr z, .noPcm
+.pcmStop:
+    call PcmStop
+.noPcm:
     ld hl, wApuNew          ; (most frames: nothing written that starts something; then the envelopes and the
     ld a, [hl+]             ; linear counter take the frame's four quarter clocks at once, as the same, the
     or [hl]                 ; half-frame clocks either side of the writes as ever)
@@ -2270,7 +2282,7 @@ ApuTake:
     or [hl]
     inc hl
     or [hl]
-    jr z, .pulses
+    jp z, .pulses
     ld e, 0
 .channel:
     ld hl, wApuNew
@@ -2346,6 +2358,7 @@ ApuTake:
     sub b
 .sample:
     ld [wDmcSample], a
+    call PcmMaybeFar        ; (the crowd off the fight: recorded, on the wave channel)
     xor a
     ld [wDmcFrame], a
 .pulses:
@@ -2770,6 +2783,9 @@ PulseOut1:
 
 ; The triangle on the GB's wave channel: on while its linear and length counters run and it's audible.
 TriangleOut:
+    ld a, [wPcmOn]          ; (the wave channel the crowd's while it plays)
+    and a
+    ret nz
     xor a
     ld [wApuStart + 2], a
     ld a, [wApu + $0A]
@@ -2921,6 +2937,11 @@ NoiseOut:
     set 3, c
 .mode:
     call DmcStep            ; a sample playing: its loudness now in D, clock in E (D 0: none)
+    ld a, [wPcmOn]          ; (the crowd recorded, on the wave channel: not the noise's too)
+    and a
+    jr z, .noPcm
+    ld d, 0
+.noPcm:
     ld a, b
     and a
     jr nz, .nes
