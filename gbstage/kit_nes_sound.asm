@@ -2819,6 +2819,24 @@ TriangleOut:
     ldh [rAUD3ENA], a
     ret
 .start:                     ; on again: from the wave's middle, its frequency written with the restart
+    ld a, [wPcmWave]        ; (the crowd had the wave RAM: the triangle's back, the channel off for it)
+    and a
+    jr z, .waveOk
+    xor a
+    ld [wPcmWave], a
+    ldh [rAUD3ENA], a
+    push hl
+    ld hl, ApuTriangle
+    ld c, LOW(_AUD3WAVERAM)
+.wave:
+    ld a, [hl+]
+    ldh [c], a
+    inc c
+    ld a, c
+    cp LOW(_AUD3WAVERAM) + 16
+    jr nz, .wave
+    pop hl
+.waveOk:
     ld a, $80
     ldh [rAUD3ENA], a
     ld a, $20

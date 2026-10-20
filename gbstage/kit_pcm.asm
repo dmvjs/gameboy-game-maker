@@ -16,6 +16,7 @@ wPcm: ds CROWD_PCM_SIZE
 
 SECTION "Crowd PCM state", WRAM0
 wPcmOn: db                  ; playing
+wPcmWave: db                ; the wave RAM the crowd's: TriangleOut's to put back
 wPcmLoaded: db              ; (copied to wPcm)
 wPcmPtr: dw                 ; the next 16 bytes
 
@@ -115,20 +116,6 @@ PcmFill::
     ld [wPcmPtr + 1], a
     ret
 
-; HL's 16 bytes into the wave RAM (its channel off), then on.
-PcmWave:
-    ld c, LOW(_AUD3WAVERAM)
-.byte:
-    ld a, [hl+]
-    ldh [c], a
-    inc c
-    ld a, c
-    cp LOW(_AUD3WAVERAM) + 16
-    jr nz, .byte
-    ld a, $80
-    ldh [rAUD3ENA], a
-    ret
-
 ; Done (its end, the fight, or another sample): the timer off, the wave channel the triangle's again.
 PcmStop::
     xor a
@@ -143,15 +130,9 @@ PcmStop::
     di
 .fight:
     xor a
-    ldh [rAUD3ENA], a
-    ld hl, PcmTriangle
-    call PcmWave
-    xor a
-    ldh [rAUD3LEVEL], a     ; (silent till the triangle's next note: TriangleOut starts it afresh)
-    ld [wGbVol + 2], a
+    ldh [rAUD3LEVEL], a     ; (silent till the triangle's next note: TriangleOut starts it afresh, its wave
+    ld [wGbVol + 2], a      ; put back first)
     ld a, $FF
     ld [wGbFreq + 5], a
+    ld [wPcmWave], a
     ret
-
-PcmTriangle:                ; (ApuTriangle's, here in ROM0: the interrupt may stop it)
-    db $76, $54, $32, $10, $01, $23, $45, $67, $89, $AB, $CD, $EF, $FE, $DC, $BA, $98

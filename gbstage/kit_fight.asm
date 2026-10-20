@@ -239,7 +239,12 @@ wDocHand: db
 wDocDirty: db
 wDocAddr: ds 32
 wDocTile: ds 64
-wRemap: ds 4                ; (DmgRemap: a row's pixels of each slot)
+wRemap: ds 4                ; (DmgRemap: a row's pixels of each slot, its batch: count, tiles, addresses, source)
+wRemapN: db
+wRemapLeft: db
+wRemapSrc: dw
+wRemapDst: ds 12
+wRemapBuf: ds 96
 wFtRoom: db                 ; loading with the display on (FT_LOAD_ON): this VBlank's time left (FtRoom)
 wFtRoomN: db                ; (FtCopy: blocks this time, their bytes)
 wFtRoomBytes: dw
@@ -3341,11 +3346,174 @@ DocLoad::
     ld [$2100], a
     call DocLoadIn
     jr DocBack
+
+; The original Game Boy, a scene loading: tiles whose palette has its own greys, put in them (HL: how many, then
+; each one's number and map, 2 bits a slot; DE: the scene's tiles, all in its bank, mapped). Made from the ROM's
+; tiles 6 at a time, outside VBlank, into wRemapBuf; each batch put up in a VBlank (if the screen's on).
 DmgRemap::
-    ld a, BANK(DmgRemapIn)
-    ld [$2100], a
-    call DmgRemapIn
-    jr DocBack
+    ld a, [hl+]
+    and a
+    ret z
+    ld [wRemapLeft], a
+    ld a, e
+    ld [wRemapSrc], a
+    ld a, d
+    ld [wRemapSrc + 1], a
+.batch:
+    xor a
+    ld [wRemapN], a
+    ld de, wRemapBuf
+.tile:
+    ld a, [hl+]             ; its number: VRAM address (0-127 from $9000, 128-255 from $8800) and ROM source
+    push hl
+    push de
+    ld c, [hl]              ; (its map)
+    ld l, a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    push hl
+    bit 7, a
+    ld a, $90
+    jr z, .low
+    ld a, $80
+.low:
+    add h
+    ld b, a
+    ld a, [wRemapN]
+    add a
+    add LOW(wRemapDst)
+    ld e, a
+    ld a, 0
+    adc HIGH(wRemapDst)
+    ld d, a
+    ld a, l
+    ld [de], a
+    inc de
+    ld a, b
+    ld [de], a
+    pop hl
+    ld a, [wRemapSrc]
+    add l
+    ld l, a
+    ld a, [wRemapSrc + 1]
+    adc h
+    ld h, a
+    pop de
+    ld b, 8
+.row:                       ; a row: each slot's pixels, then the greys'
+    push bc
+    ld a, [hl+]
+    ld b, a                 ; (B the low plane, A the high)
+    ld a, [hl+]
+    push hl
+    ld h, a
+    ld a, b
+    or h
+    cpl
+    ld [wRemap], a
+    ld a, h
+    cpl
+    and b
+    ld [wRemap + 1], a
+    ld a, b
+    cpl
+    and h
+    ld [wRemap + 2], a
+    ld a, b
+    and h
+    ld [wRemap + 3], a
+    push de
+    ld hl, wRemap
+    ld de, 0
+    ld b, 4
+.slot:
+    ld a, [hl+]
+    rr c
+    jr nc, .noLow
+    push af
+    or e
+    ld e, a
+    pop af
+.noLow:
+    rr c
+    jr nc, .noHigh
+    or d
+    ld d, a
+.noHigh:
+    dec b
+    jr nz, .slot
+    ld a, d
+    ld b, e
+    pop de
+    push af
+    ld a, b
+    ld [de], a
+    inc de
+    pop af
+    ld [de], a
+    inc de
+    pop hl
+    pop bc
+    dec b
+    jr nz, .row
+    pop hl
+    inc hl
+    ld a, [wRemapN]
+    inc a
+    ld [wRemapN], a
+    ld a, [wRemapLeft]
+    dec a
+    ld [wRemapLeft], a
+    jr z, .put
+    ld a, [wRemapN]
+    cp 6
+    jp c, .tile
+.put:                       ; the batch up: in a VBlank (the screen on), 16 bytes a tile
+    push hl
+    ldh a, [rLCDC]
+    bit 7, a
+    jr z, .copy
+.leave:
+    ldh a, [rLY]
+    cp 144
+    jr nc, .leave
+.in:
+    ldh a, [rLY]
+    cp 144
+    jr c, .in
+.copy:
+    ld hl, wRemapBuf
+    ld de, wRemapDst
+    ld a, [wRemapN]
+    ld b, a
+.each:
+    push bc
+    ld a, [de]
+    ld c, a
+    inc de
+    ld a, [de]
+    ld b, a
+    inc de
+    push de
+    ld e, 16
+.byte:                      ; (10 cycles a byte: 6 tiles a VBlank)
+    ld a, [hl+]
+    ld [bc], a
+    inc bc
+    dec e
+    jr nz, .byte
+    pop de
+    pop bc
+    dec b
+    jr nz, .each
+    pop hl
+    ld a, [wRemapLeft]
+    and a
+    jp nz, .batch
+    ret
 
 ; Leaving it ($A8B7): unused, it's armed again next time; used, never again this fight.
 FtCornerLeave::
@@ -3392,6 +3560,144 @@ FtCornerSelect:
     ret
 PUSHS
 SECTION FRAGMENT "Screens far", ROMX
+; Punch-Out!!'s Another World Circuit's words over the screen's (HL: how many, then each cell's address and tile);
+; the display on, a few a VBlank.
+AwPatchIn:
+    ld a, [hl+]
+    ld b, a
+.cell:
+    ld a, b
+    and 7
+    jr nz, .now
+    ldh a, [hLoadOn]
+    and a
+    call nz, VWait
+.now:
+    ld a, [hl+]
+    ld e, a
+    ld a, [hl+]
+    ld d, a
+    ld a, [hl+]
+    ld [de], a
+    dec b
+    jr nz, .cell
+    ret
+
+; Mac's record as the challenger screen shows it, the NES's "WW-LL KKKO" (each two wide, a space before one digit),
+; over the label it's baked as: HL = its first cell in the map, DE = its glyph tiles (0-9, "-", "K", "O", blank).
+RecordDrawIn:
+    ldh a, [hLoadOn]        ; (the display on: in a VBlank)
+    and a
+    call nz, VWait
+    ld a, [wRecWins]
+    call .num
+    ld a, 10
+    call .glyph
+    ld a, [wRecLosses]
+    call .num
+    ld a, 13
+    call .glyph
+    ld a, [wRecKOs]
+    call .num
+    ld a, 11
+    call .glyph
+    ld a, 12
+    jr .glyph
+.num:                       ; A (0-99): two cells, a space for no tens
+    ld c, -1
+.tens:
+    inc c
+    sub 10
+    jr nc, .tens
+    add 10
+    push af
+    ld a, c
+    and a
+    jr nz, .tensDigit
+    ld a, 13
+.tensDigit:
+    call .glyph
+    pop af
+.glyph:                     ; [HL+] = glyph A's tile
+    push de
+    add e
+    ld e, a
+    adc d
+    sub e
+    ld d, a
+    ld a, [de]
+    ld [hl+], a
+    pop de
+    ret
+
+IF DEF(FT_NES)
+; The fight's time as Punch-Out!!'s Another World Circuit gives it after its last win, "TIME M:SS.CC,RN" (the NES's
+; clock, $0302-$0305; its hundredths from the sub-second count, $0306's top four bits, by its table; the round, $06),
+; over the label it's baked as: HL = its first cell in the map, DE = its digits' glyphs (each cell's 0-9).
+TimeDrawIn:
+    ldh a, [hLoadOn]        ; (the display on: in a VBlank)
+    and a
+    call nz, VWait
+    push hl
+    ld a, [wNes + $0306]
+    swap a
+    and $0F
+    cp 7
+    jr c, .cents
+    ld a, 6
+.cents:
+    add a
+    ld c, a
+    ld b, 0
+    ld hl, TimeCents
+    add hl, bc
+    ld a, [hl+]
+    ld b, a
+    ld c, [hl]              ; B, C: its hundredths' digits
+    pop hl
+    ld a, l
+    add 5
+    ld l, a                 ; (a row's cells: no carry out of the label's row)
+    ld a, [wNes + $0302]
+    call .put
+    inc l
+    inc l
+    ld a, [wNes + $0304]
+    call .put
+    inc l
+    ld a, [wNes + $0305]
+    call .put
+    inc l
+    inc l
+    ld a, b
+    call .put
+    inc l
+    ld a, c
+    call .put
+    inc l
+    inc l
+    inc l
+    ld a, [wNes + $06]
+.put:                       ; [HL] = digit A's glyph (DE's ten), DE on to the next cell's
+    push de
+    add e
+    ld e, a
+    adc d
+    sub e
+    ld d, a
+    ld a, [de]
+    ld [hl], a
+    pop de
+    ld a, e
+    add 10
+    ld e, a
+    ret nc
+    inc d
+    ret
+TimeCents:                  ; ($85BB) the hundredths by the sub-second count's top bits: 00 25 48 61 82 97 99
+    db 0, 0, 2, 5, 4, 8, 6, 1, 8, 2, 9, 7, 9, 9
+ENDC
+
 ; Doc's states for this corner (HL: the cells, their addresses, then the four states' tiles), his timers started:
 ; as the NES's, his mouth opens 16 frames in and his hand comes up 32 in.
 DocLoadIn:
@@ -3427,87 +3733,6 @@ DocLoadIn:
     ld [wDocHand], a
     ret
 
-; The original Game Boy, a scene loading (screen off): tiles whose palette has its own greys put in them (HL: how
-; many, then each one's number and map, 2 bits a slot). A row at a time: each slot's pixels, then the greys'.
-DmgRemapIn:
-    ld a, [hl+]
-    and a
-    ret z
-    ld b, a
-.tile:
-    push bc
-    ld a, [hl+]
-    ld c, [hl]
-    inc hl
-    push hl
-    ld l, a
-    ld h, 0
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    add hl, hl
-    bit 7, a                ; (0-127 from $9000, 128-255 from $8800)
-    ld a, $90
-    jr z, .low
-    ld a, $80
-.low:
-    add h
-    ld h, a
-    ld b, 8
-.row:
-    ld e, [hl]
-    inc hl
-    ld d, [hl]
-    ld a, e
-    or d
-    cpl
-    ld [wRemap], a          ; slot 0's pixels
-    ld a, d
-    cpl
-    and e
-    ld [wRemap + 1], a
-    ld a, e
-    cpl
-    and d
-    ld [wRemap + 2], a
-    ld a, e
-    and d
-    ld [wRemap + 3], a
-    push bc
-    push hl
-    ld hl, wRemap
-    ld de, 0                ; (D the new high plane, E the low)
-    ld b, 4
-.slot:
-    ld a, [hl+]
-    rr c
-    jr nc, .noLow
-    push af
-    or e
-    ld e, a
-    pop af
-.noLow:
-    rr c
-    jr nc, .noHigh
-    or d
-    ld d, a
-.noHigh:
-    dec b
-    jr nz, .slot
-    pop hl
-    pop bc
-    ld [hl], d
-    dec hl
-    ld [hl], e
-    inc hl
-    inc hl
-    dec b
-    jr nz, .row
-    pop hl
-    pop bc
-    dec b
-    jr nz, .tile
-    ret
 
 ; A frame of Doc in the corner (the NES's, measured): his mouth open 16 frames, shut 32; his hand up 56, down 32;
 ; once Select's pressed, faster: his mouth every 9, his hand every 8.
@@ -5178,143 +5403,30 @@ RecReset::
     ld [hl+], a             ; (Another World off)
     ret
 
-; Punch-Out!!'s Another World Circuit's words over the screen's (HL: how many, then each cell's address and tile);
-; the display on, a few a VBlank.
+; Mac's record, the Another World Circuit's words, the fight's time, from any bank (in "Screens far", with the
+; data they read).
 AwPatch::
-    ld a, [hl+]
-    ld b, a
-.cell:
-    ld a, b
-    and 7
-    jr nz, .now
-    ldh a, [hLoadOn]
-    and a
-    call nz, VWait
-.now:
-    ld a, [hl+]
-    ld e, a
-    ld a, [hl+]
-    ld d, a
-    ld a, [hl+]
-    ld [de], a
-    dec b
-    jr nz, .cell
-    ret
-
-; Mac's record as the challenger screen shows it, the NES's "WW-LL KKKO" (each two wide, a space before one digit),
-; over the label it's baked as: HL = its first cell in the map, DE = its glyph tiles (0-9, "-", "K", "O", blank).
+    ld a, BANK(AwPatchIn)
+    jr ScreensFar
 RecordDraw::
-    ldh a, [hLoadOn]        ; (the display on: in a VBlank)
-    and a
-    call nz, VWait
-    ld a, [wRecWins]
-    call .num
-    ld a, 10
-    call .glyph
-    ld a, [wRecLosses]
-    call .num
-    ld a, 13
-    call .glyph
-    ld a, [wRecKOs]
-    call .num
-    ld a, 11
-    call .glyph
-    ld a, 12
-    jr .glyph
-.num:                       ; A (0-99): two cells, a space for no tens
-    ld c, -1
-.tens:
-    inc c
-    sub 10
-    jr nc, .tens
-    add 10
-    push af
-    ld a, c
-    and a
-    jr nz, .tensDigit
-    ld a, 13
-.tensDigit:
-    call .glyph
-    pop af
-.glyph:                     ; [HL+] = glyph A's tile
-    push de
-    add e
-    ld e, a
-    adc d
-    sub e
-    ld d, a
-    ld a, [de]
-    ld [hl+], a
-    pop de
-    ret
-
+    ld a, BANK(RecordDrawIn)
+    ld [$2100], a
+    call RecordDrawIn
+    jr ScreensBack
 IF DEF(FT_NES)
-; The fight's time as Punch-Out!!'s Another World Circuit gives it after its last win, "TIME M:SS.CC,RN" (the NES's
-; clock, $0302-$0305; its hundredths from the sub-second count, $0306's top four bits, by its table; the round, $06),
-; over the label it's baked as: HL = its first cell in the map, DE = its digits' glyphs (each cell's 0-9).
 TimeDraw::
-    ldh a, [hLoadOn]        ; (the display on: in a VBlank)
-    and a
-    call nz, VWait
-    push hl
-    ld a, [wNes + $0306]
-    swap a
-    and $0F
-    cp 7
-    jr c, .cents
-    ld a, 6
-.cents:
-    add a
-    ld c, a
-    ld b, 0
-    ld hl, TimeCents
-    add hl, bc
-    ld a, [hl+]
-    ld b, a
-    ld c, [hl]              ; B, C: its hundredths' digits
-    pop hl
-    ld a, l
-    add 5
-    ld l, a                 ; (a row's cells: no carry out of the label's row)
-    ld a, [wNes + $0302]
-    call .put
-    inc l
-    inc l
-    ld a, [wNes + $0304]
-    call .put
-    inc l
-    ld a, [wNes + $0305]
-    call .put
-    inc l
-    inc l
-    ld a, b
-    call .put
-    inc l
-    ld a, c
-    call .put
-    inc l
-    inc l
-    inc l
-    ld a, [wNes + $06]
-.put:                       ; [HL] = digit A's glyph (DE's ten), DE on to the next cell's
-    push de
-    add e
-    ld e, a
-    adc d
-    sub e
-    ld d, a
-    ld a, [de]
-    ld [hl], a
-    pop de
-    ld a, e
-    add 10
-    ld e, a
-    ret nc
-    inc d
-    ret
-TimeCents:                  ; ($85BB) the hundredths by the sub-second count's top bits: 00 25 48 61 82 97 99
-    db 0, 0, 2, 5, 4, 8, 6, 1, 8, 2, 9, 7, 9, 9
+    ld a, BANK(TimeDrawIn)
+    ld [$2100], a
+    call TimeDrawIn
+    jr ScreensBack
 ENDC
+ScreensFar:                 ; (AwPatch's: A its bank)
+    ld [$2100], a
+    call AwPatchIn
+ScreensBack:
+    ldh a, [hBank]
+    ld [$2100], a
+    ret
 
 ; A = the scene the fight goes on to, from its result (won, lost, the corner): this fight's own (FtFights).
 FtResultScene:

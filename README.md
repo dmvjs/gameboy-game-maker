@@ -12,9 +12,11 @@ Tyson, on Game Boy Color and the original Game Boy.
 - **Every frame as the NES draws it.** Each opponent's and Little Mac's frames are captured from the NES game
   itself and shown as they are, mirrored ones included. On the original Game Boy, each fighter gets his own grey
   shading.
-- **The NES's music and sound effects**, played on the Game Boy's own sound channels.
-- **The whole game around the fights**: title, challenger screens, the corner between rounds (Select there, once
-  per match, for a refill), knockdowns with the referee's count, TKOs, decisions on points, rematches, dropping down
+- **The NES's music and sound effects**, played on the Game Boy's own sound channels, and the NES's own recorded
+  crowd on the challenger and corner screens (its sample, streamed through the wave channel).
+- **The whole game around the fights**: title, challenger screens with the NES's full-size close-ups, the corner
+  between rounds (Doc rubbing Mac's shoulder as on the NES; Select there, once per fight, makes him rub faster and
+  gives the NES's refill), knockdowns with the referee's count, TKOs, decisions on points, rematches, dropping down
   the ranks, and game over on the third loss, all by the NES's rules.
 - **The NES's pass keys.** Mac's record is kept fight to fight, and the training runs show its pass key, worked out
   by the NES's own algorithm (ported, and checked against the original). Keys from the NES work on CONTINUE: try

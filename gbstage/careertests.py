@@ -272,6 +272,42 @@ def another_world(rom):
     return good and win and drop, lines
 
 
+def original_flow(rom):
+    """The original Game Boy, as a player goes in: NEW, Glass Joe's challenger (the recorded crowd playing), the
+    fight (its load with that crowd's interrupts stopped), round 1's end, the corner (Doc moving; Select taken once),
+    back in the fight. Every scene a real one, the stack where it belongs."""
+    from . import bot
+    names, fights = _scenes()
+    g = bot.Game(rom, fights[0], False)
+    S0, B0 = bot._symbols(rom)
+    g.pb.hook_register(B0["Start"], S0["Start"], lambda _: setattr(g.pb.register_file, "A", 1), None)
+    corner = next(i for i, n in enumerate(names) if n == "Corner")
+    seen, crowd, bad, docs, f = [], False, None, set(), 0
+    for f in range(9000):
+        sc = g.hram("hScene")
+        if f > 300 and (sc >= len(names) or not 0xC000 <= g.pb.register_file.SP < 0xE000):
+            bad = f"frame {f}: scene {sc}, SP ${g.pb.register_file.SP:04X}"
+            break
+        if not seen or seen[-1] != names[sc]:
+            seen.append(names[sc])
+            if names[sc] == "Fight" and seen.count("Fight") == 1:
+                for _ in range(300):
+                    g.tick(False)
+                g.m[g.w + 0x302], g.m[g.w + 0x304], g.m[g.w + 0x305] = 2, 5, 8     # (round 1's end, soon)
+        crowd = crowd or g.m[g.S["wPcmOn"]] == 1
+        if sc == corner:
+            docs.add(g.m[g.S["wDocState"]])
+        g.hold(["select"] if sc == corner and f % 200 == 100 else ["start"] if f % 40 < 3 and g.hram("hFtActive") != 1 else [])
+        g.tick(False)
+        if seen.count("Fight") >= 2 and len(docs) >= 3:
+            break
+    used = g.m[g.w + 0x3D8]
+    g.stop()
+    good = bad is None and crowd and "Corner" in seen and seen.count("Fight") >= 2 and len(docs) >= 3 and used == 1
+    return good, [f"    {'✓' if good else '✗'} {' > '.join(seen[:8])}: the crowd recorded {'yes' if crowd else 'no'}, Doc in "
+                  f"{len(docs)} states, Select {'taken' if used == 1 else 'not taken'}" + (f" ({bad})" if bad else "")]
+
+
 def _job(args):
     name, rom = args
     return globals()[name](rom)
@@ -290,7 +326,8 @@ def run(log=print):
     Path(str(rom) + ".sym").write_text(build.sym)
     ok = True
     titles = {"career": "The whole game, won (power-on to THE END)", "losses": "Losing", "routes": "Down the ranks",
-              "pass_key": "CONTINUE", "another_world": "The Another World Circuit"}
+              "pass_key": "CONTINUE", "another_world": "The Another World Circuit",
+              "original_flow": "The original Game Boy, into the fight and the corner"}
     with ProcessPoolExecutor() as pool:
         for name, (good, lines) in zip(titles, pool.map(_job, [(n, str(rom)) for n in titles])):
             log(f"  {titles[name]}:")

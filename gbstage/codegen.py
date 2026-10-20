@@ -431,6 +431,12 @@ def _gdma(src, dest, size):
     return "\n".join(lines)
 
 
+def _far(parts):
+    """Data read by the screens' far routines (kit_fight.asm, "Screens far"): in their bank, not the scene's."""
+    body = "".join(parts)
+    return f'PUSHS\nSECTION FRAGMENT "Screens far", ROMX\n{body}POPS\n' if body else ""
+
+
 def _scene_data(i, s, banked=False):
     tile_bytes = [b for t in s["tiles"] for b in encode_tile(t)]
     if banked:      # one section per scene, so its tiles and maps share a bank
@@ -449,21 +455,20 @@ Scene{i}Map:"""
 {_db(s['cell_tiles'] if s.get('cutscene') else _pad_rows(s['cell_tiles'], bool(s.get('fight'))), 32)}
 Scene{i}Attr:               ; palette number per tile (Game Boy Color only)
 {_db(s['cell_pal'] if s.get('cutscene') else _pad_rows(s['cell_pal'], bool(s.get('fight'))), 32)}
-""" + "".join(f"Scene{i}Record{n}:             ; Mac's record's glyphs: 0-9, -, K, O, blank\n    db {', '.join(map(str, g))}\n"
-              for n, (_, _, g) in enumerate(s.get("record_glyphs") or ())) + "".join(
+""" + _far(f"Scene{i}Record{n}:             ; Mac's record's glyphs: 0-9, -, K, O, blank\n    db {', '.join(map(str, g))}\n"
+              for n, (_, _, g) in enumerate(s.get("record_glyphs") or ())) + _far(
         f"Scene{i}AwRecord{n}:           ; (the Another World Circuit's record's glyphs)\n    db {', '.join(map(str, g))}\n"
-        for n, (_, _, g) in enumerate(s.get("aw_record_glyphs") or ())) + "".join(
+        for n, (_, _, g) in enumerate(s.get("aw_record_glyphs") or ())) + _far(
         f"Scene{i}Time{n}:               ; the fight's time's glyphs: each digit's cell, 0-9\n    db {', '.join(str(v) for g in cells for v in g)}\n"
         for n, (_, _, cells) in enumerate(s.get("time_glyphs") or ())) + (
-        "PUSHS\nSECTION FRAGMENT \"Screens far\", ROMX     ; (with DmgRemapIn: read in its bank)\n"
         f"Scene{i}Greys:              ; the original's: tiles whose palette has greys of its own, each's map (2 bits a slot)\n"
-        f"    db {len(s['dmg_remap'])}\n" + "".join(f"    db {tl}, ${m:02X}\n" for tl, m in s["dmg_remap"]) + "POPS\n" if s.get("dmg_remap") else "") + (
+        f"    db {len(s['dmg_remap'])}\n" + "".join(f"    db {tl}, ${m:02X}\n" for tl, m in s["dmg_remap"]) if s.get("dmg_remap") else "") + (
         "PUSHS\nSECTION FRAGMENT \"Screens far\", ROMX     ; (with DocLoadIn: read in its bank)\n"
         f"Scene{i}Doc:                ; Doc's states (Punch-Out!!'s corner): cells, then each's address, then each state's tiles\n"
         f"    db {len(s['doc_patch']['cells'])}\n" + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n" for c in s["doc_patch"]["cells"])
         + "".join(f"    db {', '.join(map(str, row))}\n" for row in s["doc_patch"]["tiles"]) + "POPS\n" if s.get("doc_patch") else "") + (
-        f"Scene{i}Aw:                 ; Another World Circuit's words: cells, then each's address and tile\n    db {len(s['aw_patch'])}\n"
-        + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n    db {tile}\n" for c, tile in s["aw_patch"])
+        _far([f"Scene{i}Aw:                 ; Another World Circuit's words: cells, then each's address and tile\n    db {len(s['aw_patch'])}\n"
+        + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n    db {tile}\n" for c, tile in s["aw_patch"])])
         if s.get("aw_patch") else "")
 
 
@@ -870,7 +875,8 @@ def _scene_load(i, s, sprites, opt_index=None, markers=False):
         lines += [f"    ld hl, Scene{i}Tiles + 128 * 16", "    ld de, $8800            ; tiles 128-255",
                   f"    ld c, {n - 128}", "    call CopyTiles"]
     if s.get("dmg_remap"):              # (the original Game Boy: its close-ups' tiles in their own greys)
-        lines += ["    ldh a, [hIsCGB]", "    and a", "    jr nz, .greysDone", f"    ld hl, Scene{i}Greys", "    call DmgRemap", ".greysDone:"]
+        lines += ["    ldh a, [hIsCGB]", "    and a", "    jr nz, .greysDone", f"    ld hl, Scene{i}Greys", f"    ld de, Scene{i}Tiles",
+                  "    call DmgRemap", ".greysDone:"]
     lines += [f"    ld hl, Scene{i}Map", "    call CopyMap", f"    ld hl, Scene{i}Attr", "    call CopyAttr"]
     for n, (x, y, _) in enumerate(s.get("record_glyphs") or ()):    # Mac's record, as it stands
         lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Record{n}", "    call RecordDraw"]
@@ -3709,8 +3715,8 @@ def generate_asm(project):
     ldh a, [hFtActive]      ; (a fight on the original: what's left of VBlank, his coming picture's tiles)
     and a
     call nz, FtDmgStreamVBlank""" if any((sc.get("fight") or {}).get("nes") for sc in scenes) else ""))
-    if any(sc.get("doc_patch") for sc in scenes):
-        vblank_work.append("""    ld a, [wDocDirty]       ; Punch-Out!!'s corner: Doc's hand or mouth moved
+    if any(sc.get("doc_patch") for sc in scenes):         # (first: VBlank's time is short, and it's quick)
+        vblank_work.insert(0, """    ld a, [wDocDirty]       ; Punch-Out!!'s corner: Doc's hand or mouth moved
     and a
     call nz, DocVBlank""")
     if confirms and fights:             # (first: its OAM DMA covers all of OAM, the cursor's and gloves' after it)
@@ -4021,7 +4027,7 @@ Start:
     ldh [rSCY], a
     ldh [rSCX], a
 {nl.join(boot)}
-    ld a, 1                 ; VBlank wakes HALT; no interrupt handler ever runs
+{"    xor a                   ; (WRAM is random at power-on: Doc's corner state clear, nothing for VBlank)" + nl + "    ld [wDocDirty], a" + nl + "    ld [wDocN], a" + nl if any(sc.get("doc_patch") for sc in scenes) else ""}{"    xor a                   ; (the recorded crowd: not playing, not copied yet)" + nl + "    ld [wPcmOn], a" + nl + "    ld [wPcmLoaded], a" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}    ld a, 1                 ; VBlank wakes HALT; no interrupt handler ever runs
     ldh [rIE], a
     ld a, {index_of[project['start']]}
     call LoadScene
@@ -4070,7 +4076,7 @@ SECTION "Code: Scenes", ROM0
 ; Load scene A with the screen off. Tiles, map and palette map go by DMA on Game Boy Color.
 LoadScene:
     ldh [hScene], a
-{"    xor a                   ; (a cutscene's VBlank work done)" + nl + "    ldh [hCutOn], a" + nl + "    ldh [rSCX], a" + nl if cutscenes else ""}{"    xor a                   ; (not loading with the display on, unless a plain screen turns it so)" + nl + "    ldh [hLoadOn], a" + nl if load_on else ""}{"    ldh a, [hFtActive]      ; leaving a fight: its scroll split ends now (it held through the fade)" + nl + "    and a" + nl + "    call nz, FtStop" + nl if fights else ""}    ldh a, [rLCDC]
+{"    ld a, [wPcmOn]          ; (the recorded crowd stopped: its interrupts off, the loads below borrow the stack)" + nl + "    and a" + nl + "    call nz, PcmStop" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}{"    xor a                   ; (a cutscene's VBlank work done)" + nl + "    ldh [hCutOn], a" + nl + "    ldh [rSCX], a" + nl if cutscenes else ""}{"    xor a                   ; (not loading with the display on, unless a plain screen turns it so)" + nl + "    ldh [hLoadOn], a" + nl if load_on else ""}{"    ldh a, [hFtActive]      ; leaving a fight: its scroll split ends now (it held through the fade)" + nl + "    and a" + nl + "    call nz, FtStop" + nl if fights else ""}    ldh a, [rLCDC]
     add a                   ; screen already off (at boot)? bit 7 -> carry
     jr nc, .screenOff
 {SCREEN_ON_CHECK.replace('{fight_check}', SCREEN_ON_FIGHT if fight_on else '') if load_on else ""}.waitVBlank:
