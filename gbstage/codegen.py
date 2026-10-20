@@ -398,8 +398,13 @@ Scene{i}Attr:               ; palette number per tile (Game Boy Color only)
 {_db(s['cell_pal'] if s.get('cutscene') else _pad_rows(s['cell_pal'], bool(s.get('fight'))), 32)}
 """ + "".join(f"Scene{i}Record{n}:             ; Mac's record's glyphs: 0-9, -, K, O, blank\n    db {', '.join(map(str, g))}\n"
               for n, (_, _, g) in enumerate(s.get("record_glyphs") or ())) + "".join(
+        f"Scene{i}AwRecord{n}:           ; (the Another World Circuit's record's glyphs)\n    db {', '.join(map(str, g))}\n"
+        for n, (_, _, g) in enumerate(s.get("aw_record_glyphs") or ())) + "".join(
         f"Scene{i}Time{n}:               ; the fight's time's glyphs: each digit's cell, 0-9\n    db {', '.join(str(v) for g in cells for v in g)}\n"
         for n, (_, _, cells) in enumerate(s.get("time_glyphs") or ())) + (
+        f"Scene{i}Doc:                ; Doc's states (Punch-Out!!'s corner): cells, then each's address, then each state's tiles\n"
+        f"    db {len(s['doc_patch']['cells'])}\n" + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n" for c in s["doc_patch"]["cells"])
+        + "".join(f"    db {', '.join(map(str, row))}\n" for row in s["doc_patch"]["tiles"]) if s.get("doc_patch") else "") + (
         f"Scene{i}Aw:                 ; Another World Circuit's words: cells, then each's address and tile\n    db {len(s['aw_patch'])}\n"
         + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n    db {tile}\n" for c, tile in s["aw_patch"])
         if s.get("aw_patch") else "")
@@ -808,15 +813,21 @@ def _scene_load(i, s, sprites, opt_index=None, markers=False):
         lines += [f"    ld hl, Scene{i}Tiles + 128 * 16", "    ld de, $8800            ; tiles 128-255",
                   f"    ld c, {n - 128}", "    call CopyTiles"]
     lines += [f"    ld hl, Scene{i}Map", "    call CopyMap", f"    ld hl, Scene{i}Attr", "    call CopyAttr"]
-    if s.get("aw_patch"):               # (Punch-Out!!'s Another World Circuit on: its words)
+    for n, (x, y, _) in enumerate(s.get("record_glyphs") or ()):    # Mac's record, as it stands
+        lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Record{n}", "    call RecordDraw"]
+    if s.get("aw_patch"):               # (Punch-Out!!'s Another World Circuit on: its words over those, its record)
         lines += ["    ld a, [wAw]", "    and a", "    jr z, .notAw", f"    ld hl, Scene{i}Aw", "    call AwPatch"]
         for n, (x, y, _) in enumerate(s.get("time_glyphs") or ()):  # (and the fight's time, there)
             lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Time{n}", "    call TimeDraw"]
+        for n, (x, y, _) in enumerate(s.get("aw_record_glyphs") or ()):
+            lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}AwRecord{n}", "    call RecordDraw"]
         lines.append(".notAw:")
-    for n, (x, y, _) in enumerate(s.get("record_glyphs") or ()):    # Mac's record, as it stands
-        lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Record{n}", "    call RecordDraw"]
     if s.get("_rec_reset"):
         lines.append("    call RecReset")
+    if s.get("_corner"):
+        lines.append("    call FtCornerArm")
+    if s.get("doc_patch"):              # (Doc's hand and mouth: their states' tiles, his timers started)
+        lines += [f"    ld hl, Scene{i}Doc", "    call DocLoad"]
     if (s.get("cut_key") or {}).get("circuit") is not None:     # Punch-Out!!'s pass key, from his record
         lines += [f"    ld b, {s['cut_key']['circuit']}", "    call PwKeyFar"]
     if s.get("slide"):
@@ -981,10 +992,10 @@ def _press_code(i, s, index_of, corner=False):
 .queue:
     QUEUE_PATCH Scene{i}AreaPatch
     ret""" if p["area"] else "    ret"
-    select = """    ldh a, [hPadNew]        ; the corner: Select gets the trainer working faster
+    select = ("""    ldh a, [hPadNew]        ; the corner: Select gets the trainer working faster
     and PADF_SELECT
     call nz, FtCornerSelect
-""" if corner else ""
+""" if corner else "") + ("    call DocStep            ; (Doc's hand and mouth, a frame on)\n" if s.get("doc_patch") else "")
     press_sound = "    ld a, SFX_PRESS_START\n    call PlaySfx\n"
     if p.get("quiet"):                      # no sound; the NES game's music, if it's playing, stopped (as its screens do)
         press_sound = ("IF DEF(FT_NES_SOUND)\n    ldh a, [hNesSound]\n    and a\n    jr z, .quiet\n    ld a, $80\n"
@@ -1084,7 +1095,7 @@ ENDC
     jr nz, .press
 {idle}
 .press:
-{press_sound}    ld a, {p['flashes'] * 2 - 1}
+{"    call FtCornerLeave" + chr(10) if s.get("_corner") else ""}{press_sound}    ld a, {p['flashes'] * 2 - 1}
     ldh [hCounter], a
     ld a, 1
     ldh [hTimer], a
@@ -3637,6 +3648,10 @@ def generate_asm(project):
     ldh a, [hFtActive]      ; (a fight on the original: what's left of VBlank, his coming picture's tiles)
     and a
     call nz, FtDmgStreamVBlank""" if any((sc.get("fight") or {}).get("nes") for sc in scenes) else ""))
+    if any(sc.get("doc_patch") for sc in scenes):
+        vblank_work.append("""    ld a, [wDocDirty]       ; Punch-Out!!'s corner: Doc's hand or mouth moved
+    and a
+    call nz, DocVBlank""")
     if confirms and fights:             # (first: its OAM DMA covers all of OAM, the cursor's and gloves' after it)
         vblank_work.append("""    ldh a, [hConfirmDirty]  ; a menu choice's animation: its sprite and colors
     and a
@@ -3805,6 +3820,9 @@ def generate_asm(project):
             pw_starts = [chal_of[fights[fights.index(ttl[0]) + 1]], chal_of[fights[fights.index(ttl[1]) + 1]],
                          chal_of[ttl[2]], chal_of[fights[-1]], index_of.get(scenes[last_win]["press"]["target"], 255),
                          chal_of[aw_first] if aw_first is not None else 255]
+    for f in fights:                    # (the corner: Punch-Out!!'s Select armed as it comes up)
+        if scenes[f]["fight"].get("corner") is not None and (scenes[f]["fight"].get("nes") or {}):
+            scenes[index_of[scenes[f]["fight"]["corner"]]]["_corner"] = True
     for f in career or ():              # (a loss's screen, a win's, go where FtCareerResult says)
         for key in ("lose", "win", "win_tko"):
             if scenes[f]["fight"].get(key) is not None:

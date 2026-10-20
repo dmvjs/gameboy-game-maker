@@ -176,6 +176,20 @@ def validate(data):
             errors.append(f"{where}: B punches in a fight, so it can't also go back.")
         texts = _texts((s or {}).get("texts"), where, errors)
         aw_texts = _texts((s or {}).get("awTexts"), where, errors) if (s or {}).get("awTexts") else None
+        doc = (s or {}).get("docAnim")                    # Punch-Out!!'s corner: Doc's hand and mouth, its states
+        doc_anim = None
+        if doc is not None:
+            try:
+                dx, dy, dw, dh, states = doc["x"], doc["y"], doc["w"], doc["h"], doc["states"]
+                ok = (all(isinstance(v, int) for v in (dx, dy, dw, dh)) and 0 <= dx and dx + dw <= CW and 0 <= dy
+                      and dy + dh <= CH and isinstance(states, list) and len(states) == 4
+                      and all(isinstance(st, str) and len(st) == dw * dh * 64 and set(st) <= set("0123") for st in states))
+            except (TypeError, KeyError):
+                ok = False
+            if ok:
+                doc_anim = {"x": dx, "y": dy, "w": dw, "h": dh, "states": states}
+            else:
+                errors.append(f"{where}: docAnim is its box (x, y, w, h in cells) and its 4 states' pixels.")
         used = set(cell_pal)
         if len(used) > SCENE_BG_PALETTES:
             errors.append(f"{where} uses {len(used)} background palettes; a scene can use {SCENE_BG_PALETTES}.")
@@ -197,7 +211,7 @@ def validate(data):
         scenes.append({"name": name, "pixels": pixels, "cell_pal": cell_pal, "menu": menu, "press": press, "nes_dmc": dmc,
                        **({"nes_music": music} if music else {}),
                        "options": options, "puzzle": puzzle, "fight": fight, "back": back, "texts": texts,
-                       **({"aw_texts": aw_texts} if aw_texts else {}),
+                       **({"aw_texts": aw_texts} if aw_texts else {}), **({"doc_anim": doc_anim} if doc_anim else {}),
                        "slide": slide, **({"pass_key": pass_key} if pass_key else {}),
                        **({"cutscene": cutscene} if cutscene else {}), **({"typed": typed} if typed else {})})
 
@@ -1160,8 +1174,8 @@ def _typed(typed, where, errors):
     for group in groups:
         variants = []
         for variant in group:
-            if not (isinstance(variant, list) and 1 <= len(variant) <= 8):
-                bad("a variant is 1-8 steps."); return None
+            if not (isinstance(variant, list) and 1 <= len(variant) <= 16):
+                bad("a variant is 1-16 steps."); return None
             steps = []
             for st in variant:
                 st = st if isinstance(st, dict) else {}
@@ -1441,6 +1455,32 @@ def compose(scene):
                 glyphs.append(tile_of(cell_key(img, c0)))
             rec.append((t["x"], t["y"], glyphs + [tile_of(cell_key(scene["pixels"], c0))]))
     scene["record_glyphs"] = rec
+    aw_rec = []                     # (the Another World Circuit's record, live where its words have it)
+    for t in scene.get("aw_texts") or []:
+        if t.get("record"):
+            c0 = t["y"] * CW + t["x"]
+            glyphs = []
+            for ch in "0123456789-KO":
+                img = list(scene["pixels"])
+                for x, y in text_ink(ch, t["x"], t["y"]):
+                    img[y * W + x] = t["text_slot"]
+                glyphs.append(tile_of(cell_key(img, c0)))
+            aw_rec.append((t["x"], t["y"], glyphs + [tile_of(cell_key(scene["pixels"], c0))]))
+    scene["aw_record_glyphs"] = aw_rec
+    if scene.get("doc_anim"):       # Doc's states: the cells any of them changes, each state's tile there
+        d = scene["doc_anim"]
+        imgs = []
+        for st in d["states"]:
+            img = list(scene["pixels"])
+            for y in range(d["h"] * 8):
+                for x in range(d["w"] * 8):
+                    img[(d["y"] * 8 + y) * W + d["x"] * 8 + x] = int(st[y * d["w"] * 8 + x])
+            imgs.append(img)
+        region = [(d["y"] + r) * CW + d["x"] + c for r in range(d["h"]) for c in range(d["w"])]
+        cells = [c for c in region if len({cell_key(img, c) for img in imgs}) > 1]
+        if len(cells) > 16:
+            raise ProjectError([f'Scene "{scene["name"]}": Doc\'s states change {len(cells)} tiles; at most 16 can move.'])
+        scene["doc_patch"] = {"cells": cells, "tiles": [[tile_of(cell_key(img, c)) for c in cells] for img in imgs]}
     times = []                      # the fight's time (Punch-Out!!'s Another World Circuit, its last win): "TIME M:SS.CC,RN",
     for t in scene.get("aw_texts") or []:   # each digit's cell in each digit
         if t.get("fight_time"):

@@ -231,6 +231,14 @@ wFtEnd:
 SECTION "Fight between rounds", WRAM0   ; kept while the corner scene shows
 wFtResume: db               ; coming back from the corner: carry on, don't start a new fight
 wFtSelectUsed: db           ; the corner's Select refill is once per match
+wFtDocFast: db              ; Punch-Out!!'s corner: Select pressed, Doc rubs faster
+wDocN: db                   ; Punch-Out!!'s corner: the cells Doc's states change, the state (bit 0 his mouth open,
+wDocState: db               ; bit 1 his hand up), frames till his mouth and his hand move, VBlank's to put it up
+wDocMouth: db
+wDocHand: db
+wDocDirty: db
+wDocAddr: ds 32
+wDocTile: ds 64
 wFtRoom: db                 ; loading with the display on (FT_LOAD_ON): this VBlank's time left (FtRoom)
 wFtRoomN: db                ; (FtCopy: blocks this time, their bytes)
 wFtRoomBytes: dw
@@ -321,6 +329,9 @@ FightLoad:
     and a
     jr nz, .keep
     ld [wFtSelectUsed], a
+IF DEF(FT_NES)
+    ld [wNes + $03D8], a    ; (Punch-Out!!'s corner Select: unused this fight)
+ENDC
     ld hl, wFtStart
     ld bc, wFtEnd - wFtStart    ; (more than 255 bytes: a 16-bit count)
 .clear:
@@ -3296,6 +3307,180 @@ FtClock:
 ; ---- the corner, between rounds ----
 
 ENDC
+IF DEF(FT_NES)
+; Punch-Out!!'s corner: Select armed as it comes up ($A87B: $03D8 = $80, unless it's been used this fight).
+FtCornerArm::
+    ld a, [wNes + $03D8]
+    and a
+    ret nz
+    ld a, $80
+    ld [wNes + $03D8], a
+    xor a
+    ld [wFtDocFast], a
+    ret
+
+; Doc's states for this corner (HL: the cells, their addresses, then the four states' tiles), his timers started:
+; as the NES's, his mouth opens 16 frames in and his hand comes up 32 in.
+DocLoad::
+    ld a, [hl+]
+    ld [wDocN], a
+    ld b, a
+    add a
+    ld c, a
+    ld de, wDocAddr
+.addr:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec c
+    jr nz, .addr
+    ld a, b
+    add a
+    add a
+    ld c, a
+    ld de, wDocTile
+.tile:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec c
+    jr nz, .tile
+    xor a
+    ld [wDocState], a
+    ld [wDocDirty], a
+    ld a, 16
+    ld [wDocMouth], a
+    ld a, 32
+    ld [wDocHand], a
+    ret
+
+; A frame of Doc in the corner (the NES's, measured): his mouth open 16 frames, shut 32; his hand up 56, down 32;
+; once Select's pressed, faster: his mouth every 9, his hand every 8.
+DocStep::
+    ld hl, wDocMouth
+    dec [hl]
+    jr nz, .hand
+    ld a, [wDocState]
+    xor 1
+    ld [wDocState], a
+    ld b, a
+    ld a, [wFtDocFast]
+    and a
+    ld a, 9
+    jr nz, .mouth
+    bit 0, b
+    ld a, 16
+    jr nz, .mouth
+    ld a, 32
+.mouth:
+    ld [hl], a
+    ld a, 1
+    ld [wDocDirty], a
+.hand:
+    ld hl, wDocHand
+    dec [hl]
+    ret nz
+    ld a, [wDocState]
+    xor 2
+    ld [wDocState], a
+    ld b, a
+    ld a, [wFtDocFast]
+    and a
+    ld a, 8
+    jr nz, .handSet
+    bit 1, b
+    ld a, 56
+    jr nz, .handSet
+    ld a, 32
+.handSet:
+    ld [hl], a
+    ld a, 1
+    ld [wDocDirty], a
+    ret
+
+; VBlank: Doc's cells as his state has them.
+DocVBlank::
+    xor a
+    ld [wDocDirty], a
+    ld a, [wDocN]
+    and a
+    ret z
+    ld c, a
+    ld a, [wDocState]
+    ld b, a
+    inc b
+    xor a
+.offset:                    ; (state * cells)
+    dec b
+    jr z, .base
+    add c
+    jr .offset
+.base:
+    ld e, a
+    ld d, 0
+    ld hl, wDocTile
+    add hl, de
+    ld de, wDocAddr
+.cell:                      ; [its address] = its tile
+    ld a, [hl+]
+    push hl
+    ld b, a
+    ld a, [de]
+    inc de
+    ld l, a
+    ld a, [de]
+    inc de
+    ld h, a
+    ld [hl], b
+    pop hl
+    dec c
+    jr nz, .cell
+    ret
+
+; Leaving it ($A8B7): unused, it's armed again next time; used, never again this fight.
+FtCornerLeave::
+    ld a, [wNes + $03D8]
+    and 1
+    ld [wNes + $03D8], a
+    ret
+
+; Select in the corner ($A7A6, $A800): Doc rubs faster, and the refill Mac's next round carries (NesHpCarry)
+; comes from the fight's own table ($05EE): by the round and a random eighth (the game's $18, rotated after).
+FtCornerSelect:
+    ld a, [wNes + $03D8]
+    bit 7, a
+    ret z
+    ld a, 1
+    ld [wNes + $03D8], a
+    ld [wFtDocFast], a
+    ld a, [wNes + nRoundNumber]   ; (the NES's is the coming round's by now, less one: the port's, as it is)
+    add a
+    add a
+    add a
+    ld e, a
+    push de                 ; ($AEF1: the game's random byte, $18; the port's NesRandom)
+    call NesRandom
+    pop de
+    and 7
+    add e
+    ld e, a
+    ld d, 0
+    ldh a, [hBank]
+    push af
+    ld a, [wFtBankNes]
+    ld [$2000], a
+    ld a, [wNes + $05EE]
+    ld l, a
+    ld a, [wNes + $05EF]
+    sub NES_BANK_DELTA
+    ld h, a
+    add hl, de
+    ld a, [hl]
+    ld [wNes + $03D9], a
+    pop af
+    ld [$2000], a
+    ret
+ELSE
 ; Select in the corner: the trainer works faster, and some health comes back (once per match).
 FtCornerSelect:
     ld a, [wFtSelectUsed]
@@ -3335,6 +3520,7 @@ CornerRefill2:              ; eighths: 1 x 8, 2 x 16, 4 x 32, 1 x 64
     db 8, 16, 16, 32, 32, 32, 32, 64
 CornerRefill3:              ; 1 x 8, 2 x 16, 2 x 32, 3 x 64
     db 8, 16, 16, 32, 32, 64, 64, 64
+ENDC
 
 IF !DEF(FT_NES)
 ; Clock-timed moves: (round, minute, BCD second, op, argument) in time order, ending with $FF.

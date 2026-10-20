@@ -129,10 +129,26 @@ export function boxingGame(pack) {
 
   // A 48x48 portrait into a scene at tile (cx, cy).
   function portrait(scene, layer, face, cx, cy) {
-    for (let i = 0; i < PORTRAIT * PORTRAIT; i++) {
-      layer.pixels[(cy * 8 + (i / PORTRAIT | 0)) * M.W + cx * 8 + i % PORTRAIT] = +face.pixels[i];
+    const w = face.w || PORTRAIT, h = face.h || PORTRAIT, cols = w / 8;
+    for (let i = 0; i < w * h; i++) {
+      layer.pixels[(cy * 8 + (i / w | 0)) * M.W + cx * 8 + i % w] = +face.pixels[i];
     }
-    [...face.cells].forEach((r, k) => { scene.cellPal[(cy + (k / PT | 0)) * M.CW + cx + k % PT] = role(r); });
+    [...face.cells].forEach((r, k) => { scene.cellPal[(cy + (k / cols | 0)) * M.CW + cx + k % cols] = role(r); });
+  }
+  // Words re-wrapped to a width (the NES's own breaks kept where they fit; a blank line kept as a gap).
+  function rewrap(lines, width) {
+    const out = [];
+    for (const line of lines) {
+      if (!line) { out.push(''); continue; }
+      let cur = '';
+      for (const word of line.split(' ').filter(w => w)) {
+        if (!cur) cur = word;
+        else if (cur.length + 1 + word.length <= width) cur += ' ' + word;
+        else { out.push(cur); cur = word; }
+      }
+      if (cur) out.push(cur);
+    }
+    return out;
   }
 
   // Text palette slots: 0 light, 1 and 2 accents, 3 the background.
@@ -306,7 +322,69 @@ export function boxingGame(pack) {
 
     // ---- Challenger: his rank, name and portrait top right with your record beside it; your name and portrait
     // bottom left with his record beside it ----
+    // ---- The same screens with the NES's close-ups at their own size (80x72: his top right, Doc and Mac bottom
+    // left), the words around them in what's left: Mac's above his, the rival's under his (10 wide, the NES's
+    // breaks kept where they fit). A bio too long for its rows (King Hippo's) moves his close-up up a row. ----
+    const FW = 10, FH = 9;
+    const wordsTo = (q, width) => rewrap(q, width);
+    function bioOf() {
+      return [nesText(rv.lines[0]), ...wordsTo(rv.lines.slice(1), FW)];
+    }
+    function fullChallenger(scene, lay, rematch) {
+      fillRect(lay, 0, 0, M.W, M.H, 3);
+      const bio = bioOf(), compact = bio.length > 6;
+      portrait(scene, lay, rv.portraitFull, M.CW - FW, compact ? 2 : 3);
+      portrait(scene, lay, P.portraitFull, 0, M.CH - FH);
+      const right = (text, y, textSlot) => {
+        const label = nesText(text);
+        return { label, x: M.CW - label.length, y, textSlot };
+      };
+      const lines = rv.playerLines || P.lines;
+      const record = rematch ? lines.map(l => l.replace(/^(\d+)-(\d+) /, (_, w, l2) => `${w}-${+l2 + 1} `)) : lines;
+      const circuit = circuitOf(rv), tag = rematch ? 'REMATCH' : rv.titleBout ? 'TITLE BOUT' : null;
+      const header = compact
+        ? [{ label: circuit, x: 0, y: 0, textSlot: 1 },
+           ...(tag && circuit.length + 1 + tag.length <= M.CW ? [right(tag, 0, 1)] : []),
+           { label: nesText(rv.name), x: 0, y: 2, textSlot: 0 }, right(rv.rank, 1, 2)]
+        : [{ label: circuit, x: 0, y: 0, textSlot: 1 }, ...(tag ? [{ label: tag, x: 0, y: 1, textSlot: 1 }] : []),
+           right(rv.rank, 1, 2), right(rv.name, 2, 0)];
+      const top = compact ? 11 : 12;
+      const his = !compact && bio.length < 6 ? [bio[0], '"PROFILE"', ...bio.slice(1)] : bio;
+      scene.texts = [
+        ...header,
+        ...record.map((label, n) => ({ label: nesText(label), y: 8 - record.length + n, textSlot: 0,
+                                       x: /^FROM /.test(record[n - 1] || '') && !label.includes(':')
+                                         ? record[n - 1].length - label.length : titleX(label),
+                                       ...(/^\d+-\d+ \d+KO$/.test(label) ? { record: true } : {}) }))
+              .filter(t => t.label),
+        { label: nesText(rv.playerRank || P.rank), x: 0, y: 8, textSlot: 2 },
+        ...his.map((label, n) => right(label, top + n, 0)),
+      ];
+      const aw = (pack.anotherWorld || []).indexOf(rv.short);   // (the Another World Circuit's words: as the other)
+      if (aw >= 0) {
+        const last = aw === pack.anotherWorld.length - 1, n = pack.anotherWorld.length;
+        const macRank = rv.playerRank || P.rank;
+        const awTag = rematch ? 'REMATCH' : last ? 'TITLE BOUT' : null;   // (in CIRCUIT's place: no room for both)
+        const low = !compact && nesText(rv.name).length >= 13 ? 3 : 2;   // (a long name over row 2: Mac's lines a row down)
+        scene.awTexts = [
+          { label: 'ANOTHER WORLD', x: 0, y: 0, textSlot: 1 },
+          compact ? { label: nesText(rv.name), x: 0, y: 1, textSlot: 0 } : { label: awTag || 'CIRCUIT', x: 0, y: 1, textSlot: 1 },
+          ...scene.texts.filter(t => t.y > 1 && !(t.x <= 2 && t.y >= 2 && t.y <= 8)),
+          right(last ? 'CHAMPION' : `RANKED: #${n - 1 - aw}`, 1, 2),
+          ...['"WORLD"', '"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER'].map((label, j) => ({ label, x: j < 4 ? 1 : 2, y: low + j, textSlot: 0 })),
+          { label: nesText('0-0 0KO'), x: 0, y: low + 5, textSlot: 0, record: true },
+          ...(low === 2 ? [{ label: nesText(macRank).replace(/\d+$/, String(n - aw)), x: 0, y: 8, textSlot: 2 }] : []),
+        ];
+      }
+      scene.pressStart = { target: id.fight, flashes: 3, area: null, prompt: null,   // (no room left for PUSH START!)
+                           ...(rv.nes?.sound ? { nesDmc: 1 } : {}),
+                           ...(CARD !== null ? { card: card([{ label: 'ROUND', dots: dots(1) }]) }
+                                             : rv.nes?.sound ? { hold: 160 } : {}) };
+      scene.slideIn = true;
+      if (rv.nes?.sound) scene.nesDmc = 1;
+    }
     function challenger(scene, lay, rematch) {
+      if (rv.portraitFull && P.portraitFull) return fullChallenger(scene, lay, rematch);
       fillRect(lay, 0, 0, M.W, M.H, 3);
       portrait(scene, lay, rv.portrait, M.CW - PT, 3);
       portrait(scene, lay, P.portrait, 0, 10);
@@ -358,31 +436,82 @@ export function boxingGame(pack) {
     // out (after round 1 his tip for this fight, after round 2 one of his sayings), then the rival's (one of
     // his lines), then PUSH START!. Its letters tick as the NES's (Doc's and the rival's apart).
     function nesCorner(scene, lay) {
+      const full = rv.portraitFull && P.portraitFull;   // (the NES's close-ups at their size: Doc's hand and mouth
+      if (full) {                                        // moving, faster once Select's pressed)
+        portrait(scene, lay, rv.portraitFull, M.CW - FW, 3);
+        portrait(scene, lay, P.portraitFull, 0, M.CH - FH);
+        if (P.portraitFull.states) scene.docAnim = { x: 0, y: M.CH - FH, w: FW, h: FH, states: P.portraitFull.states };
+      } else {
       portrait(scene, lay, rv.portrait, M.CW - PT, 3);   // his top right, Mac's bottom left
       portrait(scene, lay, P.portrait, 0, M.CH - PT);
+      }
       const right = (text, y, textSlot) => {             // (a record too wide beside his name: kept short)
         const label = /^\d+-\d+ \d+KO$/.test(text) && nesText(text).length + P.name.length >= M.CW ? text : nesText(text);
         return { label, x: M.CW - label.length, y, textSlot };
       };
       const playerRecord = nesText((rv.playerLines || P.lines).at(-1));
-      scene.texts = [
+      scene.texts = full ? [
+        { label: circuitOf(rv), x: 0, y: 0, textSlot: 1 },
+        ...(rv.titleBout ? [{ label: 'TITLE BOUT', x: 0, y: 1, textSlot: 1 }] : []),
+        right(rv.rank, 1, 2), right(rv.name, 2, 0),
+        { label: playerRecord, x: 0, y: 8, textSlot: 0, record: true },          // Mac's record over him, the rival's
+        { ...right(rv.lines[0], 12, 0), label: nesText(rv.lines[0]), x: M.CW - nesText(rv.lines[0]).length },   // under his
+      ] : [
         { label: circuitOf(rv), x: 0, y: 0, textSlot: 1 },
         ...(rv.titleBout ? [{ label: 'TITLE BOUT', x: 1, y: 1, textSlot: 1 }] : []),
         right(rv.rank, 1, 2), right(rv.name, 2, 0),
         { label: playerRecord, x: 0, y: 9, textSlot: 0, record: true },                       // Mac's record and name over
         { label: P.name, x: 0, y: 10, textSlot: 2 }, right(rv.lines[0], 10, 0),   // him, the rival's record
       ];                                                                        // under his portrait
-      const DOC = { x: 0, y: 3, w: M.CW - PT, h: 6 }, RIVAL = { x: PT + 1, y: M.CH - PT, w: M.CW - PT - 1, h: 6 };
+      const DOC = full ? { x: 0, y: 3, w: FW, h: 5 } : { x: 0, y: 3, w: M.CW - PT, h: 6 };
+      const RIVAL = full ? { x: M.CW - FW, y: 13, w: FW, h: 3 } : { x: PT + 1, y: M.CH - PT, w: M.CW - PT - 1, h: 6 };
       const said = (lines, h) => {                       // "...", the lines after the first one in; blank lines
         let ls = lines.length > h ? lines.filter(l => l) : lines;   // go if it's too long
         ls = ls.map((l, n) => (n ? ' ' : '"') + l);
         ls[ls.length - 1] += '"';
         return ls;
       };
-      const doc = (pages, first) => pages.map((lines, n) => ({ ...DOC, lines: said(lines, DOC.h), sound: 'type',
+      const quotedPages = (lines, box) => {              // (the close-ups' size: re-wrapped to the box, paged by it;
+        const room = box.w - 1;                          // its marks at the quote's ends; a word too long, hyphenated)
+        const words = lines.map(l => l.split(' ').filter(w => w));
+        let ls = [];
+        for (const ws of words) {
+          if (!ws.length) { ls.push(''); continue; }
+          let cur = '';
+          for (let w of ws) {
+            while (w.length > room) { if (cur) { ls.push(cur); cur = ''; } ls.push(w.slice(0, room - 1) + '-'); w = w.slice(room - 1); }
+            if (!cur) cur = w;
+            else if (cur.length + 1 + w.length <= room) cur += ' ' + w;
+            else { ls.push(cur); cur = w; }
+          }
+          if (cur) ls.push(cur);
+        }
+        while (ls.length && !ls[ls.length - 1]) ls.pop();
+        const tail = ls[ls.length - 1];                  // (room for the closing mark: the last line's indent
+        if (tail && tail.length + 1 > room && (ls.length === 1 || tail.length + 1 > box.w)) {   // given up, if that's
+          const cut = tail.lastIndexOf(' ');             // enough)
+          if (cut > 0) ls.splice(ls.length - 1, 1, tail.slice(0, cut), tail.slice(cut + 1));
+          else ls.splice(ls.length - 1, 1, tail.slice(0, room - 2) + '-', tail.slice(room - 2));
+        }
+        if (ls.length > box.h) ls = ls.filter(l => l);
+        const pages = [];
+        for (let i = 0; i < ls.length; i += box.h) pages.push(ls.slice(i, i + box.h));
+        return pages.map((pg, k) => pg.map((l, n) => {
+          const first = k === 0 && n === 0, last = k === pages.length - 1 && n === pg.length - 1;
+          return (first ? '"' : last && l.length + 2 > box.w ? '' : ' ') + l + (last ? '"' : '');
+        }));
+      };
+      const doc = (pages, first) => full
+        ? pages.flatMap((lines, n) => { const qs = quotedPages(lines, DOC); return qs.map((ls, k) => ({ ...DOC, lines: ls, sound: 'type',
+            textSlot: 0, clear: !first || n > 0 || k > 0, pause: n < pages.length - 1 || k < qs.length - 1 ? 64 : 32 })); })
+        : pages.map((lines, n) => ({ ...DOC, lines: said(lines, DOC.h), sound: 'type',
         textSlot: 0, clear: !first || n > 0, pause: n < pages.length - 1 ? 64 : 32 }));
       const listen = [['LISTEN', `    ${P.hud}!!`]];
       const rival = q => {                               // his line; too long for his box: two pages, split where
+        if (full) {
+          const qs = quotedPages(q, RIVAL);
+          return qs.map((ls, k) => ({ ...RIVAL, lines: ls, sound: 'type_alt', textSlot: 0, pause: k < qs.length - 1 ? 64 : 0, ...(k ? { clear: true } : {}) }));
+        }
         const solid = q.filter(l => l);                  // the NES leaves its gap
         if (solid.length <= RIVAL.h) return { ...RIVAL, lines: said(q, RIVAL.h), sound: 'type_alt', textSlot: 0, pause: 0 };
         const gaps = q.map((l, i) => l ? -1 : i).filter(i => i > 0);   // (the gap that leaves both pages fitting;
@@ -399,7 +528,10 @@ export function boxingGame(pack) {
       const sayings = [...Array(n).keys()].map(k => [...doc([pack.docLines[k % pack.docLines.length]], true),
                                                      rival(rv.quotes[k % rv.quotes.length])].flat());
       // (a fight with its own talk in the corner, Mac's and Doc's turns in Doc's box: a page each, a longer pause)
-      const talk = pages => pages.map((lines, n) => ({ ...DOC, lines: said(lines, DOC.h), sound: 'type', textSlot: 0,
+      const talk = pages => full
+        ? pages.flatMap((lines, n) => { const qs = quotedPages(lines, DOC); return qs.map((ls, k) => ({ ...DOC, lines: ls, sound: 'type',
+            textSlot: 0, clear: n > 0 || k > 0, pause: n < pages.length - 1 || k < qs.length - 1 ? 96 : 32 })); })
+        : pages.map((lines, n) => ({ ...DOC, lines: said(lines, DOC.h), sound: 'type', textSlot: 0,
                                                       clear: n > 0, pause: n < pages.length - 1 ? 96 : 32 }));
       const corner = k => rv.talk?.[k] ? rv.quotes.map(q => [...talk(rv.talk[k]), rival(q)].flat()) : null;
       scene.typed = { every: 4, pick: 'round', groups: [   // (no tip of his own: Doc's sayings after round 1 too)
@@ -408,7 +540,8 @@ export function boxingGame(pack) {
       ] };
       if (rv.nes?.sound) scene.nesDmc = 1;              // the crowd between rounds too
       scene.pressStart = { target: id.fight, flashes: 1, area: null, quiet: true,   // (no sound on Start)
-                           prompt: { label: 'PUSH START!', x: PT + 1, y: M.CH - 1, textSlot: 1, blink: true },
+                           prompt: full ? { label: 'PUSH\nSTART!', x: M.CW - FW, y: M.CH - 2, textSlot: 1, blink: true }   // (the NES's,
+                                        : { label: 'PUSH START!', x: PT + 1, y: M.CH - 1, textSlot: 1, blink: true },   // on two lines)
                            ...(CARD !== null ? { card: { ...card([{ label: 'ROUND', dots: dots(2) },          // the next
                                                                   { label: 'FINAL ROUND', dots: dots(3) }]),   // round's
                                                          pick: 'round' } } : {}) };                           // card

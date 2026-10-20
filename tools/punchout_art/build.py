@@ -485,6 +485,143 @@ def _draw(px, pals):
         cells.append(best)
     return slots, cells
 
+# The NES's own close-ups at their full size (Punch-Out!!'s challenger and corner screens): 80x72, 10x9 tiles, its
+# boxes and frames as the game draws them. The rival's from his challenger screen; Doc and Mac from the corner, in
+# its four states (Doc's mouth shut or open, his hand down or up on Mac's shoulder), the challenger's being the first.
+FULL_W, FULL_H = 80, 72
+FULL_RIVAL = (160, 48)                          # their boxes' top-left on the NES screen (tile-aligned)
+FULL_MAC = (16, 120)
+DOC_MOUTH = [(4, 1), (4, 2), (5, 1), (5, 2)]    # (row, column) of the tiles each changes
+DOC_HAND = [(6, 2), (6, 3), (7, 1), (7, 2), (7, 3), (7, 4), (8, 1), (8, 2), (8, 3), (8, 4)]
+
+
+def _crop(img, x0, y0):
+    return [[from8(tuple(img[y0 + y][x0 + x])[:3]) for x in range(FULL_W)] for y in range(FULL_H)]
+
+
+def full_rival(opponent):
+    import nes_play
+    return _crop(nes_play.vs_screen(opponent), *FULL_RIVAL)
+
+
+def doc_states():
+    """Doc and Mac in the corner's four states: shut/hand down, open/down, shut/up, open/up (cynes, the real game)."""
+    import pickle
+    cache = HERE / "out" / "nes-doc-states.pkl"
+    if cache.exists():
+        return pickle.load(open(cache, "rb"))
+    import cynes_frames as C
+    from cynes import NES
+    nes = NES(C.rom_path())
+
+    def run(n, b=0):
+        f = None
+        for _ in range(n):
+            nes.controller = b
+            f = nes.step()
+        return f
+    run(600)
+    for _ in range(40):
+        run(4, C.START); nes[0x01] = 3; run(86)
+        if nes[0x00] == 1:
+            break
+    run(300)
+    nes[0x302], nes[0x304], nes[0x305] = 2, 5, 8      # (the round's end, soon: the corner)
+    seen = []
+    for _ in range(2400):
+        f = run(1)
+        if nes[0x00] in (1, 0x40):
+            continue
+        rows = [[tuple(int(v) for v in f[FULL_MAC[1] + y][FULL_MAC[0] + x][:3]) for x in range(FULL_W)] for y in range(FULL_H)]
+        if rows not in seen:
+            seen.append(rows)
+        if len(seen) >= 7:
+            break
+    tile = lambda img, cells: [img[r * 8 + y][c * 8 + x] for r, c in cells for y in range(8) for x in range(8)]
+    base = seen[-4]                                     # (the first three: the screen coming up)
+    states = [None] * 4
+    for img in seen[-4:]:
+        m = tile(img, DOC_MOUTH) != tile(base, DOC_MOUTH)
+        h = tile(img, DOC_HAND) != tile(base, DOC_HAND)
+        states[m + 2 * h] = img
+    assert all(states), "the corner's four states"
+    states = [[[from8(c) for c in row] for row in img] for img in states]
+    cache.parent.mkdir(exist_ok=True)
+    pickle.dump(states, open(cache, "wb"))
+    return states
+
+
+def _tiles_wh(px, w, h):
+    return [[px[cy * 8 + y][cx * 8 + x] for y in range(8) for x in range(8)] for cy in range(h // 8) for cx in range(w // 8)]
+
+
+def exact_palettes(tiles, limit):
+    """The fewest palettes (4 colors each) holding every tile's colors exactly (the NES's: each tile inside one of
+    its 16x16 palette areas), merged greedily; past the limit, the nearest (choose_palettes)."""
+    sets = sorted({frozenset(key(c) for c in t) for t in tiles}, key=len, reverse=True)
+    if any(len(s) > 4 for s in sets):
+        return choose_palettes(tiles, limit)
+    pals = []
+    for s in sets:
+        fit = [p for p in pals if s <= p] or [p for p in pals if len(p | s) <= 4]
+        if fit:
+            best = min(fit, key=lambda p: len(p | s))
+            pals[pals.index(best)] = best | s
+        else:
+            pals.append(set(s))
+    if len(pals) > limit:
+        return choose_palettes(tiles, limit)
+    out = []
+    for p in pals:
+        cols = sorted((list(map(int, k.split(","))) for k in p), key=lambda c: -sum(c))
+        out.append(cols + [cols[-1]] * (4 - len(cols)))
+    return out
+
+
+def _draw_wh(px, pals, w, h, cells_given=None):
+    slots, cells = [0] * (w * h), []
+    for k, tile in enumerate(_tiles_wh(px, w, h)):
+        best = cells_given[k] if cells_given else min(range(len(pals)), key=lambda p: _tile_err(tile, pals[p]))
+        cy, cx = divmod(k, w // 8)
+        for n, c in enumerate(tile):
+            y, x = cy * 8 + n // 8, cx * 8 + n % 8
+            slots[y * w + x] = min(range(4), key=lambda q: dist(c, pals[best][q]))
+        cells.append(best)
+    return slots, cells
+
+
+def full_portraits(palettes):
+    """{name: {w, h, pixels, cells}} at the NES's size (each rival; "docmac": Doc and Mac, with its four "states"'
+    pixels), their palettes added to the list given (cells index it)."""
+    global _weight
+    weight, _weight = _weight, lambda c: 1      # (at this size every color counts alike: skin as much as outlines)
+    try:
+        return _full_portraits(palettes)
+    finally:
+        _weight = weight
+
+
+def _full_portraits(palettes):
+    out = {}
+    docs = doc_states()
+    groups = [("docmac", docs)] + [(r, [full_rival(NES_RIVALS[r]["opp"])]) for r in NES_RIVALS]
+    for name, imgs in groups:
+        tiles = [t for img in imgs for t in _tiles_wh(img, FULL_W, FULL_H)]
+        pals = exact_palettes(tiles, 3)     # (3 each: with the text's and the round card's, a screen's 8)
+        pals = [sorted(p, key=lambda c: -(2 * c[0] + 4 * c[1] + c[2])) for p in pals]   # (lightest first: the
+                                                                                         # original's one grey map)
+        per = [_tiles_wh(img, FULL_W, FULL_H) for img in imgs]   # (one palette per tile, the best through every state)
+        cells = [min(range(len(pals)), key=lambda p: sum(_tile_err(ts[k], pals[p]) for ts in per)) for k in range(len(per[0]))]
+        drawn = [_draw_wh(img, pals, FULL_W, FULL_H, cells) for img in imgs]
+        entry = {"w": FULL_W, "h": FULL_H, "pixels": "".join(map(str, drawn[0][0])),
+                 "cells": "".join(_cell(len(palettes) + c) for c in cells)}
+        if len(imgs) > 1:
+            entry["states"] = ["".join(map(str, s)) for s, _ in drawn]
+        out[name] = entry
+        palettes += pals
+    return out
+
+
 _cell = lambda k: str(k) if k < 10 else chr(65 + k - 10) if k < 36 else chr(0xC0 + k - 36)   # a tile's palette: 0-9,
                                                                                           # A-Z, then À on
 
@@ -498,7 +635,8 @@ def portraits():
             slots, cells = _draw(faces[n], pals)
             out[n] = {"pixels": "".join(map(str, slots)), "cells": "".join(_cell(len(palettes) + c) for c in cells)}
         palettes += pals
-    return out, palettes
+    full = full_portraits(palettes)
+    return out, palettes, full
 
 
 # ---- output ----
@@ -1751,7 +1889,7 @@ def fit_rival(poses, pals, colors, pposes, max_share=16, nth=0):
     return shared, f"within {max_share} pixels (still over: his NES pictures are what show, not these)", report
 
 
-def write_js(colors, pposes, note, faces, mac_pal, rivals, mac_cgb=None):
+def write_js(colors, pposes, note, faces, mac_pal, rivals, mac_cgb=None, full=None):
     L = ["// Little Mac and his opponents from Punch-Out!! (NES), from a copy of the game. Written by tools/punchout_art/build.py",
          f"// ({note}).", "",
          "// Player sprite colors for slots 1-3.", f"export const MAC_COLORS = {json.dumps(colors)};", "",
@@ -1763,6 +1901,9 @@ def write_js(colors, pposes, note, faces, mac_pal, rivals, mac_cgb=None):
           f"export const TEXT_PALETTE = {json.dumps(TEXT_PALETTE)};", f"export const PORTRAIT_PALETTES = {json.dumps(mac_pal)};",
           "export const PORTRAITS = {"]
     L += [f"  {n}: {{ pixels: '{v['pixels']}', cells: '{v['cells']}' }}," for n, v in faces.items()]
+    L += ["};", "", "// The NES's close-ups at full size (80x72): each rival's, and Doc and Mac (docmac) with the corner's four states.",
+          "export const PORTRAITS_FULL = {"]
+    L += [f"  {n}: {json.dumps(v)}," for n, v in (full or {}).items()]
     import base64
     L += ["};", "",
           "// What every fight shares of the NES game: Mac, the sound engine (each fighter's own NES data: X_NES).",
@@ -2044,9 +2185,9 @@ def main():
     global SCALE_JOE, SCALE_MAC
     SCALE_JOE, SCALE_MAC = args.joe, args.mac
     if not EXAMPLE.exists():            # a first build: a provisional pack, so the editor can make the project to measure
-        faces, mac_pal = portraits()
+        faces, mac_pal, full = portraits()
         write_js(colors, player[args.max_share], "provisional", faces, mac_pal,
-                 {key: rival_art(key, args.joe, colors, player[args.max_share]) for key in NES_RIVALS})
+                 {key: rival_art(key, args.joe, colors, player[args.max_share]) for key in NES_RIVALS}, full=full)
         write_example()
     def first(test):
         return next((n for n in range(args.max_share + 1) if test(n)), args.max_share)
@@ -2068,9 +2209,9 @@ def main():
         sys.exit("editor/art/mac-vs-joe.js left as it was.")
     note = (f"rivals at {args.joe}, "
             f"Mac {'from ' + mac_sheet.name if args.mac_sheet else f'at {args.mac}'} of NES size")
-    faces, mac_pal = portraits()
+    faces, mac_pal, full = portraits()
     rivals = {key: rival_art(key, args.joe, colors, pposes) for key in NES_RIVALS}
-    write_js(colors, pposes, note, faces, mac_pal, rivals, mac_cgb)
+    write_js(colors, pposes, note, faces, mac_pal, rivals, mac_cgb, full=full)
     write_example()
     print("wrote", OUT_JS.relative_to(ROOT), "- reopen New > Examples > Joe vs Mac in the editor")
 
