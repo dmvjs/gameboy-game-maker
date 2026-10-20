@@ -43,9 +43,9 @@ PcmMaybeFar::
     ldh a, [hFtActive]
     and a
     jr z, .off
-    ldh a, [hIsCGB]         ; (in the fight: Color only, the triangle mixed in)
-    and a
-    ret z
+    ldh a, [hIsCGB]         ; (in the fight: on Color the triangle mixed in; on the original, the crowd's
+    and a                   ; alone while it lasts: its noise imitation can't make its band, 250-1000 Hz)
+    jr z, .off
     inc a
     ld [wPcmMix], a
 .off:
@@ -111,18 +111,16 @@ PcmMaybeFar::
     ei                      ; (off the fight no handler runs, VBlank only waking HALT: the timer's must)
     ret
 
-; A fight starting (Color) with the crowd's sample under way: its recording from where the sample's got to (its
-; frame, 91 bytes a frame, whole blocks), mixed.
+; A fight starting with the crowd's sample under way: its recording from where the sample's got to (its frame,
+; 91 bytes a frame, whole blocks), mixed on Color.
 PcmResume::
-    ldh a, [hIsCGB]
-    and a
-    ret z
     ld a, [wDmcSample]
     cp 1
     ret nz
     ld a, [wPcmOn]
     and a
     ret nz
+    inc a                   ; (the crowd's sample: 1)
     call PcmMaybeFar
     ld a, [wDmcFrame]       ; (frame * 91, to whole 16-byte blocks)
     ld b, a
@@ -148,8 +146,10 @@ PcmResume::
     add hl, de
     ld a, l
     ld [wMixCrowd], a
+    ld [wPcmPtr], a
     ld a, h
     ld [wMixCrowd + 1], a
+    ld [wPcmPtr + 1], a
     xor a
     ld [wMixHead], a
     ld [wMixTail], a
@@ -518,19 +518,9 @@ PcmProduceIn:
     ret
 
     ALIGN 8
-MixTable:                   ; the triangle's step (x16) with the crowd's: 0.8 of its swing and all of the crowd's, kept to 0-15
-FOR TRI, 16
-    FOR CROWD, 16
-        DEF V = (TRI * 8 - 60 + CROWD * 10 - 75 + 75 + 5) / 10
-        IF V < 0
-            REDEF V = 0
-        ELIF V > 15
-            REDEF V = 15
-        ENDC
-        db V
-        PURGE V
-    ENDR
-ENDR
+MixTable:                   ; the triangle's step (x16) with the crowd's, as the NES's mixer has them, its peaks
+    MIX_TABLE               ; taken in softly (codegen _crowd_pcm)
+
     ALIGN 8
 MixTri:                     ; the NES triangle's 32 steps (x16: MixTable's row)
     db 15 << 4, 14 << 4, 13 << 4, 12 << 4, 11 << 4, 10 << 4, 9 << 4, 8 << 4, 7 << 4, 6 << 4, 5 << 4, 4 << 4, 3 << 4, 2 << 4, 1 << 4, 0

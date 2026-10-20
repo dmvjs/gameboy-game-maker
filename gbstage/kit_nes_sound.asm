@@ -2186,8 +2186,8 @@ ApuQuiet::
 ; Once a frame, after NesSound: the frame's clocks around its writes, then the GB channels. The game's $C0
 ; to $4017 clocks a quarter and a half frame at once; before the next one come three quarters and a half.
 ApuOut:
-    ld a, [wPcmOn]          ; the crowd recorded: done once its sample's over, or in the fight on the original;
-    and a                   ; in the fight on Color, taken up where its sample's got to
+    ld a, [wPcmOn]          ; the crowd recorded: done once its sample's over; in the fight, taken up where its
+    and a                   ; sample's got to
     jr nz, .pcmOn
     ldh a, [hFtActive]
     and a
@@ -2196,15 +2196,7 @@ ApuOut:
 .pcmOn:
     ld a, [wDmcSample]
     cp 1
-    jr nz, .pcmStop
-    ldh a, [hFtActive]
-    and a
-    jr z, .noPcm
-    ldh a, [hIsCGB]
-    and a
-    jr nz, .noPcm
-.pcmStop:
-    call PcmStop
+    call nz, PcmStop
 .noPcm:
     ld hl, wApuNew          ; (most frames: nothing written that starts something; then the envelopes and the
     ld a, [hl+]             ; linear counter take the frame's four quarter clocks at once, as the same, the

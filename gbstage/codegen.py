@@ -104,10 +104,22 @@ _NOISE = {}
 PCM_RATE = 2097152 / 192        # (kit_pcm.asm: the wave channel's 2048 - 192, the timer's 256 - 192: 10923 Hz)
 
 
+NES_SAMPLE_STEP = (0.42545 / 127) / (0.1128 / 15)     # a DMC step, in the Game Boy's (a square's) steps
+
+
+def _knee(x):
+    """Steps from the middle, kept to +-7.5: as they are to 5, then softly to the edge."""
+    import math
+    a = abs(x)
+    return x if a <= 5 else math.copysign(5 + 2.5 * math.tanh((a - 5) / 2.5), x)
+
+
 def _crowd_pcm(nes):
     """Punch-Out!!'s crowd (its first DMC sample), recorded, for the wave channel (kit_pcm.asm): the NES's 1-bit
-    delta stream decoded at the rate the game plays it (33144 Hz), averaged down to 8192 Hz, 4 bits a step, two
-    to a byte (the first high), whole 32-step buffers (10923 Hz: 4 KB, the original's WRAMX)."""
+    delta stream decoded at the rate the game plays it (33144 Hz), averaged down to the wave channel's rate, 4 bits
+    a step, two to a byte (the first high), whole 32-step buffers (10923 Hz: 4 KB, the original's WRAMX). As loud
+    as the NES has it against the other channels (its mixer: a sample step 0.42545/127, a square's 0.1128/15, the
+    Game Boy's four alike), its peaks taken in softly (_knee); and MixTable, the triangle with it in the fight."""
     fixed, data = nes["sound_fixed"], nes["samples"]
     a, n = fixed[0x368], fixed[0x369] * 16 + 1
     start = 0xC000 + a * 64 - 0xE000
@@ -124,8 +136,10 @@ def _crowd_pcm(nes):
         if hi > len(seq):
             break
         chunk = seq[lo:hi] or [seq[-1]]
-        steps.append(min(15, round(sum(chunk) / len(chunk) * 15 / 126)))
+        steps.append(sum(chunk) / len(chunk))
         k += 1
+    mid = sum(steps) / len(steps)
+    steps = [max(0, min(15, round(7.5 + _knee((v - mid) * NES_SAMPLE_STEP)))) for v in steps]
     while len(steps) % 32:
         steps.append(steps[-1])
     rot = []                            # (a restart plays from its second step: each 32 rotated a step, its last first)
@@ -133,7 +147,9 @@ def _crowd_pcm(nes):
         blk = steps[i:i + 32]
         rot += [blk[-1]] + blk[:-1]
     packed = [rot[i] << 4 | rot[i + 1] for i in range(0, len(rot), 2)]
-    return (f"DEF CROWD_PCM_SIZE EQU {len(packed)}\nSECTION \"Data: Crowd PCM\", ROMX\n"
+    mix = [max(0, min(15, round(7.5 + _knee((t - 7.5) + (c - 7.5))))) for t in range(16) for c in range(16)]
+    return ("MACRO MIX_TABLE\n" + _db(mix) + "\nENDM\n"
+            f"DEF CROWD_PCM_SIZE EQU {len(packed)}\nSECTION \"Data: Crowd PCM\", ROMX\n"
             f"CrowdPcm:                   ; the crowd, recorded: {round(PCM_RATE)} Hz, 4 bits ({len(steps)} steps)\n{_db(packed)}\n")
 
 
@@ -162,7 +178,7 @@ def _dmc_tables(nes):
         for f in range(0, len(seq), per):
             c = seq[f:f + per]
             m = sum(c) / len(c)
-            vols.append(max(1, min(15, round(math.sqrt(sum((x - m) ** 2 for x in c) / len(c)) / 2))))
+            vols.append(max(1, min(15, round(math.sqrt(sum((x - m) ** 2 for x in c) / len(c)) * 2 * NES_SAMPLE_STEP))))  # (noise at v: +-v/2)
             rates.append(_centroid([x - m for x in c], rate))
         held, steady = vols[0], []                              # a wobble of one step held: each change of
         for v in vols:                                          # the GB's noise volume restarts it, a click
