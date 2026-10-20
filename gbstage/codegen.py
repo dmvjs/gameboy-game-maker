@@ -50,14 +50,53 @@ NES_RGB = [(84, 84, 84), (0, 30, 116), (8, 16, 144), (48, 0, 136), (68, 0, 100),
            (236, 238, 236), (168, 204, 236), (188, 188, 236), (212, 178, 236), (236, 174, 236), (236, 174, 212), (236, 180, 176),
            (228, 196, 144), (204, 210, 120), (180, 222, 120), (168, 226, 144), (152, 226, 180), (160, 214, 228), (160, 162, 160), (0, 0, 0), (0, 0, 0)]
 
+def _centroid(c, rate):
+    """A frame's brightness: its spectrum's centroid (Hz), Hann-windowed."""
+    import numpy as np
+    c = np.asarray(c, float)
+    s = np.abs(np.fft.rfft((c - c.mean()) * np.hanning(len(c))))
+    f = np.fft.rfftfreq(len(c), 1 / rate)
+    return float((f * s).sum() / s.sum()) if s.sum() > 0 else 0.0
+
+
+_NOISE = {}
+
+
+def _noise_centroids(rate, per):
+    """Each GB noise clock (NR43, the 15-step LFSR) and its brightness measured as _centroid measures a sample's
+    frame: the LFSR simulated, held at its clock, sampled at the NES sample's rate."""
+    import numpy as np
+    if (rate, per) not in _NOISE:
+        lfsr, bits = 0x7FFF, []
+        for _ in range(32767):
+            bits.append(~lfsr & 1)
+            x = (lfsr ^ (lfsr >> 1)) & 1
+            lfsr = (lfsr >> 1) | (x << 14)
+        bits = np.array(bits, float) * 2 - 1
+        out = []
+        for s in range(14):
+            for r in range(8):
+                hz = 524288 / (0.5 if r == 0 else r) / 2 ** (s + 1)
+                n = per * 8
+                x = bits[(np.floor(np.arange(n) * hz / rate).astype(np.int64)) % 32767]
+                out.append((s << 4 | r, float(np.mean([_centroid(x[i * per:(i + 1) * per], rate) for i in range(8)]))))
+        _NOISE[(rate, per)] = out
+    return _NOISE[(rate, per)]
+
+
 def _dmc_tables(nes):
     """The NES's DMC samples (crowd, laughs, grunt) for the GB noise channel: per sample its address byte
-    ($4012), a noise clock from how often it crosses its average, and its loudness each frame (RMS of the
-    decoded 1-bit delta stream at the rate the game plays it, 33144 Hz)."""
+    ($4012), and each frame its loudness (RMS of the decoded 1-bit delta stream at the rate the game plays it,
+    33144 Hz) and its noise clock (the GB's nearest to that frame's brightness: white noise crosses its average
+    at about half its clock), so the hiss follows the sample's own colour as it goes."""
     import math
     fixed, data = nes["sound_fixed"], nes["samples"]
     rate, per = 1789773 / 54, int(1789773 / 54 / 60)
-    addrs, clocks, envs = [], [], []
+    table = _noise_centroids(rate, per)
+
+    def clock(target):
+        return min(table, key=lambda kv: abs(math.log(max(kv[1], 1.0) / max(target, 1.0))))[0]
+    addrs, envs = [], []
     for k in range(7):
         a, n = fixed[0x368 + 2 * k], fixed[0x369 + 2 * k] * 16 + 1
         start = 0xC000 + a * 64 - 0xE000
@@ -66,27 +105,25 @@ def _dmc_tables(nes):
             for i in range(8):
                 level = min(level + 2, 126) if b >> i & 1 and level <= 125 else (level - 2 if not b >> i & 1 and level >= 2 else level)
                 seq.append(level)
-        vols, crossings = [], 0
+        vols, rates = [], []
         for f in range(0, len(seq), per):
             c = seq[f:f + per]
             m = sum(c) / len(c)
             vols.append(max(1, min(15, round(math.sqrt(sum((x - m) ** 2 for x in c) / len(c)) / 2))))
-            crossings += sum(1 for i in range(1, len(c)) if (c[i] - m) * (c[i - 1] - m) < 0)
+            rates.append(_centroid([x - m for x in c], rate))
         held, steady = vols[0], []                              # a wobble of one step held: each change of
         for v in vols:                                          # the GB's noise volume restarts it, a click
             if abs(v - held) >= 2:
                 held = v
             steady.append(held)
-        vols = steady
-        target = 2 * crossings / (len(seq) / rate)             # white noise crosses at about half its clock
-        best = min(((s, r) for s in range(14) for r in range(8)),
-                   key=lambda sr: abs(math.log(524288 / (0.5 if sr[1] == 0 else sr[1]) / 2 ** (sr[0] + 1) / target)))
-        addrs.append(a); clocks.append(best[0] << 4 | best[1]); envs.append(vols)
-    lines = ["DmcAddr:                    ; each sample's $4012, as the engine starts it",
-             _db(addrs), "DmcClock:                   ; its noise clock (NR43)", _db(clocks),
-             "DmcEnvelope:                ; its loudness by frame: the count first", "    dw " + ", ".join(f"DmcEnv{k}" for k in range(7))]
+        smooth = [sorted(rates[max(0, i - 1):i + 2])[len(rates[max(0, i - 1):i + 2]) // 2] for i in range(len(rates))]
+        addrs.append(a)
+        envs.append([x for v, r in zip(steady, smooth) for x in (v, clock(r))])
+    lines = ["DmcAddr:                    ; each sample's $4012, as the engine starts it", _db(addrs),
+             "DmcEnvelope:                ; per frame its loudness and noise clock (NR43): the count first",
+             "    dw " + ", ".join(f"DmcEnv{k}" for k in range(7))]
     for k, v in enumerate(envs):
-        lines += [f"DmcEnv{k}:", _db([len(v)] + v)]
+        lines += [f"DmcEnv{k}:", _db([len(v) // 2] + v)]
     return "\n".join(lines)
 
 

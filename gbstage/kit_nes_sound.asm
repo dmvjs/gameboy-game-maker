@@ -133,6 +133,8 @@ wGbNoise: db
 wGbPer: ds 4                ; the pulse timers last converted
 wGbPerFreq: ds 4            ; and their GB frequencies
 wApuEnd:
+wTriPer: dw                 ; the triangle's timer last converted (high $FF: none yet), and its GB frequency
+wTriFreq: dw
 
 ; A to NES sound register \1, noting the writes ApuOut reacts to.
 MACRO apu
@@ -147,6 +149,144 @@ MACRO apu
             ld [wApuSweepReload + ((\1) >> 2)], a
         ENDC
     ENDC
+ENDM
+
+; A length counter's half-frame tick: \1 its channel's control register, \2 its halt bit; HL = the counter
+; (advanced).
+MACRO LENGTH_TICK
+    ld a, [wApu + (\1)]
+    bit \2, a
+    jr nz, .keep\@
+    ld a, [hl]
+    and a
+    jr z, .keep\@
+    dec [hl]
+.keep\@:
+    inc l
+ENDM
+
+; Pulse \1's sweep: when its divider runs out (enabled, shifting, not muted) the period becomes the target; the
+; divider reloaded when it's out or $4001 was written, else counting down.
+MACRO APU_SWEEP
+    ld a, [wApu + 1 + 4 * (\1)]
+    ld [wSwCtl], a
+    bit 7, a
+    jr z, .divider\@
+    and $07
+    jr z, .divider\@
+    ld a, [wApuSweepDiv + (\1)]
+    and a
+    jr nz, .divider\@
+    ld e, \1
+    call SweepCalc
+    jr c, .divider\@
+    ld a, [wSwTarget]
+    ld [wApuPeriod + 2 * (\1)], a
+    ld a, [wSwTarget + 1]
+    and $07
+    ld [wApuPeriod + 2 * (\1) + 1], a
+.divider\@:
+    ld a, [wSwCtl]
+    swap a
+    and $07
+    ld b, a
+    ld hl, wApuSweepReload + (\1)
+    ld a, [hl]
+    ld [hl], 0
+    ld l, LOW(wApuSweepDiv + (\1))
+    and a
+    jr nz, .reload\@
+    ld a, [hl]
+    and a
+    jr z, .reload\@
+    dec [hl]
+    jr .swept\@
+.reload\@:
+    ld [hl], b
+.swept\@:
+ENDM
+
+; Pulse \1: restarted, its timer as written; a new low byte, just that.
+MACRO TAKE_PERIOD
+    ld a, [wApu + 2 + 4 * (\1)]
+    ld c, a                 ; low
+    ld hl, wApuSeenLo + (\1)
+    ld d, [hl]              ; the low we saw before
+    ld [hl], c
+    ld a, [wApuStart + (\1)]
+    and a
+    jr nz, .whole\@
+    ld a, d
+    cp c
+    jr z, .taken\@
+    ld a, c
+    ld [wApuPeriod + 2 * (\1)], a
+    jr .taken\@
+.whole\@:
+    ld a, c
+    ld [wApuPeriod + 2 * (\1)], a
+    ld a, [wApu + 3 + 4 * (\1)]
+    and $07
+    ld [wApuPeriod + 2 * (\1) + 1], a
+.taken\@:
+ENDM
+
+; B quarter-frame ticks of the envelope at wEnv + \2 (start, volume, divider), \1 its control register: a start
+; sets 15 and the period; each time the divider runs out the volume drops (or loops, bit 5). Keeps B.
+MACRO ENV_TICKS
+    ld a, [wEnv + (\2)]
+    and a
+    jr nz, .start\@
+    ld a, [wEnv + (\2) + 2]    ; (most ticks: the divider just counting down, the volume as it is)
+    sub b
+    jr c, .slow\@
+    ld [wEnv + (\2) + 2], a
+    jr .done\@
+.start\@:
+    xor a
+    ld [wEnv + (\2)], a
+    ld d, 15
+    ld a, [wApu + (\1)]
+    and $0F
+    ld e, a
+    ld c, b
+    dec c
+    jr z, .save\@
+    jr .tick\@
+.slow\@:
+    ld a, [wApu + (\1)]
+    and $0F
+    ld e, a                 ; E = the period
+    ld a, [wEnv + (\2) + 1]
+    ld d, a                 ; D = the volume
+    ld a, [wEnv + (\2) + 2]
+    ld c, b
+.tick\@:
+    and a
+    jr z, .step\@
+    dec a
+    jr .next\@
+.step\@:
+    ld a, d
+    and a
+    jr z, .wrap\@
+    dec d
+    ld a, e
+    jr .next\@
+.wrap\@:
+    ld a, [wApu + (\1)]
+    bit 5, a
+    ld a, e
+    jr z, .next\@
+    ld d, 15
+.next\@:
+    dec c
+    jr nz, .tick\@
+.save\@:
+    ld [wEnv + (\2) + 2], a
+    ld a, d
+    ld [wEnv + (\2) + 1], a
+.done\@:
 ENDM
 
 ; A = table \1 [A]
@@ -2026,6 +2166,7 @@ ApuInit::
     ld [hl+], a
     dec b
     jr nz, .unknown
+    ld [wTriPer + 1], a
     ret
 
 ; The GB's sound back to quiet (leaving the fight).
@@ -2040,41 +2181,47 @@ ApuQuiet::
 ; Once a frame, after NesSound: the frame's clocks around its writes, then the GB channels. The game's $C0
 ; to $4017 clocks a quarter and a half frame at once; before the next one come three quarters and a half.
 ApuOut:
+    ld hl, wApuNew          ; (most frames: nothing written that starts something; then the envelopes and the
+    ld a, [hl+]             ; linear counter take the frame's four quarter clocks at once, as the same, the
+    or [hl]                 ; half-frame clocks either side of the writes as ever)
+    inc hl
+    or [hl]
+    inc hl
+    or [hl]
+    inc hl
+    or [hl]
+    jr nz, .written
+    ld a, 4
+    call ApuQuarters
+    call ApuHalf
+    call ApuTake
+    call ApuHalf
+    jr .channels
+.written:
     ld a, 1
     call ApuClocks
     call ApuTake
     ld a, 3
     call ApuClocks
-    ld e, 0
-    call PulseOut
-    ld e, 1
-    call PulseOut
+.channels:
+    call PulseOut0
+    call PulseOut1
     call TriangleOut
     jp NoiseOut
 
 ; A quarter-frame clocks (envelopes, the linear counter) and one half-frame clock (lengths, sweeps).
 ApuClocks:
+    call ApuQuarters
+    jp ApuHalf
+
+; A quarter-frame clocks: the envelopes, the linear counter.
+ApuQuarters:
     ld [wTicks], a
-    ld b, a
-    ld a, [wApu + $00]
-    ld c, a
-    ld hl, wEnv + 0
-    call EnvTicks
-    ld a, [wTicks]
-    ld b, a
-    ld a, [wApu + $04]
-    ld c, a
-    ld hl, wEnv + 3
-    call EnvTicks
-    ld a, [wTicks]
-    ld b, a
-    ld a, [wApu + $0C]
-    ld c, a
-    ld hl, wEnv + 6
-    call EnvTicks
-    ld a, [wTicks]          ; the triangle's linear counter: reloaded while flagged, else counting down
-    ld b, a
-    ld a, [wApu + $08]
+    ld b, a                 ; (B: the ticks, throughout)
+    ENV_TICKS $00, 0
+    ENV_TICKS $04, 3
+    ENV_TICKS $0C, 6
+    ld a, [wApu + $08]      ; the triangle's linear counter: reloaded while flagged, else counting down
     ld c, a
     and $7F
     ld e, a
@@ -2099,79 +2246,17 @@ ApuClocks:
 .linSet:
     ld [hl], a
 .lengths:
-    ld hl, wApuLength
-    ld a, [wApu + $00]
-    call .len
-    ld a, [wApu + $04]
-    call .len
-    ld a, [wApu + $08]      ; the triangle's halt is bit 7
-    rrca
-    rrca
-    call .len
-    ld a, [wApu + $0C]
-    call .len
-    ld e, 0
-    call ApuSweep
-    ld e, 1
-    jp ApuSweep
-.len:                       ; A bit 5 = halt; HL = the counter (advanced)
-    bit 5, a
-    jr nz, .keep
-    ld a, [hl]
-    and a
-    jr z, .keep
-    dec [hl]
-.keep:
-    inc l
     ret
 
-; B quarter-frame ticks of the envelope at HL (start, volume, divider), C = its control register: a start
-; sets 15 and the period; each time the divider runs out the volume drops (or loops, bit 5).
-EnvTicks:
-    ld a, c
-    and $0F
-    ld e, a
-    ld a, [hl]
-    and a
-    jr z, .running
-    ld [hl], 0
-    ld d, 15
-    ld a, e
-    dec b
-    jr z, .save
-    jr .tick
-.running:
-    inc hl
-    ld d, [hl]
-    inc hl
-    ld a, [hl]
-    dec hl
-    dec hl
-.tick:
-    and a
-    jr z, .step
-    dec a
-    jr .next
-.step:
-    ld a, d
-    and a
-    jr z, .wrap
-    dec d
-    ld a, e
-    jr .next
-.wrap:
-    bit 5, c
-    ld a, e
-    jr z, .next
-    ld d, 15
-.next:
-    dec b
-    jr nz, .tick
-.save:
-    inc hl
-    ld [hl], d
-    inc hl
-    ld [hl], a
+; A half-frame clock: the lengths, the sweeps.
+ApuHalf:
+    ld hl, wApuLength
+    LENGTH_TICK $00, 5
+    LENGTH_TICK $04, 5
+    LENGTH_TICK $08, 7      ; (the triangle's halt is bit 7)
+    LENGTH_TICK $0C, 5
+    APU_SWEEP 0
+    APU_SWEEP 1
     ret
 
 ; Writes that start something: $4003, $4007, $400B, $400F (length; envelope or linear counter).
@@ -2264,149 +2349,8 @@ ApuTake:
     xor a
     ld [wDmcFrame], a
 .pulses:
-    ld e, 0
-    call .period
-    ld e, 1
-.period:                    ; pulse E: restarted, its timer as written; a new low byte, just that
-    ld a, e
-    add a
-    add a
-    add LOW(wApu + 2)
-    ld l, a
-    ld h, HIGH(wApu)
-    ld c, [hl]              ; low
-    inc l
-    ld a, [hl]
-    and $07
-    ld b, a                 ; high
-    ld a, e
-    add LOW(wApuSeenLo)
-    ld l, a
-    ld a, [hl]
-    ld [hl], c
-    ld d, a                 ; the low we saw before
-    ld a, e
-    add a
-    add LOW(wApuPeriod)
-    ld l, a
-    ld a, e
-    add LOW(wApuStart)
-    push hl
-    ld l, a
-    ld a, [hl]
-    pop hl
-    and a
-    jr nz, .whole
-    ld a, d
-    cp c
-    ret z
-    ld [hl], c
-    ret
-.whole:
-    ld [hl], c
-    inc l
-    ld [hl], b
-    ret
-
-; Pulse E's sweep: when its divider runs out (enabled, shifting, not muted) the period becomes the target.
-ApuSweep:
-    ld a, e
-    add a
-    add a
-    add LOW(wApu + 1)
-    ld l, a
-    ld h, HIGH(wApu)
-    ld a, [hl]
-    ld [wSwCtl], a
-    ld hl, wApuSweepDiv
-    ld a, l
-    add e
-    ld l, a
-    ld a, [wSwCtl]
-    bit 7, a
-    jr z, .divider
-    and $07
-    jr z, .divider
-    ld a, [hl]
-    and a
-    jr nz, .divider
-    push hl
-    call SweepCalc
-    jr c, .muted
-    ld a, e
-    add a
-    add LOW(wApuPeriod)
-    ld l, a
-    ld h, HIGH(wApuPeriod)
-    ld a, [wSwTarget]
-    ld [hl+], a
-    ld a, [wSwTarget + 1]
-    and $07
-    ld [hl], a
-.muted:
-    pop hl
-.divider:                   ; reloaded when it's out or $4001 was written, else counting down
-    ld a, [wSwCtl]
-    swap a
-    and $07
-    ld b, a
-    ld a, e
-    add LOW(wApuSweepReload)
-    ld l, a
-    ld h, HIGH(wApuSweepReload)
-    ld c, [hl]
-    ld [hl], 0
-    ld a, e
-    add LOW(wApuSweepDiv)
-    ld l, a
-    ld a, c
-    and a
-    jr nz, .reload
-    ld a, [hl]
-    and a
-    jr z, .reload
-    dec [hl]
-    ret
-.reload:
-    ld [hl], b
-    ret
-
-; Pulse E: carry if muted (timer under 8, or an upward sweep target past $7FF); wSwPeriod = its timer.
-PulseMuted:
-    ld a, e
-    add a
-    add LOW(wApuPeriod)
-    ld l, a
-    ld h, HIGH(wApuPeriod)
-    ld a, [hl+]
-    ld [wSwPeriod], a
-    ld c, a
-    ld a, [hl]
-    ld [wSwPeriod + 1], a
-    ld b, a
-    and a
-    jr nz, .long
-    ld a, c
-    cp 8
-    ret c
-.long:
-    ld a, e
-    add a
-    add a
-    add LOW(wApu + 1)
-    ld l, a
-    ld h, HIGH(wApu)
-    ld a, [hl]
-    bit 3, a                ; downward: never too high
-    jr nz, .sounds
-    and $07
-    jp nz, SweepCalc
-    ld a, b                 ; no shift: the target is twice the timer
-    cp $04
-    ccf
-    ret
-.sounds:
-    and a
+    TAKE_PERIOD 0
+    TAKE_PERIOD 1
     ret
 
 ; Pulse E: wSwCtl = $4001, wSwPeriod, wSwTarget (period +/- period >> shift; pulse 1 negates one less).
@@ -2523,43 +2467,6 @@ GbFreq:
     ld hl, 0
     ret
 
-; Pulse E to the GB's pulse E: a volume change or a fresh note restarts it; a pitch change just retunes.
-; Pulse E's fade, a frame on: frames since its volume changed; the GB's envelope, if fading it, a step down
-; every pace frames (pace/64 s: near enough). Keeps BC, DE, HL.
-PulseFadeTick:
-    push hl
-    ld hl, wFadeGap
-    add hl, de
-    inc [hl]
-    jr nz, .gap
-    dec [hl]
-.gap:
-    ld hl, wFadePace
-    add hl, de
-    ld a, [hl]
-    and a
-    jr z, .done
-    push bc
-    ld b, a
-    ld hl, wFadeTick
-    add hl, de
-    inc [hl]
-    ld a, [hl]
-    cp b
-    jr c, .held
-    ld [hl], 0
-    ld hl, wFadeVol
-    add hl, de
-    ld a, [hl]
-    and a
-    jr z, .held
-    dec [hl]
-.held:
-    pop bc
-.done:
-    pop hl
-    ret
-
 ; Pulse E's volume changing to B alone ([HL] what the GB has): Z if the GB's own fade is already there (within a
 ; step: no restart); Z and carry if it's a step from what the GB has (held: inaudible, a restart's click isn't);
 ; else NZ with wFadeEnv the restart's envelope: a fade at this step's pace when it's one step down soon after the
@@ -2648,63 +2555,70 @@ PulseFade:
     or 1                    ; NZ: restart
     ret
 
-PulseOut:
-    call PulseMuted
+; Pulse \1 to the GB's pulse \1: a volume change or a fresh note restarts it; a pitch change just retunes.
+MACRO PULSE_OUT
+    ld e, \1                ; (E, D = 0: for the helpers)
+    ld hl, wApuPeriod + 2 * (\1)   ; muted? (carry: timer under 8, or an upward sweep target past $7FF)
+    ld a, [hl+]
+    ld [wSwPeriod], a
+    ld c, a
+    ld a, [hl]
+    ld [wSwPeriod + 1], a
+    ld b, a
+    and a
+    jr nz, .long\@
+    ld a, c
+    cp 8
+    jr .mutedSet\@
+.long\@:
+    ld a, [wApu + 1 + 4 * (\1)]
+    bit 3, a                ; downward: never too high
+    jr nz, .sounds\@
+    and $07
+    jr z, .noShift\@
+    call SweepCalc
+    jr .mutedSet\@
+.noShift\@:
+    ld a, b                 ; no shift: the target is twice the timer
+    cp $04
+    ccf
+    jr .mutedSet\@
+.sounds\@:
+    and a
+.mutedSet\@:
     ld b, 0
-    jr c, .volume           ; muted
+    jr c, .volume\@           ; muted
     ld d, 0
-    ld hl, wApuLength
-    add hl, de
+    ld hl, wApuLength + (\1)
     ld a, [hl]
     and a
-    jr z, .volume
-    ld a, e
-    add a
-    add a
-    add LOW(wApu)
-    ld l, a
-    ld h, HIGH(wApu)
+    jr z, .volume\@
+    ld hl, wApu + 4 * (\1)
     ld a, [hl]
     bit 4, a
-    jr z, .envelope
+    jr z, .envelope\@
     and $0F
     ld b, a
-    jr .volume
-.envelope:
-    ld a, e
-    add a
-    add e
-    add LOW(wEnv + 1)
-    ld l, a
-    ld h, HIGH(wEnv)
+    jr .volume\@
+.envelope\@:
+    ld hl, wEnv + 1 + 3 * (\1)
     ld b, [hl]
-.volume:
-    ld a, e                 ; the timer as last converted? its frequency then
-    add a
-    add LOW(wGbPer)
-    ld l, a
-    ld h, HIGH(wGbPer)
+.volume\@:
+    ld hl, wGbPer + 2 * (\1)  ; the timer as last converted? its frequency then
     ld a, [wSwPeriod]
     cp [hl]
-    jr nz, .convert
+    jr nz, .convert\@
     inc l
     ld a, [wSwPeriod + 1]
     cp [hl]
-    jr nz, .convert
-    ld a, e
-    add a
-    add LOW(wGbPerFreq)
-    ld l, a
+    jr nz, .convert\@
+    ld l, LOW(wGbPerFreq + 2 * (\1))
     ld a, [hl+]
     ld h, [hl]
     ld l, a
-    jr .converted
-.convert:
-    ld a, e
-    add a
-    add LOW(wGbPer)
-    ld l, a
-    ld h, HIGH(wGbPer)
+    jr .converted\@
+.convert\@:
+    ld hl, wGbPer + 2 * (\1)
     ld a, [wSwPeriod]
     ld [hl+], a
     ld a, [wSwPeriod + 1]
@@ -2716,78 +2630,79 @@ PulseOut:
     ld h, a
     inc hl
     call GbFreq
-    ld a, e
-    add a
-    add LOW(wGbPerFreq)
-    ld c, a
-    ld b, HIGH(wGbPerFreq)
+    ld bc, wGbPerFreq + 2 * (\1)
     ld a, l
     ld [bc], a
     inc c
     ld a, h
     ld [bc], a
     pop bc
-.converted:
-    ld a, e                 ; C = its first GB register: NR11 or NR21
-    and a
-    ld c, LOW(rAUD1LEN)
-    jr z, .regs
-    ld c, LOW(rAUD2LEN)
-.regs:
+.converted\@:
+    ld c, LOW(rAUD1LEN) + 5 * (\1)  ; C = its first GB register: NR11 or NR21
+.regs\@:
     ld d, 0
     push hl
-    call PulseFadeTick
-    ld hl, wApuStart
-    add hl, de
+    ld hl, wFadeGap + (\1) ; its fade, a frame on: frames since its volume changed; the GB's envelope, if
+    inc [hl]                ; fading it, a step down every pace frames
+    jr nz, .gap\@
+    dec [hl]
+.gap\@:
+    ld a, [wFadePace + (\1)]
+    and a
+    jr z, .faded\@
+    ld hl, wFadeTick + (\1)
+    inc [hl]
+    dec a
+    cp [hl]
+    jr nc, .faded\@
+    ld [hl], 0
+    ld hl, wFadeVol + (\1)
+    ld a, [hl]
+    and a
+    jr z, .faded\@
+    dec [hl]
+.faded\@:
+    ld hl, wApuStart + (\1)
     ld a, [hl]
     ld [hl], 0
-    ld hl, wGbVol
-    add hl, de
+    ld hl, wGbVol + (\1)
     and a
-    jr nz, .note
+    jr nz, .note\@
     ld a, [hl]
     cp b
-    jr z, .retune
+    jr z, .retune\@
     call PulseFade          ; the volume alone: the GB's fade has it (no restart: each one clicks), it's held
-    jr nz, .restart         ; (a step: no one hears it, everyone hears the click), or a restart
-    jr c, .retune
+    jr nz, .restart\@         ; (a step: no one hears it, everyone hears the click), or a restart
+    jr c, .retune\@
     ld [hl], b
-    jr .retune
-.note:                      ; a new note: as written, flat
+    jr .retune\@
+.note\@:                      ; a new note: as written, flat
     xor a
     ld [wFadeEnv], a
     push hl
-    ld hl, wFadePace
-    add hl, de
+    ld hl, wFadePace + (\1)
     ld [hl], a
-    ld hl, wFadeGap
-    add hl, de
+    ld hl, wFadeGap + (\1)
     ld [hl], a
     pop hl
-.restart:
+.restart\@:
     ld [hl], b
-    ld a, e
-    add a
-    add a
-    add LOW(wApu)
-    ld l, a
-    ld h, HIGH(wApu)
+    ld hl, wApu + 4 * (\1)
     ld a, [hl]
     and $C0
     ldh [c], a              ; duty
     inc c
-    ld hl, wGbDuty
-    add hl, de
+    ld hl, wGbDuty + (\1)
     ld [hl], a
     ld a, b
     swap a
     and a
-    jr z, .off
+    jr z, .off\@
     push hl                 ; (a fade: down a step every pace/64 s)
     ld hl, wFadeEnv
     or [hl]
     pop hl
-.off:
+.off\@:
     ldh [c], a              ; volume (0: off)
     inc c
     pop hl
@@ -2799,81 +2714,59 @@ PulseOut:
     ld a, h
     or $80
     ldh [c], a
-    jr .saveFreq
-.retune:
+    jr .saveFreq\@
+.retune\@:
     pop hl
     push hl
-    ld a, e
-    add a
-    ld hl, wGbFreq
-    add l
-    ld l, a
-    adc h
-    sub l
-    ld h, a
+    ld hl, wGbFreq + 2 * (\1)
     pop bc                  ; BC = frequency
     ld a, [hl+]
     cp c
-    jr nz, .new
+    jr nz, .new\@
     ld a, [hl]
     cp b
-    jr z, .duty
-.new:
+    jr z, .duty\@
+.new\@:
     dec hl
     ld a, c
     ld [hl+], a
     ld [hl], b
-    ld a, e
-    and a
     ld a, c
-    ld c, LOW(rAUD1LOW)
-    jr z, .tune
-    ld c, LOW(rAUD2LOW)
-.tune:
+    ld c, LOW(rAUD1LOW) + 5 * (\1)
+.tune\@:
     ldh [c], a
     inc c
     ld a, b
     ldh [c], a
-    jr .duty
-.saveFreq:                  ; HL = frequency
+    jr .duty\@
+.saveFreq\@:                  ; HL = frequency
     ld b, h
     ld c, l
-    ld a, e
-    add a
-    ld hl, wGbFreq
-    add l
-    ld l, a
-    adc h
-    sub l
-    ld h, a
+    ld hl, wGbFreq + 2 * (\1)
     ld [hl], c
     inc hl
     ld [hl], b
     ret
-.duty:                      ; a duty change alone
-    ld a, e
-    add a
-    add a
-    add LOW(wApu)
-    ld l, a
-    ld h, HIGH(wApu)
+.duty\@:                      ; a duty change alone
+    ld hl, wApu + 4 * (\1)
     ld a, [hl]
     and $C0
     ld b, a
-    ld hl, wGbDuty
-    add hl, de
+    ld hl, wGbDuty + (\1)
     cp [hl]
     ret z
     ld [hl], a
-    ld a, e
-    and a
-    ld c, LOW(rAUD1LEN)
-    jr z, .setDuty
-    ld c, LOW(rAUD2LEN)
-.setDuty:
+    ld c, LOW(rAUD1LEN) + 5 * (\1)
+.setDuty\@:
     ld a, b
     ldh [c], a
     ret
+ENDM
+
+PulseOut0:
+    PULSE_OUT 0
+PulseOut1:
+    PULSE_OUT 1
 
 ; The triangle on the GB's wave channel: on while its linear and length counters run and it's audible.
 TriangleOut:
@@ -2919,8 +2812,29 @@ TriangleOut:
     ld a, $FF
     ld [wGbFreq + 5], a
 .tune:
+    ld a, [wTriPer]         ; (its frequency as last converted, if the timer's the same)
+    cp l
+    jr nz, .convert
+    ld a, [wTriPer + 1]
+    cp h
+    jr nz, .convert
+    ld a, [wTriFreq]
+    ld l, a
+    ld a, [wTriFreq + 1]
+    ld h, a
+    jr .converted
+.convert:
+    ld a, l
+    ld [wTriPer], a
+    ld a, h
+    ld [wTriPer + 1], a
     inc hl
     call GbFreq
+    ld a, l
+    ld [wTriFreq], a
+    ld a, h
+    ld [wTriFreq + 1], a
+.converted:
     ld a, [wGbFreq + 4]
     cp l
     jr nz, .new
@@ -2949,13 +2863,10 @@ DmcStep:
     ret z
     dec a
     push bc
+    add a
     ld c, a
     ld b, 0
-    ld hl, DmcClock
-    add hl, bc
-    ld e, [hl]
     ld hl, DmcEnvelope
-    add hl, bc
     add hl, bc
     ld a, [hl+]
     ld h, [hl]
@@ -2973,7 +2884,10 @@ DmcStep:
     ld [wDmcFrame], a
     inc hl
     add hl, bc
-    ld d, [hl]
+    add hl, bc
+    ld d, [hl]              ; its loudness, its clock this frame
+    inc hl
+    ld e, [hl]
     pop bc
     ret
 .done:
