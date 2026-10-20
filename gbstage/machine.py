@@ -53,7 +53,8 @@ class Machine:
         self.obj_pal = bytearray(64)
         self.ie = 0
 
-        self.cycles = 0           # total T-cycles since power-on handoff
+        self.cycles = 0           # total T-cycles since power-on handoff (the screen's: in double speed, half the CPU's)
+        self.double = False       # Color double speed (KEY1, then STOP)
         self.div_counter = 0xABCC
         self.lcd_dots = 0         # position within the frame while the LCD is on
         self.serial = []
@@ -114,8 +115,8 @@ class Machine:
             self.request(1)
 
     def advance(self, cycles):
-        self.cycles += cycles
-        old = self.div_counter
+        old = self.div_counter    # (the timer runs with the CPU; the screen at its own pace)
+        self.cycles += cycles >> 1 if self.double else cycles
         new = old + cycles
         self.div_counter = new & 0xFFFF
         tac = self.io[0x07]
@@ -128,6 +129,8 @@ class Machine:
                     tima = self.io[0x06]
                     self.request(2)
                 self.io[0x05] = tima
+        if self.double:
+            cycles >>= 1
         if self.lcd_on():
             old_line = self.lcd_dots // LINE
             self.lcd_dots += cycles
@@ -292,7 +295,7 @@ class Machine:
             return
         if self.cgb:
             if reg == 0x4D:
-                io[0x4D] = v & 1
+                io[0x4D] = (io[0x4D] & 0x80) | (v & 1)
                 return
             if reg == 0x4F:
                 self.vbk = v & 1

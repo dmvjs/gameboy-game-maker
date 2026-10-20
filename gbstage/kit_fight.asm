@@ -870,8 +870,14 @@ IF DEF(FT_NES)
     call FtPicSwitch        ; (his rival's: before the sprites built for both)
     ld [wFtPicDrew], a
 ENDC
+    ldh a, [rIE]            ; (the crowd's timer held off through the DMA: mid-DMA the CPU can't fetch from ROM,
+    push af                 ; where its handler is; it runs straight after)
+    and ~%100
+    ldh [rIE], a
     ld a, HIGH(wFtOAM)
     call hOAMDMA
+    pop af
+    ldh [rIE], a
     ldh a, [hFtScx]
     ldh [rSCX], a
     xor a                   ; (the frame's splits from the top, whatever the last one missed)
@@ -3515,6 +3521,13 @@ DmgRemap::
     jp nz, .batch
     ret
 
+; GET UP!, from any bank (in "Screens far"): HL the next OAM entry, on past its letters.
+FtGetUp:
+    ld a, BANK(FtGetUpIn)
+    ld [$2100], a
+    call FtGetUpIn
+    jp ScreensBack
+
 ; Leaving it ($A8B7): unused, it's armed again next time; used, never again this fight.
 FtCornerLeave::
     ld a, [wNes + $03D8]
@@ -3560,6 +3573,28 @@ FtCornerSelect:
     ret
 PUSHS
 SECTION FRAGMENT "Screens far", ROMX
+; Punch-Out!!'s GET UP!, as the NES writes it while Mac's down (his frame $3A is those words): white, centred at
+; the screen's foot. HL = the next OAM entry (on past its six).
+FtGetUpIn:
+    ld de, .xs
+    ld b, 6
+    ld c, FT_GETUP_TILE
+.letter:
+    ld a, 136 + 16
+    ld [hl+], a
+    ld a, [de]
+    inc de
+    ld [hl+], a
+    ld a, c
+    inc c
+    ld [hl+], a
+    ld a, FT_GETUP_ATTR
+    ld [hl+], a
+    dec b
+    jr nz, .letter
+    ret
+.xs:                        ; G E T, U P ! (OAM x: the screen's middle)
+    db 52 + 8, 60 + 8, 68 + 8, 84 + 8, 92 + 8, 100 + 8
 ; Punch-Out!!'s Another World Circuit's words over the screen's (HL: how many, then each cell's address and tile);
 ; the display on, a few a VBlank.
 AwPatchIn:
@@ -6147,6 +6182,11 @@ IF DEF(FT_ROPE)
     ld l, 0
 ELSE
     ld hl, wFtOAM
+ENDC
+IF DEF(FT_NES)
+    ld a, [wNes + $61]      ; Mac down, his frame Punch-Out!!'s GET UP!: its letters at the screen's foot
+    cp $3A
+    call z, FtGetUp
 ENDC
     call FtPlShown
     add a

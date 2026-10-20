@@ -244,7 +244,11 @@ class CPU:
         @op(0x10)
         def stop():
             cpu.fetch8()
-            raise Unsupported("STOP instruction (speed switching and low-power mode aren't modeled yet)")
+            if not (getattr(bus, "cgb", False) and bus.io[0x4D] & 1):
+                raise Unsupported("STOP instruction (low-power mode isn't modeled yet; only the Color's speed switch)")
+            bus.double = not bus.double          # (the speed switch: KEY1 armed, then STOP)
+            bus.io[0x4D] = 0x80 if bus.double else 0
+            return 4
 
         # Relative jumps
         def jr_body():

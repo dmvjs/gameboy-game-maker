@@ -2123,6 +2123,11 @@ ApuTriangle:
 ApuNoiseClock:
     db $00, $01, $02, $05, $15, $17, $25, $26, $27, $35, $37, $45, $47, $55, $65, $75
 
+; The noise's volume as the NES's mixer has it against the squares: half (measured against blargg's Nes_Apu,
+; tools/sound_ab.py: the Game Boy's four channels weigh the same, the NES's noise about half a square's)
+NoiseLevel:
+    db 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8
+
 ; The GB's sound on, the wave channel loaded with the triangle, everything quiet until the NES says.
 ApuInit::
     ld a, $80
@@ -2181,15 +2186,23 @@ ApuQuiet::
 ; Once a frame, after NesSound: the frame's clocks around its writes, then the GB channels. The game's $C0
 ; to $4017 clocks a quarter and a half frame at once; before the next one come three quarters and a half.
 ApuOut:
-    ld a, [wPcmOn]          ; the crowd recorded: done in the fight, or once its sample's over
-    and a
-    jr z, .noPcm
+    ld a, [wPcmOn]          ; the crowd recorded: done once its sample's over, or in the fight on the original;
+    and a                   ; in the fight on Color, taken up where its sample's got to
+    jr nz, .pcmOn
     ldh a, [hFtActive]
     and a
-    jr nz, .pcmStop
+    call nz, PcmResume
+    jr .noPcm
+.pcmOn:
     ld a, [wDmcSample]
     cp 1
+    jr nz, .pcmStop
+    ldh a, [hFtActive]
+    and a
     jr z, .noPcm
+    ldh a, [hIsCGB]
+    and a
+    jr nz, .noPcm
 .pcmStop:
     call PcmStop
 .noPcm:
@@ -2945,6 +2958,9 @@ NoiseOut:
     ld a, [wEnv + 7]
     ld b, a
 .clock:
+    ld a, b
+    tbl NoiseLevel
+    ld b, a
     ld a, [wApu + $0E]
     and $0F
     tbl ApuNoiseClock

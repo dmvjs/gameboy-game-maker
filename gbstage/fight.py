@@ -61,6 +61,7 @@ CELL_KINDS = {"s": "skin", "g": "gloves", "h": "hair"}
 OBJ_FIRST_TILE = 2                              # sprite tiles 0 and 1 belong to the menu cursor and slider marker
 OBJ_TILE_LIMIT = 128                            # sprite tiles at $8000-$87FF
 COUNT_GLYPHS = "0123456789KO!FIGHT"
+GETUP_GLYPHS = "GETUP!"                 # (Punch-Out!!'s, when Mac's down: after the count's, in each fight)
 # Sprite effects drawn over the art; a game whose poses already draw them (spit in the hit frames) turns them off.
 EFFECTS = {"stars": "stars circling his head while he's dazed", "sweat": "sweat flying off a clean hit to the face",
            "spark": "a burst where a punch lands"}

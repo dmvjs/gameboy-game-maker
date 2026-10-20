@@ -38,6 +38,8 @@ def build_rom(asm_source, title, cgb=False, info=None):
         banked = "ROMX" in asm_source       # data in switchable banks: an MBC5 cartridge; otherwise a plain 32 KB one
         link = [deps.rgbds_tool(info, "rgblink")] + ([] if banked else ["-t"])
         _run("rgblink", link + ["-m", str(map_file), "-n", str(sym_file), "-o", str(rom), str(obj)])
+        if rom.stat().st_size > 256 * 0x4000:   # (every switch writes $2000 only, the bank's low 8 bits: past 255,
+            raise BuildError("rgblink", "ROM past 4 MB: banks over 255 need MBC5's ninth bank bit ($3000)")  # the wrong one)
         fix = [deps.rgbds_tool(info, "rgbfix"), "-v", "-p", "0xFF", "-t", title] + (["-m", "0x19"] if banked else [])
         if cgb:
             fix.append("-c")

@@ -87,6 +87,8 @@ class Gb:
         m, cpu = self.m, self.m.cpu
         if bank:
             m.write(0x2000, self.sym[bank][0])
+            if "hBank" in self.sym:          # (as the game's own switches note it: what maps a bank and puts back)
+                m.write(self.sym["hBank"][1], self.sym[bank][0])
         if a is not None:
             self.set_a(a)
         cpu.sp = 0xDFF0

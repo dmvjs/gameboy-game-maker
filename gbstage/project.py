@@ -1734,6 +1734,12 @@ def _fight_compose_tiles(scene, tile_of):
         key = tuple(3 if y == 7 else (3 if g[y][x] else 2) for y in range(8) for x in range(8))
         index.pop(key, None)
         obj.append(key)
+    if ft.get("nes"):                           # Punch-Out!!'s GET UP! while Mac's down: white letters (the shirt's)
+        for ch in kit.GETUP_GLYPHS:
+            g = active_font()[ch]
+            key = tuple(2 if g[y][x] else 0 for y in range(8) for x in range(8))
+            index.pop(key, None)
+            obj.append(key)
     for art in kit.BUBBLE_ENDS:
         obj.append(tuple(int(ch) if ch != "." else 0 for row in art for ch in row))
     scene["fight_bubble"] = [kit.OBJ_FIRST_TILE + len(obj) - 2, kit.OBJ_FIRST_TILE + len(obj) - 1]

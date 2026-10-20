@@ -2218,6 +2218,8 @@ DEF FT_REF_SLOT EQU {s['fight_slots']['ref']}               ; the referee's pose
 DEF FT_REF_TILES EQU {s['fight_slots']['ref_tiles']}
 DEF FT_PL_SLOT EQU {s['fight_slots']['pl']}                ; the player's rare poses' own tiles (one at a time)
 DEF FT_COUNT_TILE EQU {s['fight_count_tile']}
+DEF FT_GETUP_TILE EQU {s['fight_count_tile'] + len(kit.COUNT_GLYPHS)}   ; (GET UP!'s letters, NES fights')
+DEF FT_GETUP_ATTR EQU {(s['fight']['referee'].get('shirt_palette') or 0) | 0x10}
 DEF FT_PLAYER_W EQU {kit.PLAYER_W}
 {pl_cgb_def}
 {twinkle_def}
@@ -3580,8 +3582,9 @@ def _menu_data(i, s, index_of):
         g = m["gloves"]
         lines += [f"Scene{i}GloveTiles:          ; the left glove's 6 tiles (the right: them mirrored)",
                   _db([b for t in g["tiles"] for b in encode_tile(t)]),
+                  "PUSHS", f'SECTION "Data: Scene {i} glove colors", ROM0     ; (read as palettes go up: any bank mapped)',
                   f"Scene{i}GloveColors:         ; its sprite palette (Color)",
-                  "    dw " + _rgb555([g["colors"][0]] + g["colors"])]
+                  "    dw " + _rgb555([g["colors"][0]] + g["colors"]), "POPS"]
     return "\n".join(lines)
 
 
@@ -4024,10 +4027,10 @@ Start:
 .waitVBlankDone:            ; labels named .waitX/.waitXDone mark idle loops for the profiler
     xor a
     ldh [rLCDC], a
-    ldh [rSCY], a
+{"    ldh a, [hIsCGB]         ; Color: double speed (the CPU twice as fast; the screen's and sound's timing as ever)" + nl + "    and a" + nl + "    jr z, .single" + nl + "    ld a, $30" + nl + "    ldh [rP1], a" + nl + "    xor a" + nl + "    ldh [rIE], a" + nl + "    ld a, 1" + nl + "    ldh [$FF4D], a          ; (KEY1: the switch armed, STOP makes it)" + nl + "    stop" + nl + ".single:" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}    ldh [rSCY], a
     ldh [rSCX], a
 {nl.join(boot)}
-{"    xor a                   ; (WRAM is random at power-on: Doc's corner state clear, nothing for VBlank)" + nl + "    ld [wDocDirty], a" + nl + "    ld [wDocN], a" + nl if any(sc.get("doc_patch") for sc in scenes) else ""}{"    xor a                   ; (the recorded crowd: not playing, not copied yet)" + nl + "    ld [wPcmOn], a" + nl + "    ld [wPcmLoaded], a" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}    ld a, 1                 ; VBlank wakes HALT; no interrupt handler ever runs
+{"    xor a                   ; (WRAM is random at power-on: Doc's corner state clear, nothing for VBlank)" + nl + "    ld [wDocDirty], a" + nl + "    ld [wDocN], a" + nl if any(sc.get("doc_patch") for sc in scenes) else ""}{"    xor a                   ; (the recorded crowd: not playing, not copied yet)" + nl + "    ld [wPcmOn], a" + nl + "    ld [wPcmLoaded], a" + nl + "    ld [wPcmMix], a" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}    ld a, 1                 ; VBlank wakes HALT; no interrupt handler ever runs
     ldh [rIE], a
     ld a, {index_of[project['start']]}
     call LoadScene
@@ -4070,7 +4073,7 @@ VBlankDone:                 ; everything that must happen during VBlank is done
     ldh [hPad], a           ; held
 {REPEAT_CODE if repeat else ""}{(CARD_HOLD_CHECK if cards else "") + SLIDE_STEP_CODE if slides else ""}    call hUpdateJump
 {"    ldh a, [hCutOn]         ; (a cutscene runs the sound itself, before its mid-frame scroll splits)" + nl + "    and a" + nl + "    jp nz, MainLoop" + nl if cutscenes else ""}    call SfxUpdate
-{"    ldh a, [hFtActive]      ; a fight on the original: the CPU's free till VBlank, his coming picture's tiles in it" + nl + "    and a" + nl + "    call nz, FtDmgStream" + nl if nes_any else ""}    jp MainLoop
+{"    ldh a, [hFtActive]      ; a fight on the original: the CPU's free till VBlank, his coming picture's tiles in it" + nl + "    and a" + nl + "    call nz, FtDmgStream" + nl if nes_any else ""}{"    ld a, [wPcmMix]         ; (a fight on Color with the crowd recorded: its mixed buffers topped up)" + nl + "    and a" + nl + "    call nz, PcmProduce" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}    jp MainLoop
 
 SECTION "Code: Scenes", ROM0
 ; Load scene A with the screen off. Tiles, map and palette map go by DMA on Game Boy Color.
@@ -4316,11 +4319,12 @@ FadeIn:
                 row = m["y"] + n * m["spacing"]
                 patch_code.append(_patch_routine(f"Scene{i}Item{n}Patch", [(row * 32 + m["x"], len(it["label"]))],
                                                  f'menu item "{it["label"]}"'))
-            patch_data.append(_menu_data(i, s, index_of))
+            dest = in_bank[i] if banked else patch_data      # (a banked game: with its scene, its bank's mapped while it's up)
+            dest.append(_menu_data(i, s, index_of))
             if s["menu"].get("confirm"):
-                patch_data.append(_confirm_asm(i, s, project))
+                dest.append(_confirm_asm(i, s, project))
             if s["menu"].get("pass_key"):
-                patch_data.append(_pk_data(i, s["menu"]["pass_key"]))
+                dest.append(_pk_data(i, s["menu"]["pass_key"]))
         elif s["options"]:
             for r_i, r in enumerate(s["options"]["rows"]):
                 cells = len(s["option_strips"][r_i][0])
