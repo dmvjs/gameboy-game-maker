@@ -239,12 +239,10 @@ wDocHand: db
 wDocDirty: db
 wDocAddr: ds 32
 wDocTile: ds 64
-wTalkN: db                  ; and the rival talking: his cells, his state (0 his first), frames till it turns, his
-wTalkState: db              ; two states' frames (the other's, then his first's), the cells' addresses and tiles
+wTalkN: db                  ; and the rival talking: his cells, his state (0 his first), frames till it turns, and
+wTalkState: db              ; where his cells' addresses, tiles and frames are (DocLoadIn's bank, as these run in)
 wTalkTimer: db
-wTalkTime: ds 2
-wTalkAddr: ds 24
-wTalkTile: ds 24
+wTalkPtr: dw
 wRemap: ds 4                ; (DmgRemap: a row's pixels of each slot, its batch: count, tiles, addresses, source)
 wRemapN: db
 wRemapLeft: db
@@ -3848,25 +3846,17 @@ DocLoadIn:
     inc de
     dec c
     jr nz, .tile
-    ld a, [hl+]             ; then the rival's (none: 0)
+    ld a, [hl+]             ; then the rival's (none: 0): where they are, his first state's frames
     ld [wTalkN], a
     and a
     jr z, .still
-    ld b, a
-    add a
-    ld c, a
-    ld de, wTalkAddr
-    call .copy
-    ld a, b
-    add a
-    ld c, a
-    ld de, wTalkTile
-    call .copy
-    ld a, [hl+]
+    ld a, l
+    ld [wTalkPtr], a
+    ld a, h
+    ld [wTalkPtr + 1], a
+    call TalkTimes
+    ld a, [hl]
     ld [wTalkTimer], a
-    ld c, 2
-    ld de, wTalkTime
-    call .copy
 .still:
     xor a
     ld [wTalkState], a
@@ -3877,12 +3867,20 @@ DocLoadIn:
     ld a, 32
     ld [wDocHand], a
     ret
-.copy:                      ; C bytes HL -> DE
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec c
-    jr nz, .copy
+
+; HL = the rival's frames (after his cells' addresses and his two states' tiles: 4 bytes a cell).
+TalkTimes:
+    ld a, [wTalkN]
+    add a
+    add a
+    ld l, a
+    ld h, 0
+    ld a, [wTalkPtr]
+    add l
+    ld l, a
+    ld a, [wTalkPtr + 1]
+    adc h
+    ld h, a
     ret
 
 
@@ -3943,11 +3941,15 @@ TalkStep:
     ld a, [wTalkState]
     xor 1
     ld [wTalkState], a
-    ld a, [wTalkTime]
+    ld b, a
+    call TalkTimes          ; (first, the other's, then his first's again)
+    inc hl
+    bit 0, b
     jr nz, .set
-    ld a, [wTalkTime + 1]
+    inc hl
 .set:
-    ld [hl], a
+    ld a, [hl]
+    ld [wTalkTimer], a
     ld a, 1
     ld [wDocDirty], a
     ret
@@ -3998,14 +4000,20 @@ DocVBlankIn:
     ld c, a
     ld a, [wTalkState]
     and a
-    jr z, .first            ; (his other state's tiles after his first's)
     ld a, c
+    jr z, .first            ; (his tiles after his cells' addresses, his other state's after his first's)
+    add c
 .first:
+    add c
     ld e, a
     ld d, 0
-    ld hl, wTalkTile
+    ld a, [wTalkPtr]
+    ld l, a
+    ld a, [wTalkPtr + 1]
+    ld h, a
+    push hl
     add hl, de
-    ld de, wTalkAddr
+    pop de
     jr .cell
 
 POPS
