@@ -2445,31 +2445,26 @@ SweepCalc:
     and a
     ret
 
-; HL = NES timer + 1 -> HL = the GB frequency for the same pitch: 2048 - 1.171875 HL (none under 0).
+; HL = NES timer + 1 -> HL = the GB frequency for the same pitch: 2048 - 75/64 HL, rounded (none under 0).
 ; The GB pulse (and the 32-step wave) run 131072/(2048 - x) Hz; the NES pulse 111861/(t + 1). Keeps DE.
 GbFreq:
     push de
     ld d, h
     ld e, l
-    srl h
-    rr l
-    srl h
-    rr l
-    srl h
-    rr l
-    push hl                 ; t/8
-    srl h
-    rr l
-    srl h
-    rr l
+    add hl, hl
     ld b, h
-    ld c, l                 ; t/32
-    srl h
-    rr l                    ; t/64
+    ld c, l                 ; 2t
+    add hl, hl
+    add hl, hl
     add hl, bc
-    pop bc
+    add hl, de              ; 11t
+    ld bc, 32
     add hl, bc
-    add hl, de
+    REPT 6                  ; (11t + 32) / 64: rounded once, not short by each shift's
+        srl h
+        rr l
+    ENDR
+    add hl, de              ; 75t / 64
     ld a, l
     cpl
     ld l, a

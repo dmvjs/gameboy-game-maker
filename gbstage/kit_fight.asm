@@ -850,6 +850,7 @@ DEF FT_PIC_PLACEX EQU $4210
 DEF FT_PIC_PLACEY EQU $4410
 DEF FT_PIC_TABLE EQU $4610
 DEF FT_PIC_HEADS EQU $4810
+DEF FT_PIC_JEWEL EQU $4910     ; (Great Tiger's: per picture where his gem shows: x, y, $FF not)
 DEF FT_PIC_VRAM EQU $8800      ; his tiles' two copies (bank 1: tiles 128-191, 192-255)
 DEF FT_PIC_VRAM2 EQU $8C00
 DEF FT_VBL_LAST EQU 149        ; the last line VBlank's lesser work (a HUD redraw, 4 tiles of the referee's) may start
@@ -2049,11 +2050,12 @@ FtDmgStreamVBlank:
     call FtDmgJob
     jr z, .stop
 .tile:
-    ldh a, [rLY]
+    di                      ; (from the look at the line to the tile's last byte: no interrupt, the crowd's refill,
+    ldh a, [rLY]            ; to carry it past VBlank)
     sub 144
-    jr c, .stop
+    jr c, .stopEi
     cp 153 - 144            ; (a tile's under a line: done by VBlank's last)
-    jr nc, .stop
+    jr nc, .stopEi
     ld b, 2
 .half:
     REPT 8
@@ -2063,9 +2065,12 @@ FtDmgStreamVBlank:
     ENDR
     dec b
     jr nz, .half
+    ei
     call FtDmgTileIn
     jr nz, .tile
     jr FtDmgStreamVBlank    ; (that one in: the next)
+.stopEi:
+    ei
 .stop:
     ld a, [wFtBankData]
     ld [$2000], a
@@ -2123,6 +2128,12 @@ FtDmgStream:
     cp 3
     jr nz, .drawing
     di
+    ldh a, [rSTAT]          ; (still drawing, interrupts off: an interrupt just before, the crowd's refill, may
+    and 3                   ; have run on past this line's HBlank; then the next line's)
+    cp 3
+    jr z, .wait
+    ei
+    jr .drawing
 .wait:
     ldh a, [rSTAT]
     and 3
@@ -5894,6 +5905,38 @@ FtJewel:
     cp 160
     ret nc
     push hl
+IF DEF(FT_NES)
+    ld a, [wFtBankPics]     ; his pictures: where the one his sprites are built for shows it (each its own)
+    and a
+    jr z, .pose
+    ldh a, [hIsCGB]
+    and a
+    jr nz, .pic
+    ld a, [wFtBankPicsDmg]
+    and a
+    jr z, .pose
+.pic:
+    ldh a, [hBank]
+    push af
+    ld a, [wFtBankPics]
+    ld [$2000], a
+    ld a, [wRvPicHeads]
+    add a
+    ld e, a
+    ld d, 0
+    ld hl, FT_PIC_JEWEL
+    add hl, de
+    ld e, [hl]
+    inc hl
+    ld d, [hl]
+    pop af
+    ld [$2000], a
+    ld a, e
+    cp $FF
+    jr z, .none
+    jr .at
+.pose:
+ENDC
     ld a, [wRvPose]
     add a
     ld e, a
@@ -5905,6 +5948,7 @@ FtJewel:
     jr z, .none
     ld e, a                 ; E = its x in his area, D = its y
     ld d, [hl]
+.at:
     pop hl
     ldh a, [hFtBandY]
     cpl

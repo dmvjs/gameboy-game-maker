@@ -2450,6 +2450,9 @@ ASSERT (CgbMap{suffix}_idle | CgbSwap{suffix}.set0) & 15 == 0, "GDMA copies from
             maprow2 = rows([t + 64 for t in pics["maps"][k]], tiles)     # (for its tiles' second copy, 64 on)
             body.append(f'SECTION "Data: Rival picture {pics["order"][k]}{suffix}", ROMX, ALIGN[4]\n{lab(k)}:\n'
                         + _db(tb) + "\n" + _db(maprow, 32) + "\n" + _db(attrow, 32) + "\n" + _db(maprow2, 32))
+        gem = (f"PicJewel{suffix}:                ; (his gem: per picture where it shows, its middle in his area; $FF not)\n"
+               "    db " + ", ".join(f"{x}, {y}" for x, y in pics["jewel"]) + f"\n    ds {2 * (128 - n)}\n"
+               f"ASSERT PicJewel{suffix} == FT_PIC_JEWEL\n") if pics.get("jewel") else ""
         pics_data = f"""
 SECTION "Data: Rival pictures{suffix}", ROMX[$4000]
 PicHeader{suffix}:              ; his NES pictures: count, the idle one's; per NES frame (then mirrored) its picture,
@@ -2462,7 +2465,7 @@ PicHeader{suffix}:              ; his NES pictures: count, the idle one's; per N
     ds {4 * (128 - n)}
     dw {", ".join(f"PicHead{suffix}_{k}" for k in range(n))}
     ds {2 * (128 - n)}
-{nl.join(heads)}
+{gem}{nl.join(heads)}
 ASSERT PicHeader{suffix} == $4000
 {nl.join(body)}
 """

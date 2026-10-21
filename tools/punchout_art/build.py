@@ -1906,6 +1906,9 @@ def rival_art(key, s, colors, pposes, max_share=24):
         every = joe_shapes(r["opp"], everything=True)
         frames_ = pictures_from_nes(s, every, r["opp"], blank_frames(r["opp"]))
         art["pictures"] = {"poses": import_pictures(frames_, pals), "places": picture_places(frames_, s, every)}
+        if r.get("jewel"):              # (Great Tiger's gem: where each picture shows it, not its pose's)
+            gems = {k: _jewel({(x, y): c for y, row in enumerate(f) for x, c in enumerate(row) if c}) for k, f in frames_.items()}
+            art["pictures"]["jewel"] = {k: [round(g[0]), round(g[1])] for k, g in sorted(gems.items()) if g}
         nxt = json.loads(PIC_NEXT.read_text()).get(key) if PIC_NEXT.exists() else None
         if nxt:                         # (the original: the picture likely next, loaded early: pic_next.py)
             art["pictures"]["next"] = {k: v for k, v in nxt.items() if k in frames_ and v[0] in frames_}
@@ -2030,7 +2033,8 @@ def _rival_js(key, art):
             + ([f"export const {up}_PICTURES = {{ poses: {{"]      # (Color: each NES picture of his, exact)
                + [f"  '{k}':" + pose(v)[1:] for k, v in sorted(art["pictures"]["poses"].items())]
                + [f"}}, places: {json.dumps(art['pictures']['places'])}"
-                  + (f", next: {json.dumps(art['pictures']['next'])}" if art["pictures"].get("next") else "") + " };"]
+                  + (f", next: {json.dumps(art['pictures']['next'])}" if art["pictures"].get("next") else "")
+                  + (f", jewel: {json.dumps(art['pictures']['jewel'])}" if art["pictures"].get("jewel") else "") + " };"]
                if art.get("pictures") else [])
             + [f"export const {up}_NES = {{ bank: '{base64.b64encode(bank).decode()}', offset: {r['offset']},",
                f"  frames: {json.dumps(r['frames'])}, home: [135, 182], scale: {SCALE_JOE},",

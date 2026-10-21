@@ -1005,7 +1005,12 @@ def _nes_fighter(nes, where, errors):
         nx = (pictures or {}).get("next") or {}     # (the original: per picture, the one likely next: pic_next.py)
         nx = {k: v for k, v in nx.items() if k in pp and isinstance(v, list) and len(v) == 3
               and all(c in pp for c in v)} if isinstance(nx, dict) else {}
-        pictures = {"poses": pp, "places": {k: tuple(v) for k, v in pl.items()}, **({"next": nx} if nx else {})}
+        gem = (pictures or {}).get("jewel") or {}      # (Great Tiger's: per picture, where his gem shows)
+        if not (isinstance(gem, dict) and all(k in pp and isinstance(v, list) and len(v) == 2
+                                              and all(isinstance(c, int) and 0 <= c < 80 for c in v) for k, v in gem.items())):
+            errors.append(f"{where}: the NES pictures' jewel is per picture, where (pixels in his area)."); return None
+        pictures = {"poses": pp, "places": {k: tuple(v) for k, v in pl.items()}, **({"next": nx} if nx else {}),
+                    **({"jewel": {k: tuple(v) for k, v in gem.items()}} if gem else {})}
     return {"bank": bank, "offset": offset, "frames": frames, "places": places, "home": home, "scale": float(scale),
             **({"pictures": pictures, "frame_names": {str(k): v for k, v in (nes.get("frames") or {}).items()}}
                if pictures else {}),
@@ -2150,6 +2155,10 @@ def _fight_pics(scene):
             place.append(tuple(pics["places"].get(order[n], (0, 0))) if n is not None else (0, 0))
     out["frame_map"], out["places"] = frame_map, place
     out["idle"] = index.get("C0", 0)
+    if pics.get("jewel"):               # (his gem, per picture: where it shows, (255, 255) not)
+        out["jewel"] = [tuple(pics["jewel"].get(k, (255, 255))) for k in order]
+    elif nes.get("jewel"):              # (none given per picture: the pose's each stands for)
+        out["jewel"] = [tuple(nes["jewel"].get(pose_of.get(k), (255, 255))) for k in order]
     scene["fight_pics"] = out
 
 

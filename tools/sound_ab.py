@@ -83,7 +83,7 @@ def from_sameboy(d, scene):
     for i in range(0, len(raw) - size + 1, size):
         v = int.from_bytes(raw[i:i + 4], "little", signed=True)
         calls[v] = raw[i + 4:i + size]
-    first = next(v for v in sorted(calls) if 0 <= v < len(scn) and scn[v] == scene)
+    first = next(v for v in sorted(calls) if 0 <= v < len(scn) and (scene < 0 or scn[v] == scene))   # (-1: from the first)
     rec = {"start": (calls[first][:0x800], calls[first][0x800:]), "req": [], "snd": []}
     for v in range(first, len(ram)):
         a = pcm[(ends[v - 1] if v else 0):ends[v]]
