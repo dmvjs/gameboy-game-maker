@@ -136,6 +136,18 @@ export function boxingGame(pack) {
     }
     [...face.cells].forEach((r, k) => { scene.cellPal[(cy + (k / cols | 0)) * M.CW + cx + k % cols] = role(r); });
   }
+  // A close-up's colors past its background palettes (Color: the NES's sprites over it), state k's, placed at its
+  // cell (cx, cy): sprites with their palettes in the scene's list (overlay.pals), added there as needed.
+  function overlaySprites(scene, face, k, cx, cy) {
+    const o = face.overlay;
+    if (!o || !o.states[k]) return [];
+    scene.overlay = scene.overlay || { pals: [], sprites: [] };
+    const at = o.pals.map(c => {
+      const n = scene.overlay.pals.findIndex(q => JSON.stringify(q) === JSON.stringify(c));
+      return n >= 0 ? n : scene.overlay.pals.push(c) - 1;
+    });
+    return o.states[k].map(([x, y, pixels, pal]) => ({ x: cx * 8 + x, y: cy * 8 + y, pixels, pal: at[pal] }));
+  }
   // Words re-wrapped to a width (the NES's own breaks kept where they fit; a blank line kept as a gap).
   function rewrap(lines, width) {
     const out = [];
@@ -336,6 +348,9 @@ export function boxingGame(pack) {
       const bio = bioOf(), compact = bio.length > 6;
       portrait(scene, lay, rv.portraitFull, M.CW - FW, compact ? 2 : 3);
       portrait(scene, lay, P.portraitFull, 0, M.CH - FH);
+      const over = [...overlaySprites(scene, rv.portraitFull, 0, M.CW - FW, compact ? 2 : 3),
+                    ...overlaySprites(scene, P.portraitFull, 0, 0, M.CH - FH)];
+      if (scene.overlay) scene.overlay.sprites = over;
       const right = (text, y, textSlot) => {
         const label = nesText(text);
         return { label, x: M.CW - label.length, y, textSlot };
@@ -442,8 +457,12 @@ export function boxingGame(pack) {
         const talk = rv.portraitFull.talk;              // (the rival talking: his two states in turn, the NES's frames)
         portrait(scene, lay, talk ? { ...rv.portraitFull, pixels: talk.states[0] } : rv.portraitFull, M.CW - FW, 3);
         portrait(scene, lay, P.portraitFull, 0, M.CH - FH);
-        if (P.portraitFull.states) scene.docAnim = { x: 0, y: M.CH - FH, w: FW, h: FH, states: P.portraitFull.states };
-        if (talk) scene.rivalAnim = { x: M.CW - FW, y: 3, w: FW, h: FH, states: talk.states, time: talk.time };
+        if (P.portraitFull.states) scene.docAnim = { x: 0, y: M.CH - FH, w: FW, h: FH, states: P.portraitFull.states,
+                                                     sprites: [0, 1, 2, 3].map(k => overlaySprites(scene, P.portraitFull, k, 0, M.CH - FH)) };
+        if (talk) scene.rivalAnim = { x: M.CW - FW, y: 3, w: FW, h: FH, states: talk.states, time: talk.time,
+                                      sprites: [1, 2].map(k => overlaySprites(scene, rv.portraitFull, k, M.CW - FW, 3)) };
+        const still = talk ? [] : overlaySprites(scene, rv.portraitFull, 0, M.CW - FW, 3);
+        if (scene.overlay) scene.overlay.sprites = still;
       } else {
       portrait(scene, lay, rv.portrait, M.CW - PT, 3);   // his top right, Mac's bottom left
       portrait(scene, lay, P.portrait, 0, M.CH - PT);

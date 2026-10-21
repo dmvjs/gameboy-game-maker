@@ -880,6 +880,7 @@ const cloneScene = s => ({ name: s.name, pixels: s.pixels.slice(), cellPal: s.ce
                            ...(s.awTexts ? { awTexts: cloneTexts(s.awTexts) } : {}),
                            ...(s.docAnim ? { docAnim: JSON.parse(JSON.stringify(s.docAnim)) } : {}),
                            ...(s.rivalAnim ? { rivalAnim: JSON.parse(JSON.stringify(s.rivalAnim)) } : {}),
+                           ...(s.overlay ? { overlay: JSON.parse(JSON.stringify(s.overlay)) } : {}),
                            slideIn: !!s.slideIn, nesDmc: s.nesDmc || 0, notes: s.notes || '',
                            ...(s.nesMusic ? { nesMusic: s.nesMusic } : {}),
                            ...(s.cutscene ? { cutscene: JSON.parse(JSON.stringify(s.cutscene)) } : {}),
@@ -913,6 +914,7 @@ export function serialize(p) {
       ...(s.awTexts?.length ? { awTexts: cloneTexts(s.awTexts) } : {}),   // (Another World Circuit's words)
       ...(s.docAnim ? { docAnim: s.docAnim } : {}),                     // (Punch-Out!!'s corner: Doc's hand and mouth)
       ...(s.rivalAnim ? { rivalAnim: s.rivalAnim } : {}),               // (and the rival talking)
+      ...(s.overlay ? { overlay: s.overlay } : {}),                     // (Color: the close-ups' sprites)
       ...(s.slideIn ? { slideIn: true } : {}),
       ...(s.nesDmc ? { nesDmc: s.nesDmc } : {}),
       ...(s.nesMusic ? { nesMusic: s.nesMusic } : {}),
@@ -974,6 +976,7 @@ export function deserialize(raw) {
       ...(Array.isArray(s.awTexts) ? { awTexts: cloneTexts(s.awTexts) } : {}),
       ...(s.docAnim && Array.isArray(s.docAnim.states) ? { docAnim: s.docAnim } : {}),
       ...(s.rivalAnim && Array.isArray(s.rivalAnim.states) ? { rivalAnim: s.rivalAnim } : {}),
+      ...(s.overlay && Array.isArray(s.overlay.pals) ? { overlay: s.overlay } : {}),
       slideIn: s.slideIn === true && !s.fight,
       nesDmc: Number.isInteger(s.nesDmc) ? s.nesDmc : 0,
       ...(Number.isInteger(s.nesMusic) && s.nesMusic > 0 ? { nesMusic: s.nesMusic } : {}),

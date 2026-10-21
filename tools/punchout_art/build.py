@@ -720,19 +720,63 @@ def full_portraits(palettes):
         _weight = weight
 
 
+def _best_bg(imgs, k=3):
+    """The k background palettes, and each tile's (one through every state), that leave the fewest tiles needing a
+    sprite over them (then the fewest pixels): every choice of k from all 4-color sets, searched (a close-up has
+    5-7 colors)."""
+    import itertools
+    cols = sorted({key(c) for img in imgs for row in img for c in row})
+    at = {c: n for n, c in enumerate(cols)}
+    per = [[[at[key(c)] for c in t] for t in _tiles_wh(img, FULL_W, FULL_H)] for img in imgs]
+    subs = list(itertools.combinations(range(len(cols)), min(4, len(cols))))
+    wrong = [[[sum(1 for c in t if c not in p) for t in ts] for ts in per] for p in subs]   # pal, state, tile
+    score = [[sum((w[st][t] > 0) * 10000 + w[st][t] for st in range(len(per))) for t in range(len(per[0]))] for w in wrong]
+    best = min(itertools.combinations(range(len(subs)), min(k, len(subs))),
+               key=lambda ch: sum(min(score[p][t] for p in ch) for t in range(len(per[0]))))
+    cells = [min(range(len(best)), key=lambda j: score[best[j]][t]) for t in range(len(per[0]))]
+    lum = lambda c: -(2 * c[0] + 4 * c[1] + c[2])
+    pals = [sorted((list(map(int, cols[n].split(","))) for n in subs[j]), key=lum) for j in best]
+    return [p + [p[-1]] * (4 - len(p)) for p in pals], cells
+
+
+def _overlay(imgs, pals, cells):
+    """What the background can't show (a tile's colors past its palette's: the NES puts them in sprites), as 8x8
+    sprites over those tiles, for each state: {"pals": their 3-color palettes, "states": [[x, y, pixels, pal]]}."""
+    per = [_tiles_wh(img, FULL_W, FULL_H) for img in imgs]
+    want = []                                           # (state, tile, {pixel: color}) for each sprite
+    for st, ts in enumerate(per):
+        for t, tl in enumerate(ts):
+            have = {key(c) for c in pals[cells[t]]}
+            px = {n: key(c) for n, c in enumerate(tl) if key(c) not in have}
+            if px:
+                want.append((st, t, px))
+    sets = []                                           # (their palettes: each sprite's colors, merged to 3s)
+    for cs in sorted({frozenset(px.values()) for _, _, px in want}, key=len, reverse=True):
+        fit = [q for q in sets if cs <= q] or [q for q in sets if len(q | cs) <= 3]
+        if fit:
+            q = min(fit, key=len)
+            sets[sets.index(q)] = q | cs
+        else:
+            sets.append(set(cs))
+    order = [sorted(q) for q in sets]
+    states = [[] for _ in imgs]
+    for st, t, px in want:
+        j = next(n for n, q in enumerate(order) if set(px.values()) <= set(q))
+        pixels = "".join(str(order[j].index(px[n]) + 1) if n in px else "0" for n in range(64))
+        states[st].append([t % (FULL_W // 8) * 8, t // (FULL_W // 8) * 8, pixels, j])
+    return {"pals": [[list(map(int, c.split(","))) for c in q] for q in order], "states": states}
+
+
 def _full_portraits(palettes):
     out = {}
     docs = doc_states()
     talks = {r: rival_talk(NES_RIVALS[r]["opp"]) for r in NES_RIVALS}
     groups = [("docmac", docs)] + [(r, [full_rival(NES_RIVALS[r]["opp"])] + list(talks[r][:2] if talks[r] else ())) for r in NES_RIVALS]
     for name, imgs in groups:
+        pals, cells = _best_bg(imgs, 3)     # (3 each: with the text's and the round card's, a screen's 8)
         tiles = [t for img in imgs for t in _tiles_wh(img, FULL_W, FULL_H)]
-        pals = exact_palettes(tiles, 3)     # (3 each: with the text's and the round card's, a screen's 8)
-        pals = [sorted(p, key=lambda c: -(2 * c[0] + 4 * c[1] + c[2])) for p in pals]   # (lightest first)
         for k, g in enumerate(_grey_levels(pals, tiles)):    # (each slot's grey on the original, this picture's:
             FULL_GREYS[len(palettes) + k] = g                #  the scene's tiles put in them as it loads there)
-        per = [_tiles_wh(img, FULL_W, FULL_H) for img in imgs]   # (one palette per tile, the best through every state)
-        cells = [min(range(len(pals)), key=lambda p: sum(_tile_err(ts[k], pals[p]) for ts in per)) for k in range(len(per[0]))]
         drawn = [_draw_wh(img, pals, FULL_W, FULL_H, cells) for img in imgs]
         entry = {"w": FULL_W, "h": FULL_H, "pixels": "".join(map(str, drawn[0][0])),
                  "cells": "".join(_cell(len(palettes) + c) for c in cells)}
@@ -740,6 +784,7 @@ def _full_portraits(palettes):
             entry["states"] = ["".join(map(str, s)) for s, _ in drawn]
         elif talks[name]:                   # (his corner: talking, his two states and their frames)
             entry["talk"] = {"states": ["".join(map(str, s)) for s, _ in drawn[1:]], "time": list(talks[name][2])}
+        entry["overlay"] = _overlay(imgs, pals, cells)   # (Color: the rest of his colors, as sprites)
         out[name] = entry
         palettes += pals
     return out

@@ -187,7 +187,7 @@ def validate(data):
             except (TypeError, KeyError):
                 ok = False
             if ok:
-                doc_anim = {"x": dx, "y": dy, "w": dw, "h": dh, "states": states}
+                doc_anim = {"x": dx, "y": dy, "w": dw, "h": dh, "states": states, "sprites": doc.get("sprites") or []}
             else:
                 errors.append(f"{where}: docAnim is its box (x, y, w, h in cells) and its 4 states' pixels.")
         talk = (s or {}).get("rivalAnim")                 # and the rival talking: his 2 states, their frames
@@ -202,9 +202,10 @@ def validate(data):
             except (TypeError, KeyError):
                 ok = False
             if ok:
-                rival_anim = {"x": tx, "y": ty, "w": tw, "h": th, "states": states, "time": time}
+                rival_anim = {"x": tx, "y": ty, "w": tw, "h": th, "states": states, "time": time, "sprites": talk.get("sprites") or []}
             else:
                 errors.append(f"{where}: rivalAnim is its box (x, y, w, h in cells), its 2 states' pixels and their 3 times.")
+        overlay = _overlay((s or {}).get("overlay"), doc_anim, rival_anim, where, errors)
         used = set(cell_pal)
         if len(used) > SCENE_BG_PALETTES:
             errors.append(f"{where} uses {len(used)} background palettes; a scene can use {SCENE_BG_PALETTES}.")
@@ -228,6 +229,7 @@ def validate(data):
                        "options": options, "puzzle": puzzle, "fight": fight, "back": back, "texts": texts,
                        **({"aw_texts": aw_texts} if aw_texts else {}), **({"doc_anim": doc_anim} if doc_anim else {}),
                        **({"rival_anim": rival_anim} if rival_anim else {}),
+                       **({"overlay": overlay} if overlay else {}),
                        "slide": slide, **({"pass_key": pass_key} if pass_key else {}),
                        **({"cutscene": cutscene} if cutscene else {}), **({"typed": typed} if typed else {})})
 
@@ -302,14 +304,7 @@ def validate(data):
             s["_palettes"] = project["palettes"]    # (a fighter's greys are picked from his colors)
             compose(s)
             s.pop("_palettes", None)
-            remap, seen = [], set()     # (the original Game Boy: tiles in a palette with greys of its own, put in those)
-            for c, tl in enumerate(s.get("cell_tiles") or []):
-                g = project["palette_greys"][s["cell_pal"][c]] if s["cell_pal"][c] < len(project["palette_greys"]) else None
-                if tl in seen or not g or g == [0, 1, 2, 3]:
-                    continue
-                seen.add(tl)
-                remap.append((tl, sum(((g[k] & 1) | (g[k] >> 1) << 1) << (2 * k) for k in range(4))))
-            s["dmg_remap"] = remap
+            s["dmg_remap"] = _dmg_greys(s, project["palette_greys"])
             if len(s["tiles"]) > MAX_TILES:
                 extra = (" (the rival's always-there poses, plus room for his largest pose set, and the HUD's digits "
                          f"and bars; sets: {s['fight_swap']['sizes']})") if s.get("fight") else ""
@@ -322,6 +317,96 @@ def validate(data):
                     raise ProjectError([f'Scene "{s["name"]}": the player\'s poses need {n} sprite tiles; the limit is '
                                         f"{kit.OBJ_TILE_LIMIT}. Repeated and mirrored 8x8 pieces are free."])
     return project
+
+
+def _dmg_greys(s, greys):
+    """The original Game Boy: tiles in a palette with greys of its own, put in those (each tile's map; a tile both
+    there and elsewhere, under other greys, a copy for each: one tile can't be two shades at once). Plain cells keep
+    the tile itself (the words, records and letters drawn into them live use it); the close-ups' moving cells
+    (Doc's, the rival's) take their copies too."""
+    cells, pal = s.get("cell_tiles") or [], s.get("cell_pal") or []
+
+    def code(c):
+        g = greys[pal[c]] if pal[c] < len(greys) else None
+        return None if not g or g == [0, 1, 2, 3] else sum(((g[k] & 1) | (g[k] >> 1) << 1) << (2 * k) for k in range(4))
+    if s.get("fight") or not any(code(c) is not None for c in range(len(cells))):
+        return []
+    owner = {}
+    for c, tl in enumerate(cells):
+        if code(c) is None:
+            owner[tl] = None
+    for c, tl in enumerate(cells):
+        owner.setdefault(tl, code(c))
+    copies = {}
+
+    def use(tl, cd):
+        if owner.setdefault(tl, cd) == cd:
+            return tl
+        if (tl, cd) not in copies:
+            copies[(tl, cd)] = len(s["tiles"])
+            owner[len(s["tiles"])] = cd
+            s["tiles"].append(s["tiles"][tl])
+        return copies[(tl, cd)]
+    for c in range(len(cells)):
+        cells[c] = use(cells[c], code(c))
+    for key in ("doc_patch", "rival_patch"):
+        if s.get(key):
+            at = s[key]["cells"]
+            s[key]["tiles"] = [[use(tl, code(at[j])) for j, tl in enumerate(row)] for row in s[key]["tiles"]]
+    return [(tl, cd) for tl, cd in owner.items() if cd is not None]
+
+
+OVERLAY_TILE0 = 2                   # the close-ups' sprites: tiles and OAM entries from 2 (0-1: a menu's cursor)
+
+
+def _overlay(o, doc, rival, where, errors):
+    """Color: a close-up's colors past its background's (the NES's sprites), as sprites: the scene's own ones and
+    Doc's and the rival's for each of their states. -> {pals, tiles, still, doc, rival} as OAM takes them (y, x,
+    tile, palette), or None."""
+    if not o:
+        return None
+    def sprites(ls):
+        out = []
+        for sp in ls or []:
+            try:
+                x, y, px, pal = sp["x"], sp["y"], sp["pixels"], sp["pal"]
+                assert isinstance(px, str) and len(px) == 64 and set(px) <= set("0123")
+                assert 0 <= x <= W - 8 and 0 <= y <= H - 8 and 0 <= pal < len(o["pals"])
+            except (TypeError, KeyError, AssertionError):
+                errors.append(f"{where}: an overlay sprite is its x, y, 64 pixels and its palette.")
+                return []
+            out.append((x, y, px, pal))
+        return out
+    pals = o.get("pals")
+    if (not isinstance(pals, list) or not 1 <= len(pals) <= 8
+            or not all(isinstance(q, list) and 1 <= len(q) <= 3 and _colors_ok([[0, 0, 0]] * (4 - len(q)) + q) for q in pals)):
+        errors.append(f"{where}: an overlay has 1-8 palettes of 1-3 colors.")
+        return None
+    pals = [list(q) + [q[-1]] * (3 - len(q)) for q in pals]
+    still = sprites(o.get("sprites"))
+    docs = [sprites(ls) for ls in (doc or {}).get("sprites") or []]
+    rivals = [sprites(ls) for ls in (rival or {}).get("sprites") or []]
+    tiles, at = [], {}
+    def put(ls):
+        out = []
+        for x, y, px, pal in ls:
+            if px not in at:
+                at[px] = OVERLAY_TILE0 + len(tiles)
+                tiles.append(px)
+            out.append((y + 16, x + 8, at[px], pal))
+        return out
+    data = {"pals": pals, "still": put(still), "doc": [put(ls) for ls in docs], "rival": [put(ls) for ls in rivals]}
+    most = lambda groups: max((len(g) for g in groups), default=0)
+    if len(data["still"]) + most(data["doc"]) + most(data["rival"]) > 40 - OVERLAY_TILE0 or len(tiles) > 128 - OVERLAY_TILE0:
+        errors.append(f"{where}: the overlay needs too many sprites or sprite tiles.")
+    for d in data["doc"] or [[]]:
+        for r in data["rival"] or [[]]:
+            on = data["still"] + d + r
+            if any(sum(1 for sy, _, _, _ in on if sy - 16 <= line < sy - 8) > 10 for line in range(H)):
+                errors.append(f"{where}: the overlay puts more than 10 sprites on a line.")
+                return None
+    data["tiles"] = tiles
+    return data
 
 
 def _menu(menu, where, index, scene_count, errors):

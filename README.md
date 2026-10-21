@@ -13,10 +13,12 @@ Tyson, on Game Boy Color and the original Game Boy.
   itself and shown as they are, mirrored ones included. On the original Game Boy, each fighter gets his own grey
   shading.
 - **The NES's music and sound effects**, played on the Game Boy's own sound channels, and the NES's own recorded
-  crowd on the challenger and corner screens (its sample, streamed through the wave channel).
+  crowd (its sample, streamed through the wave channel; in the fight on Color with the bass mixed in). Measured
+  against the NES rendered by blargg's Nes_Apu (`tools/sound_ab.py`): every channel within about 1 dB of the NES's
+  balance and 1 cent of its pitch.
 - **The whole game around the fights**: title, challenger screens with the NES's full-size close-ups, the corner
-  between rounds (Doc rubbing Mac's shoulder as on the NES; Select there, once per fight, makes him rub faster and
-  gives the NES's refill), knockdowns with the referee's count, TKOs, decisions on points, rematches, dropping down
+  between rounds (Doc rubbing Mac's shoulder and the rival talking, each at the NES's own pace; Select there, once
+  per fight, makes Doc rub faster and gives the NES's refill), knockdowns with the referee's count, TKOs, decisions on points, rematches, dropping down
   the ranks, and game over on the third loss, all by the NES's rules.
 - **The NES's pass keys.** Mac's record is kept fight to fight, and the training runs show its pass key, worked out
   by the NES's own algorithm (ported, and checked against the original). Keys from the NES work on CONTINUE: try

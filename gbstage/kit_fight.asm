@@ -243,6 +243,9 @@ wTalkN: db                  ; and the rival talking: his cells, his state (0 his
 wTalkState: db              ; where his cells' addresses, tiles and frames are (DocLoadIn's bank, as these run in)
 wTalkTimer: db
 wTalkPtr: dw
+wOvlDoc: dw                 ; (Color) Doc's and the rival's sprites: each its OAM place, how many, every state's
+wOvlTalk: dw
+wOvlStill: dw               ; (Color) the scene's own sprites, while it slides in (high byte 0: none, or done)
 wRemap: ds 4                ; (DmgRemap: a row's pixels of each slot, its batch: count, tiles, addresses, source)
 wRemapN: db
 wRemapLeft: db
@@ -837,6 +840,39 @@ FtCueBuild:
     jr nz, .pal
     ret
 
+ENDC
+
+; His palettes late (hFtPalLate): wait for a line's HBlank, interrupts off (none may push the bytes past it); else
+; at once. FtPalDone: interrupts back after.
+FtPalWait:
+    ldh a, [hFtPalLate]
+    and a
+    ret z
+.drawing:
+    ldh a, [rSTAT]
+    and 3
+    cp 3
+    jr nz, .drawing
+    di
+    ldh a, [rSTAT]          ; (still drawing, interrupts off: else one just ran past this line's HBlank)
+    and 3
+    cp 3
+    jr z, .wait
+    ei
+    jr .drawing
+.wait:
+    ldh a, [rSTAT]
+    and 3
+    jr nz, .wait
+    ret
+FtPalDone:
+    ldh a, [hFtPalLate]
+    and a
+    ret z
+    ei
+    ret
+
+IF DEF(FT_NES)
 ; A = 2 while his dodge cue is up (the NES's $C440: his outline in its color, wNesCue), else 0.
 FtTellShown:
     ld a, [wNesCue]
@@ -902,14 +938,6 @@ IF DEF(FT_ROPE)
     xor HIGH(wFtOAM2) ^ HIGH(wFtOAM3)
     ldh [hFtOamBuild], a
 ENDC
-IF DEF(FT_NES)
-    ld a, [wFtPicDrew]      ; Color, his NES pictures: a big one's tiles, a VBlank's room at a time (NZ: spent)
-    and a
-    jr nz, .picDone
-    call FtPicVBlank
-    ld [wFtPicDrew], a
-.picDone:
-ENDC
     ldh a, [hFtFlash]       ; Color: the rival flashes white when a punch lands
     and a
     jr z, .noFlash
@@ -925,20 +953,32 @@ IF DEF(FT_NES)
     call FtTellShown        ; (his tell, a palette change in the NES's: while its frame and state are up)
 ENDC
 .flashSet:
-    ld hl, hFtFlashShown
-    cp [hl]
-    jr z, .pose
+    ld hl, hFtFlashShown    ; (before his picture's tiles: a few bytes, on the frame the NES has them, where
+    cp [hl]                 ; his tiles take what's left)
+    jr z, .pics
     ld b, a
     ldh a, [rLY]            ; (his palettes and his top rows' sprites': 5 lines at most; too late in this
     sub 144                 ; VBlank, or past it, the next one's)
     cp 149 - 144
-    jr nc, .pose
     ld a, b
     ld [hl], a
-IF DEF(FT_ROPE)
+    jr c, .flashNow
+    ld a, 1                 ; (missed, his new picture's tiles taking it: in the next frame's top lines, above his
+    ldh [hFtPalLate], a     ; rows, on time still)
+    call FtFlashPalettes
+    xor a
+    ldh [hFtPalLate], a
+    jr .pics
+.flashNow:
     call FtFlashPalettes    ; (and his pose too: his top rows' sprites show the one asked for)
-ELSE
-    jp FtFlashPalettes
+.pics:
+IF DEF(FT_NES)
+    ld a, [wFtPicDrew]      ; Color, his NES pictures: a big one's tiles, a VBlank's room at a time (NZ: spent)
+    and a
+    jr nz, .picDone
+    call FtPicVBlank
+    ld [wFtPicDrew], a
+.picDone:
 ENDC
 .pose:
 IF DEF(FT_NES)
@@ -3439,6 +3479,16 @@ DocLoad::
     ld [$2100], a
     call DocLoadIn
     jr DocBack
+OverlayLoad::
+    ld a, BANK(OverlayLoadIn)
+    ld [$2100], a
+    call OverlayLoadIn
+    jr DocBack
+OvlSlide::
+    ld a, BANK(OvlSlideIn)
+    ld [$2100], a
+    call OvlSlideIn
+    jr DocBack
 
 ; The original Game Boy, a scene loading: tiles whose palette has its own greys, put in them (HL: how many, then
 ; each one's number and map, 2 bits a slot; DE: the scene's tiles, all in its bank, mapped). Made from the ROM's
@@ -3855,18 +3905,171 @@ DocLoadIn:
     ld a, h
     ld [wTalkPtr + 1], a
     call TalkTimes
-    ld a, [hl]
+    ld a, [hl+]
     ld [wTalkTimer], a
+    inc hl
+    inc hl
 .still:
+    ld a, l                 ; then their sprites (Color): Doc's, the rival's
+    ld [wOvlDoc], a
+    ld a, h
+    ld [wOvlDoc + 1], a
+    call OvlSkip
+    ld a, l
+    ld [wOvlTalk], a
+    ld a, h
+    ld [wOvlTalk + 1], a
     xor a
     ld [wTalkState], a
     ld [wDocState], a
+    ld a, 3                 ; (the first VBlanks: their sprites up)
     ld [wDocDirty], a
     ld a, 16
     ld [wDocMouth], a
     ld a, 32
     ld [wDocHand], a
     ret
+
+; HL past a set of sprites for each state (its OAM place, how many, then 4 bytes each, 4 states... -- Doc's 4, the
+; rival's 2: HL past the most, Doc's, which is all OvlSkip is asked for).
+OvlSkip:
+    inc hl
+    ld a, [hl+]
+    add a
+    add a
+    add a
+    add a                   ; (4 states, 4 bytes a sprite)
+    ld e, a
+    ld d, 0
+    jr nc, .add
+    inc d
+.add:
+    add hl, de
+    ret
+
+; (VBlank) HL = a set of sprites by state (its OAM place, how many, every state's), A = the state: put in OAM.
+OvlPut:
+    ld b, a
+    ld a, [hl+]
+    ld e, a
+    ld d, $FE
+    ld a, [hl+]
+    and a
+    ret z
+    add a
+    add a
+    ld c, a                 ; (bytes a state)
+    inc b
+.state:
+    dec b
+    jr z, .copy
+    ld a, l
+    add c
+    ld l, a
+    adc h
+    sub l
+    ld h, a
+    jr .state
+.copy:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec c
+    jr nz, .copy
+    ret
+
+PUSHS
+SECTION FRAGMENT "Overlay far", ROMX   ; (with the sprites' data: codegen _overlays)
+; Color: the close-ups' sprites (HL: their tiles, then the scene's own sprites), up as the scene loads; the original
+; shows its greys alone.
+OverlayLoadIn:
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    xor a                   ; (sprite tiles: VRAM bank 0)
+    ldh [rVBK], a
+    ld a, [hl+]
+    ld b, a
+    ld de, $8000 + 16 * 2     ; (sprite tiles from 2: a menu's cursor's first)
+.tile:
+    push bc
+    ld a, b
+    and 3
+    call z, VWait
+    ld c, 16
+.byte:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec c
+    jr nz, .byte
+    pop bc
+    dec b
+    jr nz, .tile
+    call VWait
+    ld a, l                 ; (sliding in: OvlSlideIn moves them with it)
+    ld [wOvlStill], a
+    ld a, h
+    ld [wOvlStill + 1], a
+    ld a, [hl+]
+    and a
+    ret z
+    add a
+    add a
+    ld c, a
+    ld de, $FE00 + 4 * 2
+.oam:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec c
+    jr nz, .oam
+    ret
+
+; (VBlank) the scene's own sprites as far up as its slide has it (hScrollY: 0 at rest), each hidden till it's on
+; the screen; at rest, done.
+OvlSlideIn:
+    ld hl, wOvlStill
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    ld a, [hl+]
+    and a
+    jr z, .done
+    ld c, a
+    ldh a, [hScrollY]       ; (how far it's still to climb: 256 - SCY)
+    cpl
+    inc a
+    ld b, a
+    ld de, $FE00 + 4 * 2
+.sprite:
+    ld a, [hl+]
+    add b
+    jr c, .hide
+    cp 160
+    jr c, .put
+.hide:
+    xor a
+.put:
+    ld [de], a
+    inc hl
+    inc hl
+    inc hl
+    inc e
+    inc e
+    inc e
+    inc e
+    dec c
+    jr nz, .sprite
+    ldh a, [hScrollY]
+    and a
+    ret nz
+.done:
+    xor a
+    ld [wOvlStill + 1], a
+    ret
+
+POPS
 
 ; HL = the rival's frames (after his cells' addresses and his two states' tiles: 4 bytes a cell).
 TalkTimes:
@@ -3905,8 +4108,8 @@ DocStepIn:
     ld a, 32
 .mouth:
     ld [hl], a
-    ld a, 1
-    ld [wDocDirty], a
+    ld hl, wDocDirty
+    set 0, [hl]
 .hand:
     ld hl, wDocHand
     dec [hl]
@@ -3925,8 +4128,8 @@ DocStepIn:
     ld a, 32
 .handSet:
     ld [hl], a
-    ld a, 1
-    ld [wDocDirty], a
+    ld hl, wDocDirty
+    set 0, [hl]
     ret
 
 ; The rival talking (the NES's, measured for each): his first state as the screen comes up, then the other and
@@ -3950,15 +4153,26 @@ TalkStep:
 .set:
     ld a, [hl]
     ld [wTalkTimer], a
-    ld a, 1
-    ld [wDocDirty], a
+    ld hl, wDocDirty
+    set 1, [hl]
     ret
 
 ; VBlank: the rival's cells as his state has them, then Doc's as his.
 DocVBlankIn:
-    call .talk
-    xor a
-    ld [wDocDirty], a
+    ld hl, wDocDirty        ; (Doc's or the rival's, one a VBlank: both's cells, and the words typed after, would
+    bit 0, [hl]             ; run past the original's)
+    jr z, .rival
+    res 0, [hl]
+    ldh a, [hIsCGB]         ; (Color: his sprites as his state has them)
+    and a
+    jr z, .cells
+    ld hl, wOvlDoc
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    ld a, [wDocState]
+    call OvlPut
+.cells:
     ld a, [wDocN]
     and a
     ret z
@@ -3993,6 +4207,17 @@ DocVBlankIn:
     dec c
     jr nz, .cell
     ret
+.rival:
+    res 1, [hl]
+    ldh a, [hIsCGB]
+    and a
+    jr z, .talk
+    ld hl, wOvlTalk
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    ld a, [wTalkState]
+    call OvlPut
 .talk:
     ld a, [wTalkN]
     and a

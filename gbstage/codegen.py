@@ -119,6 +119,52 @@ def _rival_talk(s):
             + f"    db {', '.join(map(str, t['time']))}\n")
 
 
+def _overlay_has(s):
+    o = s.get("overlay")
+    return bool(o and (o["still"] or any(o["doc"]) or any(o["rival"])))
+
+
+def _overlay_body(s):
+    o = s["overlay"]
+    return (f"    db {len(o['tiles'])}\n" + _db([b for px in o["tiles"] for b in encode_tile([int(c) for c in px])]) + "\n"
+            + f"    db {len(o['still'])}\n" + "".join(f"    db {y}, {x}, {t}, {pal}\n" for y, x, t, pal in o["still"]))
+
+
+def _label(prefix, body):
+    import hashlib
+    return prefix + hashlib.sha1(body.encode()).hexdigest()[:10]
+
+
+def _overlays(scenes):
+    """Color: the close-ups' sprites (OverlayLoadIn), each set once (a challenger's and his rematch's are the same):
+    their tiles, then the scene's own sprites (y, x, tile, palette)."""
+    out = {}
+    for s in scenes:
+        if _overlay_has(s):
+            body = _overlay_body(s)
+            out.setdefault(_label("Ovl", body), body)
+    if not out:
+        return ""
+    return ('SECTION FRAGMENT "Overlay far", ROMX\n'
+            + "".join(f"{k}:                ; the close-ups' sprites (Color)\n{v}" for k, v in out.items()))
+
+
+def _overlay_anim(s):
+    """After Doc's and the rival's tiles: their sprites for each state (Color), Doc's then the rival's: each its OAM
+    place, its sprites a state (the fewer filled out hidden), every state's."""
+    o = s.get("overlay") if _overlay_has(s) else None
+    if not o:
+        return "    db 0, 0, 0, 0              ; (no sprites)\n"
+    out, at = [], 8 + 4 * len(o["still"])
+    for states in (o["doc"], o["rival"]):
+        n = max((len(g) for g in states), default=0)
+        out.append(f"    db {at}, {n}\n")
+        for g in states if n else []:
+            out.append("".join(f"    db {y}, {x}, {t}, {pal}\n" for y, x, t, pal in g) + "    db 0, 0, 0, 0\n" * (n - len(g)))
+        at += 4 * n
+    return "".join(out)
+
+
 def _knee(x):
     """Steps from the middle, kept to +-7.5: as they are to 5, then softly to the edge."""
     import math
@@ -494,11 +540,12 @@ Scene{i}Attr:               ; palette number per tile (Game Boy Color only)
         "PUSHS\nSECTION FRAGMENT \"Screens far\", ROMX     ; (with DocLoadIn: read in its bank)\n"
         f"Scene{i}Doc:                ; Doc's states (Punch-Out!!'s corner): cells, then each's address, then each state's tiles\n"
         f"    db {len(s['doc_patch']['cells'])}\n" + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n" for c in s["doc_patch"]["cells"])
-        + "".join(f"    db {', '.join(map(str, row))}\n" for row in s["doc_patch"]["tiles"]) + _rival_talk(s) + "POPS\n"
+        + "".join(f"    db {', '.join(map(str, row))}\n" for row in s["doc_patch"]["tiles"]) + _rival_talk(s) + _overlay_anim(s) + "POPS\n"
         if s.get("doc_patch") else "") + (
+        (
         _far([f"Scene{i}Aw:                 ; Another World Circuit's words: cells, then each's address and tile\n    db {len(s['aw_patch'])}\n"
         + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n    db {tile}\n" for c, tile in s["aw_patch"])])
-        if s.get("aw_patch") else "")
+        if s.get("aw_patch") else ""))
 
 
 # ---- palettes per scene ----------------------------------------------------------
@@ -920,6 +967,8 @@ def _scene_load(i, s, sprites, opt_index=None, markers=False):
         lines.append("    call RecReset")
     if s.get("_corner"):
         lines.append("    call FtCornerArm")
+    if _overlay_has(s):                 # (Color: the close-ups' sprites)
+        lines += [f"    ld hl, {_label('Ovl', _overlay_body(s))}", "    call OverlayLoad"]
     if s.get("doc_patch"):              # (Doc's hand and mouth: their states' tiles, his timers started)
         lines += [f"    ld hl, Scene{i}Doc", "    call DocLoad"]
     if (s.get("cut_key") or {}).get("circuit") is not None:     # Punch-Out!!'s pass key, from his record
@@ -1032,11 +1081,57 @@ def _scene_palettes(i, s, project, sprites):
             lines += [f"    ld de, {skip}", "    add hl, de"]
         lines += [f"    ld a, $80 | {pal * 8}", "    ldh [rOCPS], a", "    ld c, LOW(rOCPD)", "    call PalCopy8"]
         at = (len(project["palettes"]) + pal + 1) * 8
+    if s.get("overlay"):                                # the close-ups' sprites' (Color): faded as the rest
+        lines += [f"    ld hl, {_label('OvlPals', _ovl_pals(s, project))}", f"    ld b, {len(s['overlay']['pals'])}",
+                  "    call OvlPalettes"]
     if (s["menu"] or {}).get("gloves"):                 # (not faded: they're up only once the fade is done)
         lines += [f"    ld hl, Scene{i}GloveColors", f"    ld a, $80 | {GLOVE_PAL * 8}", "    ldh [rOCPS], a", "    ld c, LOW(rOCPD)",
                   "    call PalCopy8"]
     lines.append("    ret")
     return "\n".join(lines)
+
+
+def _ovl_pals(s, project):
+    """A scene's close-up sprites' palettes (Color), every fade step's."""
+    to = (project["transition"] or {}).get("color", "white")
+    rows = range(FADE_STEPS + 1) if project["transition"] else range(1)
+    return "".join(f"    dw {_rgb555(fade_palettes([[0, 0, 0]] + list(q), step, to))}\n" for step in rows for q in s["overlay"]["pals"])
+
+
+def _ovl_pal_tables(scenes, project):
+    out = {}
+    for s in scenes:
+        if s.get("overlay"):
+            body = _ovl_pals(s, project)
+            out.setdefault(_label("OvlPals", body), body)
+    if not out:
+        return ""
+    step = "    ldh a, [hFadeStep]" if project["transition"] else "    xor a"
+    return f"""OvlPalettes:                ; HL: a scene's close-up sprites' palettes (B of them), every fade step's: this one's up
+    ld c, b
+{step}
+    and a
+    jr z, .up
+.step:
+    ld de, 8
+    ld b, c
+.row:
+    add hl, de
+    dec b
+    jr nz, .row
+    dec a
+    jr nz, .step
+.up:
+    ld a, $80
+    ldh [rOCPS], a
+    ld b, c
+    ld c, LOW(rOCPD)
+.pal:
+    call PalCopy8
+    dec b
+    jr nz, .pal
+    ret
+""" + "".join(f"{k}:\n{v}" for k, v in out.items())
 
 
 def _patch_routine(name, rows, comment):
@@ -2171,7 +2266,8 @@ FtTailAttr:
     rope_flash = ""                     # (his top rows' sprites flash with him: his palettes in sprite palettes 5-7)
     if rope:
         rope_flash = ("    pop hl\n    ld a, $80 | 5 * 8\n    ldh [rOCPS], a\n    ld c, LOW(rOCPD)\n"
-                      f"    ld b, {len(set(ft['palettes'].values())) * 8}\n.objPal:\n    ld a, [hl+]\n    ldh [c], a\n"
+                      f"    ld b, {len(set(ft['palettes'].values()))}\n.objPal:\n    call FtPalWait\n"
+                      "    REPT 8\n        ld a, [hl+]\n        ldh [c], a\n    ENDR\n    call FtPalDone\n"
                       "    dec b\n    jr nz, .objPal\n")
     if rope:                            # Punch-Out!!'s ropes behind him: their row in a map row of its own (the
         slot_of = s.get("pal_slots") or {}   # band's first row shows it), his rows over it sprites
@@ -2306,10 +2402,12 @@ FtFlashPalettes:            ; during VBlank, Color only: the rival's palettes, w
     inc de
     ldh [rBCPS], a
     ld c, LOW(rBCPD)
+    call FtPalWait          ; (late: each in a line's HBlank, FtVBlank's)
     REPT 8
         ld a, [hl+]
         ldh [c], a
     ENDR
+    call FtPalDone
     dec b
     jr nz, .pal
 {rope_flash}    ret
@@ -3726,7 +3824,7 @@ def generate_asm(project):
         hram += ["hGloveY: db             ; the menu's gloves: OAM y (0: away)", "hGloveOn: db"]
     if fights:
         hram += ["hFtActive: db", "hFtHudReady: db", "hFtScx: db", "hFtBandX: db", "hFtBandY: db", "hFtBandTop: db", "hFtBandGap: db", "hFtBandBottom: db", "hFtBandOn: db", "hFtShowX: db", "hFtShowY: db", "hFtShowBottom: db", "hFtOamBuild: db", "hFtOamShown: db", "hFtFlash: db",
-                 "hFtFlashShown: db", "hFtHeadN: db            ; (his top rows' sprites to go)",
+                 "hFtFlashShown: db", "hFtPalLate: db          ; (his palettes missed VBlank: the next frame's top lines, above him)", "hFtHeadN: db            ; (his top rows' sprites to go)",
                  "hFtPlY: db              ; (Mac's sprites: y, x, tiles' copy)", "hFtPlX: db", "hFtPlTile: db",
                  "hOAMDMA: ds 8           ; OAM DMA routine (runs from HRAM)"]
         if any((scenes[i]["fight"].get("nes") or {}).get("sound") for i in fights):
@@ -3737,6 +3835,10 @@ def generate_asm(project):
     if slides:
         vblank_work.append("""    ldh a, [hScrollY]       ; a scene sliding in: this frame's scroll
     ldh [rSCY], a""")
+    if any(_overlay_has(sc) for sc in scenes):          # (Color: the close-ups' sprites climb with it)
+        vblank_work.append("""    ld a, [wOvlStill + 1]
+    and a
+    call nz, OvlSlide""")
     if cutscenes:
         vblank_work.append("""    ldh a, [hCutOn]         ; a cutscene: its top unscrolled, its actors' sprites
     and a
@@ -4111,7 +4213,7 @@ SECTION "Code: Scenes", ROM0
 ; Load scene A with the screen off. Tiles, map and palette map go by DMA on Game Boy Color.
 LoadScene:
     ldh [hScene], a
-{"    ld a, [wPcmOn]          ; (the recorded crowd stopped: its interrupts off, the loads below borrow the stack)" + nl + "    and a" + nl + "    call nz, PcmStop" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}{"    xor a                   ; (a cutscene's VBlank work done)" + nl + "    ldh [hCutOn], a" + nl + "    ldh [rSCX], a" + nl if cutscenes else ""}{"    xor a                   ; (not loading with the display on, unless a plain screen turns it so)" + nl + "    ldh [hLoadOn], a" + nl if load_on else ""}{"    ldh a, [hFtActive]      ; leaving a fight: its scroll split ends now (it held through the fade)" + nl + "    and a" + nl + "    call nz, FtStop" + nl if fights else ""}    ldh a, [rLCDC]
+{"    xor a                   ; (no close-up sprites sliding till this scene's say)" + nl + "    ld [wOvlStill + 1], a" + nl + "    ldh a, [hScene]" + nl if any(_overlay_has(sc) for sc in scenes) else ""}{"    ld a, [wPcmOn]          ; (the recorded crowd stopped: its interrupts off, the loads below borrow the stack)" + nl + "    and a" + nl + "    call nz, PcmStop" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}{"    xor a                   ; (a cutscene's VBlank work done)" + nl + "    ldh [hCutOn], a" + nl + "    ldh [rSCX], a" + nl if cutscenes else ""}{"    xor a                   ; (not loading with the display on, unless a plain screen turns it so)" + nl + "    ldh [hLoadOn], a" + nl if load_on else ""}{"    ldh a, [hFtActive]      ; leaving a fight: its scroll split ends now (it held through the fade)" + nl + "    and a" + nl + "    call nz, FtStop" + nl if fights else ""}    ldh a, [rLCDC]
     add a                   ; screen already off (at boot)? bit 7 -> carry
     jr nc, .screenOff
 {SCREEN_ON_CHECK.replace('{fight_check}', SCREEN_ON_FIGHT if fight_on else '') if load_on else ""}.waitVBlank:
@@ -4272,6 +4374,8 @@ PalCopy8:                   ; a palette's 8 bytes from HL to the port C names (B
     ret
 
 {nl.join(_scene_palettes(i, s, project, cursor_on) for i, s in enumerate(scenes))}
+{_ovl_pal_tables(scenes, project)}
+{"PUSHS" + nl + _overlays(scenes) + "POPS" if _overlays(scenes) else ""}
 
 {'' if banked else 'SECTION "Data: Palettes", ROM0'}
 FadeColor:                  ; RGB555: {n_bg} background{f" + {n_obj} sprite" if n_obj else ""} palettes per fade step
