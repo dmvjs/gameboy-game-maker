@@ -239,6 +239,12 @@ wDocHand: db
 wDocDirty: db
 wDocAddr: ds 32
 wDocTile: ds 64
+wTalkN: db                  ; and the rival talking: his cells, his state (0 his first), frames till it turns, his
+wTalkState: db              ; two states' frames (the other's, then his first's), the cells' addresses and tiles
+wTalkTimer: db
+wTalkTime: ds 2
+wTalkAddr: ds 24
+wTalkTile: ds 24
 wRemap: ds 4                ; (DmgRemap: a row's pixels of each slot, its batch: count, tiles, addresses, source)
 wRemapN: db
 wRemapLeft: db
@@ -2045,6 +2051,39 @@ FtDmgTileIn:
     cp b
     ret
 
+; Before the frame's sprites are built (the original): the pictures just wanted streamed in now, while the lines
+; to the sprites' last (FT_EARLY_LAST: their building and the frame's rest, 34 lines at the most) allow; all in,
+; their decides again: up at the next VBlank, the sprites built for them, as on Color. Otherwise on after the sprites.
+DEF FT_EARLY_LAST EQU 96
+FtDmgEarly:
+    ldh a, [hIsCGB]
+    and a
+    ret nz
+    ld a, [wFtBankPicsDmg]
+    and a
+    ret z
+    ldh a, [hBank]
+    push af
+    call FtDmgJob
+    jr z, .out              ; (nothing coming in)
+.tile:
+    ldh a, [rLY]
+    cp FT_EARLY_LAST
+    jr nc, .out
+    call FtDmgStream.b0
+    call FtDmgTileIn
+    jr nz, .tile
+    call FtDmgJob           ; (that one in: the next, Mac's first)
+    jr nz, .tile
+IF DEF(FT_MAC_PICS)
+    call FtPlPicDecideDmg
+ENDC
+    call FtDmgDecide
+.out:
+    pop af
+    ld [$2000], a
+    ret
+
 ; VBlank's last: the coming pictures' tiles in what's left of it (whole tiles, about a line each, while it lasts).
 FtDmgStreamVBlank:
     call FtDmgJob
@@ -2083,19 +2122,11 @@ DEF FT_STREAM_LAST EQU 141     ; the last line a burst may start on
 FtDmgStream:
     call FtDmgJob
     jr z, .stop
-.tile:                      ; a tile in three lines' bursts: 6, 6, 4 bytes
+.tile:                      ; a tile in three lines at the most (.b0)
     ldh a, [rLY]            ; (VBlank's near, or past: the next frame's)
-    cp FT_STREAM_LAST
+    cp FT_STREAM_LAST - 2
     jr nc, .stop
-    call .burst6
-    ldh a, [rLY]
-    cp FT_STREAM_LAST
-    jr nc, .stop            ; (the rest of it next frame: from its first byte)
-    call .burst6
-    ldh a, [rLY]
-    cp FT_STREAM_LAST
-    jr nc, .stop
-    call .burst4
+    call .b0
     call FtDmgTileIn
     jr nz, .tile
     jr FtDmgStream          ; (that one in: the next)
@@ -2103,22 +2134,66 @@ FtDmgStream:
     ld a, [wFtBankData]
     ld [$2000], a
     ret
-.burst6:                    ; 6 bytes HL -> DE, once this line's drawing is done (30 cycles: the line's HBlank and
-    call .hblank            ; the next's OAM scan are 41 at the least, a line of 10 sprites; finding HBlank's
-    REPT 6                  ; start takes up to 8)
+
+; A tile's 16 bytes HL -> DE, a line's quiet part at a time: 6 bytes once its drawing's done (30 cycles: the
+; line's HBlank and the next's OAM scan are 41 at the least, a line of 10 sprites; finding HBlank's start takes up
+; to 8), then 2 more while it's still HBlank (the OAM scan's 20 cycles still to come: 15 used), most lines' HBlank
+; being long. .bN: from its Nth byte, on the next line's.
+MACRO DMG_BYTES
+    REPT \1
         ld a, [hl+]
         ld [de], a
         inc e
     ENDR
+ENDM
+MACRO DMG_MORE              ; \1: on the next line from here, if HBlank's over
+    ldh a, [rSTAT]
+    and 3
+    jp nz, \1
+    DMG_BYTES 2
+ENDM
+.b0:
+    ei
+    call .hblank
+    DMG_BYTES 6
+    DMG_MORE .b6
+    DMG_MORE .b8
+    DMG_MORE .b10
+    DMG_MORE .b12
+    DMG_MORE .b14
     ei
     ret
-.burst4:
+.b6:
+    ei
     call .hblank
-    REPT 4
-        ld a, [hl+]
-        ld [de], a
-        inc e
-    ENDR
+    DMG_BYTES 6
+    DMG_MORE .b12
+    DMG_MORE .b14
+    ei
+    ret
+.b8:
+    ei
+    call .hblank
+    DMG_BYTES 6
+    DMG_MORE .b14
+    ei
+    ret
+.b10:
+    ei
+    call .hblank
+    DMG_BYTES 6
+    ei
+    ret
+.b12:
+    ei
+    call .hblank
+    DMG_BYTES 4
+    ei
+    ret
+.b14:
+    ei
+    call .hblank
+    DMG_BYTES 2
     ei
     ret
 .hblank:                    ; (returns at HBlank's start, interrupts off: none may come between it and the bytes)
@@ -2928,6 +3003,9 @@ FtFrame:                    ; every frame: HUD values, sprites, shake
     call FtAnimate
     call FtSweatStep
     call FtReferee
+IF DEF(FT_NES)
+    call FtDmgEarly         ; (the original: the pictures just wanted, in now if there's time)
+ENDC
     jp FtBuildOAM
 
 ; The referee walks in for the round's start, counts, and waves off a KO; otherwise he steps out.
@@ -3770,7 +3848,28 @@ DocLoadIn:
     inc de
     dec c
     jr nz, .tile
+    ld a, [hl+]             ; then the rival's (none: 0)
+    ld [wTalkN], a
+    and a
+    jr z, .still
+    ld b, a
+    add a
+    ld c, a
+    ld de, wTalkAddr
+    call .copy
+    ld a, b
+    add a
+    ld c, a
+    ld de, wTalkTile
+    call .copy
+    ld a, [hl+]
+    ld [wTalkTimer], a
+    ld c, 2
+    ld de, wTalkTime
+    call .copy
+.still:
     xor a
+    ld [wTalkState], a
     ld [wDocState], a
     ld [wDocDirty], a
     ld a, 16
@@ -3778,11 +3877,19 @@ DocLoadIn:
     ld a, 32
     ld [wDocHand], a
     ret
+.copy:                      ; C bytes HL -> DE
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec c
+    jr nz, .copy
+    ret
 
 
 ; A frame of Doc in the corner (the NES's, measured): his mouth open 16 frames, shut 32; his hand up 56, down 32;
 ; once Select's pressed, faster: his mouth every 9, his hand every 8.
 DocStepIn:
+    call TalkStep
     ld hl, wDocMouth
     dec [hl]
     jr nz, .hand
@@ -3824,8 +3931,30 @@ DocStepIn:
     ld [wDocDirty], a
     ret
 
-; VBlank: Doc's cells as his state has them.
+; The rival talking (the NES's, measured for each): his first state as the screen comes up, then the other and
+; his first in turn, each its own frames.
+TalkStep:
+    ld a, [wTalkN]
+    and a
+    ret z
+    ld hl, wTalkTimer
+    dec [hl]
+    ret nz
+    ld a, [wTalkState]
+    xor 1
+    ld [wTalkState], a
+    ld a, [wTalkTime]
+    jr nz, .set
+    ld a, [wTalkTime + 1]
+.set:
+    ld [hl], a
+    ld a, 1
+    ld [wDocDirty], a
+    ret
+
+; VBlank: the rival's cells as his state has them, then Doc's as his.
 DocVBlankIn:
+    call .talk
     xor a
     ld [wDocDirty], a
     ld a, [wDocN]
@@ -3862,6 +3991,22 @@ DocVBlankIn:
     dec c
     jr nz, .cell
     ret
+.talk:
+    ld a, [wTalkN]
+    and a
+    ret z
+    ld c, a
+    ld a, [wTalkState]
+    and a
+    jr z, .first            ; (his other state's tiles after his first's)
+    ld a, c
+.first:
+    ld e, a
+    ld d, 0
+    ld hl, wTalkTile
+    add hl, de
+    ld de, wTalkAddr
+    jr .cell
 
 POPS
 ELSE

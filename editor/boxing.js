@@ -439,9 +439,11 @@ export function boxingGame(pack) {
     function nesCorner(scene, lay) {
       const full = rv.portraitFull && P.portraitFull;   // (the NES's close-ups at their size: Doc's hand and mouth
       if (full) {                                        // moving, faster once Select's pressed)
-        portrait(scene, lay, rv.portraitFull, M.CW - FW, 3);
+        const talk = rv.portraitFull.talk;              // (the rival talking: his two states in turn, the NES's frames)
+        portrait(scene, lay, talk ? { ...rv.portraitFull, pixels: talk.states[0] } : rv.portraitFull, M.CW - FW, 3);
         portrait(scene, lay, P.portraitFull, 0, M.CH - FH);
         if (P.portraitFull.states) scene.docAnim = { x: 0, y: M.CH - FH, w: FW, h: FH, states: P.portraitFull.states };
+        if (talk) scene.rivalAnim = { x: M.CW - FW, y: 3, w: FW, h: FH, states: talk.states, time: talk.time };
       } else {
       portrait(scene, lay, rv.portrait, M.CW - PT, 3);   // his top right, Mac's bottom left
       portrait(scene, lay, P.portrait, 0, M.CH - PT);

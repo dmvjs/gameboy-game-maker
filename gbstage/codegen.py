@@ -107,6 +107,18 @@ PCM_RATE = 2097152 / 192        # (kit_pcm.asm: the wave channel's 2048 - 192, t
 NES_SAMPLE_STEP = (0.42545 / 127) / (0.1128 / 15)     # a DMC step, in the Game Boy's (a square's) steps
 
 
+def _rival_talk(s):
+    """After Doc's states: the rival's (Punch-Out!!'s corner, him talking): cells, each's address, his two states'
+    tiles, their frames (first, other, back); none: 0."""
+    t = s.get("rival_patch")
+    if not t:
+        return "    db 0                    ; (the rival still)\n"
+    return (f"    db {len(t['cells'])}                    ; the rival's: cells, addresses, his two states' tiles, their frames\n"
+            + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n" for c in t["cells"])
+            + "".join(f"    db {', '.join(map(str, row))}\n" for row in t["tiles"])
+            + f"    db {', '.join(map(str, t['time']))}\n")
+
+
 def _knee(x):
     """Steps from the middle, kept to +-7.5: as they are to 5, then softly to the edge."""
     import math
@@ -482,7 +494,8 @@ Scene{i}Attr:               ; palette number per tile (Game Boy Color only)
         "PUSHS\nSECTION FRAGMENT \"Screens far\", ROMX     ; (with DocLoadIn: read in its bank)\n"
         f"Scene{i}Doc:                ; Doc's states (Punch-Out!!'s corner): cells, then each's address, then each state's tiles\n"
         f"    db {len(s['doc_patch']['cells'])}\n" + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n" for c in s["doc_patch"]["cells"])
-        + "".join(f"    db {', '.join(map(str, row))}\n" for row in s["doc_patch"]["tiles"]) + "POPS\n" if s.get("doc_patch") else "") + (
+        + "".join(f"    db {', '.join(map(str, row))}\n" for row in s["doc_patch"]["tiles"]) + _rival_talk(s) + "POPS\n"
+        if s.get("doc_patch") else "") + (
         _far([f"Scene{i}Aw:                 ; Another World Circuit's words: cells, then each's address and tile\n    db {len(s['aw_patch'])}\n"
         + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n    db {tile}\n" for c, tile in s["aw_patch"])])
         if s.get("aw_patch") else "")

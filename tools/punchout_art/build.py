@@ -551,6 +551,57 @@ def doc_states():
     return states
 
 
+def rival_talk(opponent):
+    """The rival in the corner, talking (cynes, the real game): his two states and their frames, (first, other, back)
+    -- his first state as the screen comes up, then the two in turn -- or None (Mike Tyson's stays still)."""
+    import pickle, statistics
+    cache = HERE / "out" / f"nes-talk{opponent}.pkl"
+    if cache.exists():
+        return pickle.load(open(cache, "rb"))
+    import cynes_frames as C
+    from cynes import NES
+    nes = NES(C.rom_path())
+
+    def run(n, b=0):
+        f = None
+        for _ in range(n):
+            nes.controller = b
+            f = nes.step()
+        return f
+    run(600)
+    for _ in range(40):
+        run(4, C.START); nes[0x01] = opponent; run(86)
+        if nes[0x00] == 1:
+            break
+    run(300)
+    nes[0x302], nes[0x304], nes[0x305] = 2, 5, 8      # (the round's end, soon: the corner)
+    seq = []
+    for _ in range(3000):
+        f = run(1)
+        if nes[0x00] != 0xFF:
+            if seq:
+                break
+            continue
+        seq.append([[tuple(int(v) for v in f[FULL_RIVAL[1] + y][FULL_RIVAL[0] + x][:3]) for x in range(FULL_W)] for y in range(FULL_H)])
+    runs = []
+    for img in seq:
+        if runs and runs[-1][0] == img:
+            runs[-1][1] += 1
+        else:
+            runs.append([img, 1])
+    up = max(k for k, (img, _) in enumerate(runs) if not any(c != (0, 0, 0) for row in img for c in row)) + 1   # (black, then up)
+    runs = runs[up:]
+    talk = None
+    if len(runs) > 4:
+        a, b = runs[0][0], runs[1][0]
+        assert all(img in (a, b) for img, _ in runs), "two states"
+        talk = ([[from8(c) for c in row] for row in a], [[from8(c) for c in row] for row in b],
+                (runs[0][1], round(statistics.median(n for _, n in runs[1:-1:2])), round(statistics.median(n for _, n in runs[2:-1:2]))))
+    cache.parent.mkdir(exist_ok=True)
+    pickle.dump(talk, open(cache, "wb"))
+    return talk
+
+
 def _tiles_wh(px, w, h):
     return [[px[cy * 8 + y][cx * 8 + x] for y in range(8) for x in range(8)] for cy in range(h // 8) for cx in range(w // 8)]
 
@@ -672,7 +723,8 @@ def full_portraits(palettes):
 def _full_portraits(palettes):
     out = {}
     docs = doc_states()
-    groups = [("docmac", docs)] + [(r, [full_rival(NES_RIVALS[r]["opp"])]) for r in NES_RIVALS]
+    talks = {r: rival_talk(NES_RIVALS[r]["opp"]) for r in NES_RIVALS}
+    groups = [("docmac", docs)] + [(r, [full_rival(NES_RIVALS[r]["opp"])] + list(talks[r][:2] if talks[r] else ())) for r in NES_RIVALS]
     for name, imgs in groups:
         tiles = [t for img in imgs for t in _tiles_wh(img, FULL_W, FULL_H)]
         pals = exact_palettes(tiles, 3)     # (3 each: with the text's and the round card's, a screen's 8)
@@ -684,8 +736,10 @@ def _full_portraits(palettes):
         drawn = [_draw_wh(img, pals, FULL_W, FULL_H, cells) for img in imgs]
         entry = {"w": FULL_W, "h": FULL_H, "pixels": "".join(map(str, drawn[0][0])),
                  "cells": "".join(_cell(len(palettes) + c) for c in cells)}
-        if len(imgs) > 1:
+        if name == "docmac":
             entry["states"] = ["".join(map(str, s)) for s, _ in drawn]
+        elif talks[name]:                   # (his corner: talking, his two states and their frames)
+            entry["talk"] = {"states": ["".join(map(str, s)) for s, _ in drawn[1:]], "time": list(talks[name][2])}
         out[name] = entry
         palettes += pals
     return out

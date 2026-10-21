@@ -190,6 +190,21 @@ def validate(data):
                 doc_anim = {"x": dx, "y": dy, "w": dw, "h": dh, "states": states}
             else:
                 errors.append(f"{where}: docAnim is its box (x, y, w, h in cells) and its 4 states' pixels.")
+        talk = (s or {}).get("rivalAnim")                 # and the rival talking: his 2 states, their frames
+        rival_anim = None
+        if talk is not None:
+            try:
+                tx, ty, tw, th, states, time = talk["x"], talk["y"], talk["w"], talk["h"], talk["states"], talk["time"]
+                ok = (all(isinstance(v, int) for v in (tx, ty, tw, th)) and 0 <= tx and tx + tw <= CW and 0 <= ty
+                      and ty + th <= CH and isinstance(states, list) and len(states) == 2
+                      and all(isinstance(st, str) and len(st) == tw * th * 64 and set(st) <= set("0123") for st in states)
+                      and isinstance(time, list) and len(time) == 3 and all(isinstance(t, int) and 1 <= t <= 255 for t in time))
+            except (TypeError, KeyError):
+                ok = False
+            if ok:
+                rival_anim = {"x": tx, "y": ty, "w": tw, "h": th, "states": states, "time": time}
+            else:
+                errors.append(f"{where}: rivalAnim is its box (x, y, w, h in cells), its 2 states' pixels and their 3 times.")
         used = set(cell_pal)
         if len(used) > SCENE_BG_PALETTES:
             errors.append(f"{where} uses {len(used)} background palettes; a scene can use {SCENE_BG_PALETTES}.")
@@ -212,6 +227,7 @@ def validate(data):
                        **({"nes_music": music} if music else {}),
                        "options": options, "puzzle": puzzle, "fight": fight, "back": back, "texts": texts,
                        **({"aw_texts": aw_texts} if aw_texts else {}), **({"doc_anim": doc_anim} if doc_anim else {}),
+                       **({"rival_anim": rival_anim} if rival_anim else {}),
                        "slide": slide, **({"pass_key": pass_key} if pass_key else {}),
                        **({"cutscene": cutscene} if cutscene else {}), **({"typed": typed} if typed else {})})
 
@@ -1496,6 +1512,21 @@ def compose(scene):
         if len(cells) > 16:
             raise ProjectError([f'Scene "{scene["name"]}": Doc\'s states change {len(cells)} tiles; at most 16 can move.'])
         scene["doc_patch"] = {"cells": cells, "tiles": [[tile_of(cell_key(img, c)) for c in cells] for img in imgs]}
+    if scene.get("rival_anim"):     # the rival's two states, the same way (Doc's routines take both)
+        d = scene["rival_anim"]
+        imgs = []
+        for st in d["states"]:
+            img = list(scene["pixels"])
+            for y in range(d["h"] * 8):
+                for x in range(d["w"] * 8):
+                    img[(d["y"] * 8 + y) * W + d["x"] * 8 + x] = int(st[y * d["w"] * 8 + x])
+            imgs.append(img)
+        region = [(d["y"] + r) * CW + d["x"] + c for r in range(d["h"]) for c in range(d["w"])]
+        cells = [c for c in region if len({cell_key(img, c) for img in imgs}) > 1]
+        if len(cells) > 12:
+            raise ProjectError([f'Scene "{scene["name"]}": the rival\'s states change {len(cells)} tiles; at most 12 can move.'])
+        scene["rival_patch"] = {"cells": cells, "tiles": [[tile_of(cell_key(img, c)) for c in cells] for img in imgs],
+                                "time": d["time"]}
     times = []                      # the fight's time (Punch-Out!!'s Another World Circuit, its last win): "TIME M:SS.CC,RN",
     for t in scene.get("aw_texts") or []:   # each digit's cell in each digit
         if t.get("fight_time"):
