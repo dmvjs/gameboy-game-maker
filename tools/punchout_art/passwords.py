@@ -12,6 +12,7 @@ from pathlib import Path
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
 DISASM = HERE / "disassembly"
+HAVE = (DISASM / "original_files" / "PRG_Bank007.bin").exists()   # (its built banks: gitignored, not on CI)
 SPECIAL = {"busy1": "0755416113", "busy2": "8004222602", "busy3": "2068822040",
            "another_world": "1357924680", "credits": "1061130120", "tyson": "0073735963"}
 ENTERED = 0x0110                # EnteredPasswd: the encoder's digits here; the decoder reads $0120 on

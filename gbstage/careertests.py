@@ -59,7 +59,7 @@ def career(rom):
                 fixed = next((l.replace(" ", "") for l in box if l.replace(" ", "") in passwords.SPECIAL.values()), None)
                 digits = [int(c) for c in fixed] if fixed else [g.m[g.S["wPw"] + 0x10 + i] for i in range(10)]
                 special = fixed is not None             # (a special one, as the game has it: the Tyson code)
-                if not passwords.DISASM.exists():       # (no NES code here, as on CI: its reading not checked)
+                if not passwords.HAVE:                   # (no NES code here, as on CI: its reading not checked)
                     lines.append(f"    ✓ {names[key_scene]}: pass key {''.join(map(str, digits))} (not read: no disassembly)")
                     continue
                 want = passwords.decode(digits)
