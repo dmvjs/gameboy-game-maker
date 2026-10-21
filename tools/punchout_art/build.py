@@ -609,8 +609,8 @@ def _tiles_wh(px, w, h):
 def exact_palettes(tiles, limit):
     """The fewest palettes (4 colors each) holding every tile's colors exactly (the NES's: each tile inside one of
     its 16x16 palette areas), merged greedily; past the limit, the nearest (choose_palettes)."""
-    sets = sorted({frozenset(key(c) for c in t) for t in tiles}, key=len, reverse=True)
-    if any(len(s) > 4 for s in sets):
+    sets = sorted({frozenset(key(c) for c in t) for t in tiles}, key=lambda s: (-len(s), sorted(s)))   # (ties: by color,
+    if any(len(s) > 4 for s in sets):                                                                 # the same each run)
         return choose_palettes(tiles, limit)
     pals = []
     for s in sets:
@@ -624,7 +624,7 @@ def exact_palettes(tiles, limit):
         return choose_palettes(tiles, limit)
     out = []
     for p in pals:
-        cols = sorted((list(map(int, k.split(","))) for k in p), key=lambda c: -sum(c))
+        cols = sorted((list(map(int, k.split(","))) for k in p), key=lambda c: (-sum(c), c))
         out.append(cols + [cols[-1]] * (4 - len(cols)))
     return out
 
@@ -673,7 +673,7 @@ def _grey_slots(pals, tiles):
     sets = [{tuple(c) for c in p} for p in pals]
     gslot = {}                                            # (each color one slot in every palette: the commonest
     mid = (centers[0] + centers[3]) / 2                   # first: the darkest and lightest, then the rest by use)
-    for c in sorted({c for s in sets for c in s}, key=lambda c: (-abs(lum(c) - mid) // 40, -use.get(c, 0))):
+    for c in sorted({c for s in sets for c in s}, key=lambda c: (-abs(lum(c) - mid) // 40, -use.get(c, 0), c)):
         for d in (0, 1, -1, 2, -2, 3, -3):
             s = level(c) + d
             if 0 <= s < 4 and all(gslot.get(o) != s for st in sets if c in st for o in st if o != c):
@@ -681,7 +681,7 @@ def _grey_slots(pals, tiles):
                 break
     out = []
     for p in pals:
-        cols = sorted({tuple(c) for c in p}, key=lum, reverse=True)
+        cols = sorted({tuple(c) for c in p}, key=lambda c: (lum(c), c), reverse=True)
         slots = [None] * 4
         for c in cols:
             want = gslot.get(c, level(c))
@@ -751,7 +751,7 @@ def _overlay(imgs, pals, cells):
             if px:
                 want.append((st, t, px))
     sets = []                                           # (their palettes: each sprite's colors, merged to 3s)
-    for cs in sorted({frozenset(px.values()) for _, _, px in want}, key=len, reverse=True):
+    for cs in sorted({frozenset(px.values()) for _, _, px in want}, key=lambda q: (-len(q), sorted(q))):
         fit = [q for q in sets if cs <= q] or [q for q in sets if len(q | cs) <= 3]
         if fit:
             q = min(fit, key=len)
@@ -765,6 +765,46 @@ def _overlay(imgs, pals, cells):
         pixels = "".join(str(order[j].index(px[n]) + 1) if n in px else "0" for n in range(64))
         states[st].append([t % (FULL_W // 8) * 8, t // (FULL_W // 8) * 8, pixels, j])
     return {"pals": [[list(map(int, c.split(","))) for c in q] for q in order], "states": states}
+
+
+def _grey_of(pals, tiles):
+    """Each color's grey on the original (0 white to 3 black): its group in _grey_levels's split by brightness."""
+    lum = lambda c: 2 * c[0] + 4 * c[1] + c[2]
+    use = {}
+    for tl in tiles:
+        for c in tl:
+            use[tuple(c)] = use.get(tuple(c), 0) + 1
+    vals = sorted({lum(v) for v in use})
+    centers = [vals[int((len(vals) - 1) * q)] for q in (0, 1 / 3, 2 / 3, 1)]
+    for _ in range(20):
+        groups = [[] for _ in range(4)]
+        for c, n in use.items():
+            groups[min(range(4), key=lambda k: abs(lum(c) - centers[k]))].append((lum(c), n))
+        centers = sorted(sum(l * n for l, n in g) / sum(n for _, n in g) if g else centers[k] for k, g in enumerate(groups))
+    return lambda c: 3 - min(range(4), key=lambda k: abs(lum(c) - centers[k]))
+
+
+def _overlay_dmg(imgs, pals, cells):
+    """The original's: where its greys of the background differ from each color's own, as 8x8 sprites for each
+    state: [[x, y, pixels, palette]] -- palette 0 the background's greys (1-3), 1 with white for 1 (and 2, 3)."""
+    tiles = [t for img in imgs for t in _tiles_wh(img, FULL_W, FULL_H)]
+    grey = _grey_of(pals, tiles)
+    near = lambda p, c: min(p, key=lambda q: sum((a - b) ** 2 for a, b in zip(q, c)))
+    states = []
+    for img in imgs:
+        out = []
+        for t, tl in enumerate(_tiles_wh(img, FULL_W, FULL_H)):
+            want = [grey(c) if grey(near(pals[cells[t]], c)) != grey(c) else None for c in tl]
+            x, y = t % (FULL_W // 8) * 8, t // (FULL_W // 8) * 8
+            if any(w == 0 for w in want) and not any(w == 1 for w in want):     # (white with 2s and 3s: one sprite)
+                out.append([x, y, "".join("1" if w == 0 else str(w) if w else "0" for w in want), 1])
+                continue
+            if any(w for w in want):
+                out.append([x, y, "".join(str(w) if w else "0" for w in want), 0])
+            if any(w == 0 for w in want):
+                out.append([x, y, "".join("1" if w == 0 else "0" for w in want), 1])
+        states.append(out)
+    return states
 
 
 def _full_portraits(palettes):
@@ -785,6 +825,7 @@ def _full_portraits(palettes):
         elif talks[name]:                   # (his corner: talking, his two states and their frames)
             entry["talk"] = {"states": ["".join(map(str, s)) for s, _ in drawn[1:]], "time": list(talks[name][2])}
         entry["overlay"] = _overlay(imgs, pals, cells)   # (Color: the rest of his colors, as sprites)
+        entry["overlay"]["dmg"] = _overlay_dmg(imgs, pals, cells)     # (the original: the rest of his greys)
         out[name] = entry
         palettes += pals
     return out
@@ -1864,10 +1905,9 @@ REF_INK = {(236, 180, 176): 1, (152, 34, 32): 2, (0, 0, 0): 3, (236, 238, 236): 
 REF_COLORS = [[29, 22, 21], [19, 4, 4], [0, 0, 0]]          # skin, cap, black (NES $36, $16, $0F)
 REF_SHIRT = [[29, 22, 21], [29, 29, 29], [0, 0, 0]]         # skin, shirt, black ($36, $30, $0F)
 
-def ref_from_nes():
-    """His three looks, one scale for all (the largest that fits the kit's 24x32), at the frame's bottom."""
+def _ref_shapes():
+    """His three looks as the game draws them, each {(x, y) from his cap's top-left: color}."""
     import nes_play
-    REF_W, REF_H = 24, 32
     shapes = {}
     for look, img in nes_play.ref_frames().items():
         floor = img[0][0]
@@ -1888,9 +1928,24 @@ def ref_from_nes():
         cap = [(x, y) for x, y in him if img[y][x] == (152, 34, 32)]                              # the bubble)
         cx, cy = min(x for x, _ in cap), min(y for _, y in cap)     # every look lined up on his cap: what they
         shapes[look] = {(x - cx, y - cy): img[y][x] for x, y in him}  # share (head, legs) shares tiles
+    return shapes
+
+
+def _ref_frame(shapes):
+    """Where his looks sit in the kit's 24x32: their box from his cap (x0, y0, W, H), the scale, the offset."""
+    REF_W, REF_H = 24, 32
     xs = [x for sh in shapes.values() for x, _ in sh]; ys = [y for sh in shapes.values() for _, y in sh]
     x0, y0, W, H = min(xs), min(ys), max(xs) - min(xs) + 1, max(ys) - min(ys) + 1
     s = min(REF_W / W, REF_H / H)
+    small = scale([[None] * W for _ in range(H)], s)
+    return x0, y0, W, H, s, (REF_W - len(small[0])) // 2, REF_H - len(small)
+
+
+def ref_from_nes():
+    """His three looks, one scale for all (the largest that fits the kit's 24x32), at the frame's bottom."""
+    REF_W, REF_H = 24, 32
+    shapes = _ref_shapes()
+    x0, y0, W, H, s, _, _ = _ref_frame(shapes)
     out = {}
     for look, sh in shapes.items():
         pic = [[None] * W for _ in range(H)]
@@ -1901,6 +1956,49 @@ def ref_from_nes():
         frame = [[small[y - oy][x - ox] if 0 <= y - oy < len(small) and 0 <= x - ox < len(small[0]) else None
                   for x in range(REF_W)] for y in range(REF_H)]
         out[look] = "".join(str(REF_INK.get(tuple(c[:3]), 3)) if c else "0" for row in frame for c in row)
+    return out
+
+
+# His words' bubbles (ref_words.py, the game's), scaled as he is and placed by him as the game places them: the
+# letters' 1-pixel strokes kept (a pixel black once a third of what it covers is), each word's pixel grid where
+# its letters read best (the scale's 3 NES pixels to 2: a stroke can fall between two).
+WORD_PHASE = {"9": (1 / 3, 0), "KO": (2 / 3, 0), "FIGHT": (2 / 3, 1 / 3)}
+
+
+def ref_words():
+    """{word: [[x, y, pixels]]}: each bubble's 8x8 sprites, x and y from his 24x32 frame's top-left (pixels 2
+    white, 3 black: his shirt's palette)."""
+    import math
+    import ref_words as RW
+    x0, y0, _, _, s, ox, oy = _ref_frame(_ref_shapes())
+    out = {}
+    for word, px in RW.words().items():
+        X0, Y0 = min(x for x, _ in px), min(y for _, y in px)
+        w, h = max(x for x, _ in px) - X0 + 1, max(y for _, y in px) - Y0 + 1
+        src = [[0] * w for _ in range(h)]
+        for (x, y), c in px.items():
+            src[y - Y0][x - X0] = 3 if sum(c) < 300 else 2
+        fx, fy = WORD_PHASE.get(word, (0, 0))
+        small = {}
+        for Y in range(math.ceil(h * s) + 1):
+            for X in range(math.ceil(w * s) + 1):
+                a0, a1, b0, b1 = (Y - fy) / s, (Y + 1 - fy) / s, (X - fx) / s, (X + 1 - fx) / s
+                cov = {0: 0, 2: 0, 3: 0}
+                for yy in range(math.floor(a0), math.ceil(a1)):
+                    for xx in range(math.floor(b0), math.ceil(b1)):
+                        o = (min(a1, yy + 1) - max(a0, yy)) * (min(b1, xx + 1) - max(b0, xx))
+                        if o > 0:
+                            cov[src[yy][xx] if 0 <= yy < h and 0 <= xx < w else 0] += o
+                if cov[2] + cov[3] > cov[0]:
+                    small[(X, Y)] = 3 if cov[3] >= 0.35 * (cov[2] + cov[3]) else 2
+        dx = round((X0 - x0) * s - fx + ox)     # (where he'd be drawn: his cap's offset, scaled as he is)
+        dy = round((Y0 - y0) * s - fy + oy)
+        sx, sy = min(x for x, _ in small), min(y for _, y in small)
+        tiles = {}
+        for (x, y), v in small.items():
+            tiles.setdefault(((x - sx) // 8, (y - sy) // 8), {})[((x - sx) % 8, (y - sy) % 8)] = v
+        out[word] = [[dx + sx + tx * 8, dy + sy + ty * 8, "".join(str(t.get((i % 8, i // 8), 0)) for i in range(64))]
+                     for (tx, ty), t in sorted(tiles.items())]
     return out
 
 
@@ -2096,6 +2194,8 @@ def write_js(colors, pposes, note, faces, mac_pal, rivals, mac_cgb=None, full=No
           *[line for key, art in rivals.items() for line in _rival_js(key, art)],
           "// The training scene after the Minor Circuit title: New York scrolling by, Doc and Mac (the game's).",
           f"export const INTERMISSION = {json.dumps(intermission_art())};", "",
+          "// The screens between fights that aren't a fighter's: TITLE BOUT!!, the KO News page, THE DREAM FIGHT!! (the game's).",
+          f"export const NES_SCREENS = {json.dumps(__import__('nes_screens').screens())};", "",
           "// Each fight's crowd color, as the NES game sets it (its background palette 2, color 2).",
           f"export const CROWD_COLORS = {json.dumps(crowd_colors())};", "",
           "// The crowd as the NES draws it: per crowd line, its spectators (\"1\") on the dark (\"\": a rope).",
@@ -2103,7 +2203,7 @@ def write_js(colors, pposes, note, faces, mac_pal, rivals, mac_cgb=None, full=No
           "// Each circuit's ring, as the NES game colors it: the mat (and the posts' pads), the posts.",
           f"export const RING_COLORS = {json.dumps(ring_colors())};", "",
           "// The referee, Mario, from the game: 24x32, pixels 1 skin, 2 cap, 3 black, 4 shirt (its own palette).",
-          f"export const REFEREE = {json.dumps({'poses': ref_from_nes(), 'colors': REF_COLORS, 'shirtColors': REF_SHIRT})};", "",
+          f"export const REFEREE = {json.dumps({'poses': ref_from_nes(), 'colors': REF_COLORS, 'shirtColors': REF_SHIRT, 'words': ref_words()})};", "",
           "// The glove on the screen after a loss (the title's, as it first shows): slots dark red, light red, black.",
           f"export const LOSE_GLOVE = {json.dumps(lose_glove())};", "",
           "// What Start does on the title: the NES game's glove, flashing behind the logo, then punching out.",
@@ -2142,14 +2242,37 @@ def _rival_js(key, art):
                if art.get("jewels") else []) + [""])
 
 
+TRAINING_GREYS = [([9, 19, 29], 0), ([19, 26, 28], 0), ([31, 31, 31], 0),       # the training run's greys on the original,
+                  ([18, 18, 18], 1), ([9, 25, 4], 1), ([29, 22, 21], 1),        # by what each color is (by brightness alone the
+                  ([1, 9, 24], 2), ([1, 15, 0], 2), ([15, 7, 0], 2), ([10, 10, 10], 2),   # sky, the buildings and the grass
+                  ([0, 0, 0], 3)]                                               # would be one grey): sky, sidewalk white;
+                                                                                # buildings, grass, road light; water dark
+TRAINING_POST = ["...##...", "..#BB#..", "..#B##..", "..#BB#..", "..#B##..", "..#BB#..", "..#B##..", "..#BB#..",   # (NES
+                 "..#B##..", ".##BB##.", ".##B###.", ".##BB##.", "#.#B##.#", "..#BB#..", "..#B##..", "..#BB#..",  # rows
+                 "..#B##..", "..#BB##.", "...#####"]                                                             # 147-165)
+
+
 def intermission_art():
     """The training scene after the Minor Circuit title, from the game: New York at half size (512 NES pixels
     across: 256, the Game Boy's whole map width, so it scrolls round as the NES's does), six palettes; Doc on his
     bike and Mac running as sprites, a frame each time the game's change. -> dict for the template."""
     import nes_play
     pano, frames = nes_play.montage()
+    pano = [list(row) for row in pano]
+    for k in range(16):                     # the railing's posts: the NES's sprites (one every 32 pixels, moving
+        for dy, line in enumerate(TRAINING_POST):          # with the sidewalk), its background the posts' feet
+            for dx, ch in enumerate(line):
+                if ch != ".":
+                    pano[147 + dy][(24 + 32 * k + dx) % 512] = (0, 0, 0) if ch == "#" else (120, 60, 0)
     img = [[tuple(c) + (255,) for c in row] for row in pano[16:240]]
     small = scale(img, 0.5)                                       # 256 x 112
+    for r in range(94, 112):                # the curb and road, the NES's fine checkerboard of its color and black:
+        a, b = pano[16 + 2 * r], pano[17 + 2 * r]         # at half size the color flat (as it reads), not halved to
+        if all(tuple(c) == (0, 0, 0) for c in a) or all(tuple(c) == (0, 0, 0) for c in b):   # its black; a black
+            small[r] = [(0, 0, 0, 255)] * 256                                                  # line in either: black
+            continue
+        ink = next(tuple(c) for c in a if tuple(c) != (0, 0, 0))
+        small[r] = [ink + (255,)] * 256
     sky = small[2][0]
     rows = [[sky] * 256 for _ in range(144 - len(small))] + small   # sky above, to 144
     px = [[from8(c[:3]) for c in row] for row in rows]
@@ -2192,9 +2315,11 @@ def intermission_art():
                     t = [fr[ty + y][tx + x] for y in range(8) for x in range(8) if fr[ty + y][tx + x]]
                     if t: tiles_s.append(t)
     black = [0, 0, 0]                   # their sprite palettes, from the game's colors: black (the outlines) and
-    spals = [[black, [29, 11, 22], [29, 22, 21]],       # Mac's pink and skin; Doc's red jacket and face;
-             [black, [18, 4, 4], [11, 0, 6]],           # the bike's green and blue (three: the fight's five
-             [black, [0, 14, 5], [6, 6, 29]]]           # sprite palettes are kept)
+    spals = [[[0, 14, 5], [6, 6, 29], black],           # the bike's green and blue; Mac's pink and skin; Doc's red
+             [[29, 11, 22], [29, 22, 21], black],       # jacket and face (three: the fight's five sprite palettes
+             [[18, 4, 4], [11, 0, 6], black]]           # kept), black last: on the original 1 light grey, 2 dark,
+                                                        # 3 black (OBP0, Mac's); the bike's and Doc's OBP1 (odd)
+                                                        # a shade darker (the cutscene's dmgDarkOdd)
     out_actors = []
     for a in actors:
         fl = []
@@ -2211,8 +2336,11 @@ def intermission_art():
                     pix.append(0 if c is None else 1 + min(range(3), key=lambda q: dist(c, p[q])))
             fl.append({"pixels": "".join(map(str, pix)), "cells": "".join(map(str, cl))})
         out_actors.append({"x": a["x"], "y": a["y"], "w": a["w"], "h": a["h"], "frames": fl})
+    grey = lambda c: min(TRAINING_GREYS, key=lambda rg: dist(c, rg[0]))[1]     # (the original's greys: by what each
+    sky = pals[cells[0]][slots[0]]                                               #  color is, the box's too)
     return {"w": 256, "h": 144, "pixels": "".join(map(str, slots)), "cells": "".join(map(str, cells)),
-            "palettes": pals, "actors": out_actors, "objPalettes": spals}
+            "palettes": pals, "greys": [[grey(c) for c in p] for p in pals],
+            "boxGreys": [grey(sky), 0, 2, 3], "actors": out_actors, "objPalettes": spals}
 
 
 # The crowd as the NES draws it (its own tiles, 1:1): its rows between the ropes, the spectators in the crowd's color
@@ -2288,6 +2416,7 @@ def budget(poses, pals, colors, pposes, cgb=None, nth=0):
         sc.pop("cutscene", None)
     p["palettes"]["obj"] = p["palettes"]["obj"][:8]
     ft.pop("nes", None)                 # the budget is tiles: the NES logic (and a stale copy of it) aside
+    ft["referee"].pop("words", None)    # (and the NES's bubbles, only an NES fight's: a plain one's are letters)
     ft["rival"]["poses"] = poses
     ft["rival"].pop("cgbPoses", None)
     if cgb:

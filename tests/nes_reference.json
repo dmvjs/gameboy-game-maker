@@ -1,0 +1,679 @@
+{
+ "source": "Punch-Out!! (NES), played in cynes by tools/punchout_art/nes_reference.py",
+ "pass_keys": [
+  {
+   "name": "3-0 3KO, the Minor Circuit's",
+   "digits": "0057375423",
+   "select": false,
+   "partial": null,
+   "to": "challenger",
+   "opponent": "Don",
+   "record": [
+    3,
+    0,
+    3
+   ]
+  },
+  {
+   "name": "7-1 5KO, the Major Circuit's",
+   "digits": "2451337842",
+   "select": false,
+   "partial": null,
+   "to": "challenger",
+   "opponent": "Honda2",
+   "record": [
+    7,
+    1,
+    5
+   ]
+  },
+  {
+   "name": "11-2 9KO, the World Circuit's",
+   "digits": "6793971674",
+   "select": false,
+   "partial": null,
+   "to": "challenger",
+   "opponent": "Macho",
+   "record": [
+    11,
+    2,
+    9
+   ]
+  },
+  {
+   "name": "30-2 25KO, the World Circuit's",
+   "digits": "6784932674",
+   "select": false,
+   "partial": null,
+   "to": "challenger",
+   "opponent": "Macho",
+   "record": [
+    30,
+    2,
+    25
+   ]
+  },
+  {
+   "name": "0-0 0KO, the Minor Circuit's (not one the NES takes)",
+   "digits": "0498315423",
+   "select": false,
+   "partial": null,
+   "to": "title",
+   "busy_beeps": 0
+  },
+  {
+   "name": "Mike Tyson's",
+   "digits": "0073735963",
+   "select": false,
+   "partial": null,
+   "to": "challenger",
+   "opponent": "Tyson",
+   "record": [
+    0,
+    2,
+    0
+   ]
+  },
+  {
+   "name": "the Another World Circuit's, A+B+Select",
+   "digits": "1357924680",
+   "select": true,
+   "partial": null,
+   "to": "challenger",
+   "opponent": "Hippo",
+   "another_world": true,
+   "record": [
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "name": "the Another World Circuit's, without Select",
+   "digits": "1357924680",
+   "select": false,
+   "partial": null,
+   "to": "title",
+   "busy_beeps": 0
+  },
+  {
+   "name": "the credits', A+B+Select",
+   "digits": "1061130120",
+   "select": true,
+   "partial": null,
+   "to": "credits"
+  },
+  {
+   "name": "the credits', without Select",
+   "digits": "1061130120",
+   "select": false,
+   "partial": null,
+   "to": "title",
+   "busy_beeps": 0
+  },
+  {
+   "name": "busy signal 1",
+   "digits": "0755416113",
+   "select": false,
+   "partial": null,
+   "to": "title",
+   "busy_beeps": 10
+  },
+  {
+   "name": "busy signal 2",
+   "digits": "8004222602",
+   "select": false,
+   "partial": null,
+   "to": "title",
+   "busy_beeps": 10
+  },
+  {
+   "name": "busy signal 3",
+   "digits": "2068822040",
+   "select": false,
+   "partial": null,
+   "to": "title",
+   "busy_beeps": 10
+  },
+  {
+   "name": "1234567890",
+   "digits": "1234567890",
+   "select": false,
+   "partial": null,
+   "to": "title",
+   "busy_beeps": 0
+  },
+  {
+   "name": "0000000000",
+   "digits": "0000000000",
+   "select": false,
+   "partial": null,
+   "to": "title",
+   "busy_beeps": 0
+  },
+  {
+   "name": "3-0 3KO's with a digit off",
+   "digits": "0057475423",
+   "select": false,
+   "partial": null,
+   "to": "title",
+   "busy_beeps": 0
+  },
+  {
+   "name": "five digits, then Start",
+   "digits": "0057375423",
+   "select": false,
+   "partial": 5,
+   "to": "waiting"
+  }
+ ],
+ "flows": {
+  "NEW": {
+   "fights": [
+    {
+     "opponent": "Joe",
+     "record": [
+      0,
+      0,
+      0
+     ],
+     "result": "W"
+    }
+   ],
+   "settles": {
+    "opponent": 3,
+    "record": [
+     3,
+     0,
+     3
+    ]
+   }
+  },
+  "Another World": {
+   "fights": [
+    {
+     "opponent": "Hippo",
+     "record": [
+      0,
+      0,
+      0
+     ],
+     "result": "W"
+    }
+   ],
+   "settles": {
+    "opponent": 26,
+    "record": [
+     6,
+     0,
+     6
+    ]
+   }
+  },
+  "three losses to Glass Joe": {
+   "fights": [
+    {
+     "opponent": "Joe",
+     "record": [
+      0,
+      0,
+      0
+     ],
+     "result": "L"
+    },
+    {
+     "opponent": "Joe",
+     "record": [
+      0,
+      1,
+      0
+     ],
+     "result": "L"
+    },
+    {
+     "opponent": "Joe",
+     "record": [
+      0,
+      2,
+      0
+     ],
+     "result": "L"
+    },
+    {
+     "opponent": "Joe",
+     "record": [
+      0,
+      0,
+      0
+     ],
+     "result": "W"
+    }
+   ],
+   "settles": {
+    "opponent": 7,
+    "record": [
+     7,
+     0,
+     7
+    ]
+   }
+  },
+  "Von Kaiser lost to, then his rematch": {
+   "fights": [
+    {
+     "opponent": "Kaiser",
+     "record": [
+      0,
+      0,
+      0
+     ],
+     "result": "L"
+    },
+    {
+     "opponent": "Kaiser",
+     "record": [
+      0,
+      1,
+      0
+     ],
+     "result": "L"
+    },
+    {
+     "opponent": "Joe",
+     "record": [
+      0,
+      2,
+      0
+     ],
+     "result": "L"
+    },
+    {
+     "opponent": "Joe",
+     "record": [
+      0,
+      0,
+      0
+     ],
+     "result": "W"
+    }
+   ],
+   "settles": {
+    "opponent": 11,
+    "record": [
+     11,
+     0,
+     11
+    ]
+   }
+  },
+  "Don Flamenco won, King Hippo lost to twice": {
+   "fights": [
+    {
+     "opponent": "Don",
+     "record": [
+      0,
+      0,
+      0
+     ],
+     "result": "W"
+    },
+    {
+     "opponent": "Hippo",
+     "record": [
+      1,
+      0,
+      1
+     ],
+     "result": "L"
+    },
+    {
+     "opponent": "Hippo",
+     "record": [
+      1,
+      1,
+      1
+     ],
+     "result": "L"
+    },
+    {
+     "opponent": "Don",
+     "record": [
+      1,
+      2,
+      1
+     ],
+     "result": "W"
+    }
+   ],
+   "settles": {
+    "opponent": 14,
+    "record": [
+     12,
+     2,
+     12
+    ]
+   }
+  },
+  "Piston Honda's title fight lost, then Von Kaiser's": {
+   "fights": [
+    {
+     "opponent": "Honda",
+     "record": [
+      0,
+      0,
+      0
+     ],
+     "result": "L"
+    },
+    {
+     "opponent": "Kaiser",
+     "record": [
+      0,
+      1,
+      0
+     ],
+     "result": "L"
+    },
+    {
+     "opponent": "Kaiser",
+     "record": [
+      0,
+      2,
+      0
+     ],
+     "result": "W"
+    }
+   ],
+   "settles": {
+    "opponent": 10,
+    "record": [
+     9,
+     2,
+     9
+    ]
+   }
+  },
+  "Bald Bull's title fight lost, then Great Tiger's": {
+   "fights": [
+    {
+     "opponent": "Bull",
+     "record": [
+      0,
+      0,
+      0
+     ],
+     "result": "L"
+    },
+    {
+     "opponent": "Tiger",
+     "record": [
+      0,
+      1,
+      0
+     ],
+     "result": "L"
+    },
+    {
+     "opponent": "Tiger",
+     "record": [
+      0,
+      2,
+      0
+     ],
+     "result": "W"
+    }
+   ],
+   "settles": {
+    "opponent": 14,
+    "record": [
+     9,
+     2,
+     9
+    ]
+   }
+  },
+  "Super Macho Man's title fight lost, then Don Flamenco's": {
+   "fights": [
+    {
+     "opponent": "Macho",
+     "record": [
+      0,
+      0,
+      0
+     ],
+     "result": "L"
+    },
+    {
+     "opponent": "Don2",
+     "record": [
+      0,
+      1,
+      0
+     ],
+     "result": "L"
+    },
+    {
+     "opponent": "Don2",
+     "record": [
+      0,
+      2,
+      0
+     ],
+     "result": "W"
+    }
+   ],
+   "settles": {
+    "opponent": 14,
+    "record": [
+     4,
+     2,
+     4
+    ]
+   }
+  },
+  "Piston Honda's title fight won": {
+   "fights": [
+    {
+     "opponent": "Honda",
+     "record": [
+      0,
+      0,
+      0
+     ],
+     "result": "W"
+    },
+    {
+     "opponent": "Don",
+     "record": [
+      1,
+      0,
+      1
+     ],
+     "result": "W"
+    }
+   ],
+   "settles": {
+    "opponent": 9,
+    "record": [
+     7,
+     0,
+     7
+    ]
+   }
+  },
+  "Bald Bull's title fight won": {
+   "fights": [
+    {
+     "opponent": "Bull",
+     "record": [
+      0,
+      0,
+      0
+     ],
+     "result": "W"
+    },
+    {
+     "opponent": "Honda2",
+     "record": [
+      1,
+      0,
+      1
+     ],
+     "result": "W"
+    }
+   ],
+   "settles": {
+    "opponent": 14,
+    "record": [
+     8,
+     0,
+     8
+    ]
+   }
+  },
+  "Super Macho Man's title fight won": {
+   "fights": [
+    {
+     "opponent": "Macho",
+     "record": [
+      0,
+      0,
+      0
+     ],
+     "result": "W"
+    },
+    {
+     "opponent": "Tyson",
+     "record": [
+      1,
+      0,
+      1
+     ],
+     "result": "W"
+    }
+   ],
+   "settles": {
+    "opponent": 14,
+    "record": [
+     2,
+     0,
+     2
+    ]
+   }
+  },
+  "Mike Tyson won": {
+   "fights": [
+    {
+     "opponent": "Tyson",
+     "record": [
+      0,
+      0,
+      0
+     ],
+     "result": "W"
+    }
+   ],
+   "settles": {
+    "opponent": 14,
+    "record": [
+     1,
+     0,
+     1
+    ]
+   }
+  },
+  "the Another World Circuit won through": {
+   "fights": [
+    {
+     "opponent": "Hippo",
+     "record": [
+      0,
+      0,
+      0
+     ],
+     "result": "W"
+    },
+    {
+     "opponent": "Tiger",
+     "record": [
+      1,
+      0,
+      1
+     ],
+     "result": "W"
+    },
+    {
+     "opponent": "Honda",
+     "record": [
+      2,
+      0,
+      2
+     ],
+     "result": "W"
+    },
+    {
+     "opponent": "Soda",
+     "record": [
+      3,
+      0,
+      3
+     ],
+     "result": "W"
+    },
+    {
+     "opponent": "Bull",
+     "record": [
+      4,
+      0,
+      4
+     ],
+     "result": "W"
+    },
+    {
+     "opponent": "Don",
+     "record": [
+      5,
+      0,
+      5
+     ],
+     "result": "W"
+    },
+    {
+     "opponent": "Sandman",
+     "record": [
+      6,
+      0,
+      6
+     ],
+     "result": "W"
+    },
+    {
+     "opponent": "Macho",
+     "record": [
+      7,
+      0,
+      7
+     ],
+     "result": "W"
+    },
+    {
+     "opponent": "Tyson",
+     "record": [
+      8,
+      0,
+      8
+     ],
+     "result": "W"
+    }
+   ],
+   "settles": {
+    "opponent": 29,
+    "record": [
+     9,
+     0,
+     9
+    ]
+   }
+  }
+ }
+}

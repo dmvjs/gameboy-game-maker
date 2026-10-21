@@ -18,8 +18,11 @@ Tyson, on Game Boy Color and the original Game Boy.
   balance and 1 cent of its pitch.
 - **The whole game around the fights**: title, challenger screens with the NES's full-size close-ups, the corner
   between rounds (Doc rubbing Mac's shoulder and the rival talking, each at the NES's own pace; Select there, once
-  per fight, makes Doc rub faster and gives the NES's refill), knockdowns with the referee's count, TKOs, decisions on points, rematches, dropping down
-  the ranks, and game over on the third loss, all by the NES's rules.
+  per fight, makes Doc rub faster and gives the NES's refill), knockdowns with the referee's count, TKOs, decisions on
+  points, rematches, dropping down the ranks, and game over on the third loss, all by the NES's rules. Between them
+  the NES's own screens: NEXT IS ... TITLE BOUT!! before each title bout (its letters cycling through the NES's
+  colors), the KO News page after the World Circuit's title (Mac's pass key in it) and THE DREAM FIGHT!!, the ending
+  held at THE END, and the staff credits behind their key (106 113 0120, Select held).
 - **The NES's pass keys.** Mac's record is kept fight to fight, and the training runs show its pass key, worked out
   by the NES's own algorithm (ported, and checked against the original). Keys from the NES work on CONTINUE: try
   005 737 5423, or 007 373 5963 for Mike Tyson. The NES's secrets too: 135 792 4680 (hold Select as you enter the last
@@ -187,6 +190,24 @@ python3 -m gbstage test --cpu-roms DIR       # also run Blargg's test ROMs (from
 
 Any change to generated code shows up as a precise difference, such as `cycles.color.startup_cycles: 35216 → 35220 (+4)`,
 with the assembly diff.
+
+The career tests play Punch-Out!!'s whole game on the Joe vs Mac example (buttons only) and hold it to what the
+NES does, as `tests/nes_reference.json` records it (played once in the real game by
+`tools/punchout_art/nes_reference.py`):
+- **Pass keys:** every kind of pass key the title takes or turns away, including the special codes (the staff credits
+  among them, held) and the busy signals.
+- **Starts:** NEW and the Another World Circuit, each into its first fight.
+- **Losing:** rematches, down the ranks, and game over.
+- **Title fights:** each circuit's TITLE BOUT!! on the way to it; won, its training run (after the World Circuit's, the
+  KO News page and THE DREAM FIGHT!!) and the next challenger.
+- **Mike Tyson:** beaten, to THE END, which stays when Start is pressed.
+- **Another World Circuit:** won through (its TITLE BOUT!! before Mike Tyson) to its ending.
+
+CI (`.github/workflows/tests.yml`) runs the golden cases, the kit checks and each career test on every push.
+
+```sh
+python3 -m gbstage test --stage career --career nes_keys    # one career test (see --help for the names)
+```
 
 ## Dependencies
 

@@ -1,0 +1,47 @@
+# gbstage's tests on every push and pull request: the golden cases and the puzzle kit, then Punch-Out!!'s whole
+# game on the Joe vs Mac example, one career test a job (the bot, buttons only; what the NES does from
+# tests/nes_reference.json: no NES ROM here). The stages that need the NES game itself run locally.
+name: Tests
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_DEPS: pyboy==2.7.0 numpy==2.0.2 pillow==11.3.0
+
+jobs:
+  goldens:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install $PYTHON_DEPS
+      - run: python -m gbstage install rgbds
+      - run: python -m gbstage test --stage goldens --stage kit
+
+  career:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        test: [career, losses, routes, pass_key, another_world, original_flow, nes_keys, nes_flows, another_world_won]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install $PYTHON_DEPS
+      - run: python -m gbstage install rgbds
+      - run: python -m gbstage test --stage career --career ${{ matrix.test }}
+        env:
+          SDL_AUDIODRIVER: dummy

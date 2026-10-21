@@ -16,7 +16,7 @@ export const MAX_TILES = 256;
 export const MAX_MENU_ITEMS = 6;
 export const MAX_FLASH_TILES = 80;   // the flash area must flip within one VBlank
 export const MAX_OPTION_ROWS = 6;
-export const MAX_SCENES = 120;
+export const MAX_SCENES = 127;             // (scene tables are indexed by its number doubled: under 128)
 export const FORMAT_VERSION = 2;
 
 // Every preset is ordered lightest to darkest, so it works on the original Game Boy as is.
@@ -857,7 +857,8 @@ export function uniqueTileCount(scene) {
 const cloneMenu = m => m && { ...m, items: m.items.map(it => ({ ...it })) };
 const clonePress = ps => ps && { ...ps, area: ps.area && { ...ps.area }, prompt: ps.prompt && { ...ps.prompt } };
 const cloneTexts = t => (Array.isArray(t) ? t : []).map(x => ({ label: String(x.label), x: x.x, y: x.y, textSlot: x.textSlot,
-                                                                   ...(x.record ? { record: true } : {}), ...(x.fightTime ? { fightTime: true } : {}) }));   // (live: the player's record, the fight's time)
+                                                                   ...(x.record ? { record: true } : {}), ...(x.fightTime ? { fightTime: true } : {}),
+                                                                   ...(Number.isInteger(x.passKey) ? { passKey: x.passKey } : {}) }));   // (live: the player's record, the fight's time, a pass key)
 const clonePuzzle = pz => pz && JSON.parse(JSON.stringify(pz));
 const POSE_FALLBACK = { idle2: 'idle', idle3: 'idle', hit_back: 'hit_l', slip: 'idle', jab_mid: 'jab_tell', hook_mid: 'hook_tell', kd_stagger: 'hit_body', kd_fall: 'fall',
                         kd_down: 'down', kd_kneel: 'fall', arm_pop: 'hit_body', guard_low: 'guard',
@@ -881,7 +882,9 @@ const cloneScene = s => ({ name: s.name, pixels: s.pixels.slice(), cellPal: s.ce
                            ...(s.docAnim ? { docAnim: JSON.parse(JSON.stringify(s.docAnim)) } : {}),
                            ...(s.rivalAnim ? { rivalAnim: JSON.parse(JSON.stringify(s.rivalAnim)) } : {}),
                            ...(s.overlay ? { overlay: JSON.parse(JSON.stringify(s.overlay)) } : {}),
-                           slideIn: !!s.slideIn, nesDmc: s.nesDmc || 0, notes: s.notes || '',
+                           slideIn: (s.slideIn && typeof s.slideIn === "object" ? { ...s.slideIn } : !!s.slideIn), nesDmc: s.nesDmc || 0, notes: s.notes || '',
+                           ...(s.cycle ? { cycle: JSON.parse(JSON.stringify(s.cycle)) } : {}),
+                           ...(s.announce ? { announce: true } : {}), ...(s.credits ? { credits: true } : {}),
                            ...(s.nesMusic ? { nesMusic: s.nesMusic } : {}),
                            ...(s.cutscene ? { cutscene: JSON.parse(JSON.stringify(s.cutscene)) } : {}),
                            ...(s.typed ? { typed: JSON.parse(JSON.stringify(s.typed)) } : {}) });
@@ -915,7 +918,9 @@ export function serialize(p) {
       ...(s.docAnim ? { docAnim: s.docAnim } : {}),                     // (Punch-Out!!'s corner: Doc's hand and mouth)
       ...(s.rivalAnim ? { rivalAnim: s.rivalAnim } : {}),               // (and the rival talking)
       ...(s.overlay ? { overlay: s.overlay } : {}),                     // (Color: the close-ups' sprites)
-      ...(s.slideIn ? { slideIn: true } : {}),
+      ...(s.slideIn ? { slideIn: typeof s.slideIn === 'object' ? s.slideIn : true } : {}),
+      ...(s.cycle ? { cycle: s.cycle } : {}),                           // (Punch-Out!!'s TITLE BOUT!! letters' colors)
+      ...(s.announce ? { announce: true } : {}), ...(s.credits ? { credits: true } : {}),
       ...(s.nesDmc ? { nesDmc: s.nesDmc } : {}),
       ...(s.nesMusic ? { nesMusic: s.nesMusic } : {}),
       ...(s.cutscene ? { cutscene: s.cutscene } : {}),
@@ -977,7 +982,9 @@ export function deserialize(raw) {
       ...(s.docAnim && Array.isArray(s.docAnim.states) ? { docAnim: s.docAnim } : {}),
       ...(s.rivalAnim && Array.isArray(s.rivalAnim.states) ? { rivalAnim: s.rivalAnim } : {}),
       ...(s.overlay && Array.isArray(s.overlay.pals) ? { overlay: s.overlay } : {}),
-      slideIn: s.slideIn === true && !s.fight,
+      slideIn: !s.fight && (s.slideIn === true || (s.slideIn && typeof s.slideIn === 'object' ? { ...s.slideIn } : false)),
+      ...(s.cycle && Array.isArray(s.cycle.colors) ? { cycle: s.cycle } : {}),
+      ...(s.announce === true ? { announce: true } : {}), ...(s.credits === true ? { credits: true } : {}),
       nesDmc: Number.isInteger(s.nesDmc) ? s.nesDmc : 0,
       ...(Number.isInteger(s.nesMusic) && s.nesMusic > 0 ? { nesMusic: s.nesMusic } : {}),
       ...(s.cutscene ? { cutscene: s.cutscene } : {}),

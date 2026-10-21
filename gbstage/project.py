@@ -140,8 +140,8 @@ def validate(data):
                 errors.append(f"{kind} {n + 1} needs exactly 4 colors with channels 0-31.")
 
     scenes_in = data.get("scenes") or []
-    if not 1 <= len(scenes_in) <= 120:            # (scene tables are indexed by its number doubled: under 128)
-        errors.append("A project needs between 1 and 120 scenes.")
+    if not 1 <= len(scenes_in) <= 127:            # (scene tables are indexed by its number doubled: under 128)
+        errors.append("A project needs between 1 and 127 scenes.")
     scene_count = len(scenes_in)
     scenes = []
     for i, s in enumerate(scenes_in):
@@ -187,7 +187,8 @@ def validate(data):
             except (TypeError, KeyError):
                 ok = False
             if ok:
-                doc_anim = {"x": dx, "y": dy, "w": dw, "h": dh, "states": states, "sprites": doc.get("sprites") or []}
+                doc_anim = {"x": dx, "y": dy, "w": dw, "h": dh, "states": states, "sprites": doc.get("sprites") or [],
+                            "dmg_sprites": doc.get("dmgSprites") or []}
             else:
                 errors.append(f"{where}: docAnim is its box (x, y, w, h in cells) and its 4 states' pixels.")
         talk = (s or {}).get("rivalAnim")                 # and the rival talking: his 2 states, their frames
@@ -202,7 +203,8 @@ def validate(data):
             except (TypeError, KeyError):
                 ok = False
             if ok:
-                rival_anim = {"x": tx, "y": ty, "w": tw, "h": th, "states": states, "time": time, "sprites": talk.get("sprites") or []}
+                rival_anim = {"x": tx, "y": ty, "w": tw, "h": th, "states": states, "time": time, "sprites": talk.get("sprites") or [],
+                              "dmg_sprites": talk.get("dmgSprites") or []}
             else:
                 errors.append(f"{where}: rivalAnim is its box (x, y, w, h in cells), its 2 states' pixels and their 3 times.")
         overlay = _overlay((s or {}).get("overlay"), doc_anim, rival_anim, where, errors)
@@ -211,13 +213,28 @@ def validate(data):
             errors.append(f"{where} uses {len(used)} background palettes; a scene can use {SCENE_BG_PALETTES}.")
         if puzzle and max(used, default=0) >= SCENE_BG_PALETTES:   # (a fight's are moved into hardware slots)
             errors.append(f"{where}: a puzzle grid scene uses palettes 1-{SCENE_BG_PALETTES} only.")
-        slide = (s or {}).get("slideIn", False)
-        if not isinstance(slide, bool):
+        slide = (s or {}).get("slideIn", False)          # true: up from a screen below, a line a frame; or Punch-Out!!'s
+        if isinstance(slide, dict):                      # KO News: {from: lines low, every: frames a line, fillSlot:
+            fr, ev, fs = slide.get("from"), slide.get("every", 1), slide.get("fillSlot")   # above it, its top-left
+            if (isinstance(fr, int) and 1 <= fr <= 255 and isinstance(ev, int) and 1 <= ev <= 255   # cell's palette)
+                    and (fs is None or fs in (0, 1, 2, 3))):
+                slide = {"from": fr, "every": ev, "fill_slot": fs}
+            else:
+                errors.append(f"{where}: slideIn is true, or its from (1-255 lines), every (1-255 frames) and fillSlot.")
+                slide = False
+        elif not isinstance(slide, bool):
             errors.append(f"{where}: slideIn is true or false.")
             slide = False
         if slide and fight:
             errors.append(f"{where}: a fight scrolls its own rows, so it can't slide in.")
             slide = False
+        cycle = _cycle((s or {}).get("cycle"), where, errors, len(bg))
+        announce = (s or {}).get("announce", False)      # Punch-Out!!'s TITLE BOUT!!: on its way to the next screen, not
+        if not isinstance(announce, bool):               # a screen of its own to Punch-Out!!'s circuits
+            errors.append(f"{where}: announce is true or false."); announce = False
+        credits = (s or {}).get("credits", False)        # Punch-Out!!'s staff credits (its key's)
+        if not isinstance(credits, bool):
+            errors.append(f"{where}: credits is true or false."); credits = False
         dmc = (s or {}).get("nesDmc", 0)                 # an NES sample (1 the crowd) to start with the scene
         if not (isinstance(dmc, int) and 0 <= dmc <= 7):
             errors.append(f"{where}: nesDmc is an NES sample number, 0-7."); dmc = 0
@@ -230,6 +247,8 @@ def validate(data):
                        **({"aw_texts": aw_texts} if aw_texts else {}), **({"doc_anim": doc_anim} if doc_anim else {}),
                        **({"rival_anim": rival_anim} if rival_anim else {}),
                        **({"overlay": overlay} if overlay else {}),
+                       **({"cycle": cycle} if cycle else {}), **({"announce": True} if announce else {}),
+                       **({"credits": True} if credits else {}),
                        "slide": slide, **({"pass_key": pass_key} if pass_key else {}),
                        **({"cutscene": cutscene} if cutscene else {}), **({"typed": typed} if typed else {})})
 
@@ -365,13 +384,13 @@ def _overlay(o, doc, rival, where, errors):
     tile, palette), or None."""
     if not o:
         return None
-    def sprites(ls):
+    def sprites(ls, n_pals):
         out = []
         for sp in ls or []:
             try:
-                x, y, px, pal = sp["x"], sp["y"], sp["pixels"], sp["pal"]
+                x, y, px, pal = sp["x"], sp["y"], sp["pixels"], sp.get("pal", 0)
                 assert isinstance(px, str) and len(px) == 64 and set(px) <= set("0123")
-                assert 0 <= x <= W - 8 and 0 <= y <= H - 8 and 0 <= pal < len(o["pals"])
+                assert 0 <= x <= W - 8 and 0 <= y <= H - 8 and 0 <= pal < n_pals
             except (TypeError, KeyError, AssertionError):
                 errors.append(f"{where}: an overlay sprite is its x, y, 64 pixels and its palette.")
                 return []
@@ -383,30 +402,54 @@ def _overlay(o, doc, rival, where, errors):
         errors.append(f"{where}: an overlay has 1-8 palettes of 1-3 colors.")
         return None
     pals = [list(q) + [q[-1]] * (3 - len(q)) for q in pals]
-    still = sprites(o.get("sprites"))
-    docs = [sprites(ls) for ls in (doc or {}).get("sprites") or []]
-    rivals = [sprites(ls) for ls in (rival or {}).get("sprites") or []]
-    tiles, at = [], {}
-    def put(ls):
-        out = []
-        for x, y, px, pal in ls:
-            if px not in at:
-                at[px] = OVERLAY_TILE0 + len(tiles)
-                tiles.append(px)
-            out.append((y + 16, x + 8, at[px], pal))
+    def compile_(key, docs_key, n_pals, attr):  # (Color's, then the original's: each its own tiles)
+        still = sprites(o.get(key), n_pals)
+        docs = [sprites(ls, n_pals) for ls in (doc or {}).get(docs_key) or []]
+        rivals = [sprites(ls, n_pals) for ls in (rival or {}).get(docs_key) or []]
+        tiles, at = [], {}
+        def put(ls):
+            out = []
+            for x, y, px, pal in ls:
+                if px not in at:
+                    at[px] = OVERLAY_TILE0 + len(tiles)
+                    tiles.append(px)
+                out.append((y + 16, x + 8, at[px], attr(pal)))
+            return out
+        data = {"still": put(still), "doc": [put(ls) for ls in docs], "rival": [put(ls) for ls in rivals]}
+        most = lambda groups: max((len(g) for g in groups), default=0)
+        if len(data["still"]) + most(data["doc"]) + most(data["rival"]) > 40 - OVERLAY_TILE0 or len(tiles) > 128 - OVERLAY_TILE0:
+            errors.append(f"{where}: the overlay needs too many sprites or sprite tiles.")
+        for d in data["doc"] or [[]]:
+            for r in data["rival"] or [[]]:
+                on = data["still"] + d + r
+                if any(sum(1 for sy, _, _, _ in on if sy - 16 <= line < sy - 8) > 10 for line in range(H)):
+                    errors.append(f"{where}: the overlay puts more than 10 sprites on a line.")
+                    return None
+        data["tiles"] = tiles
+        return data
+    color = compile_("sprites", "sprites", len(pals), lambda p: p)               # (Color: its palette's number)
+    grey = compile_("dmg", "dmg_sprites", 2, lambda p: p << 4)                   # (the original: OBP0 or OBP1)
+    if color is None or grey is None:
+        return None
+    return {"pals": pals, **color, "dmg": grey}
+
+
+REF_WORDS = [str(n) for n in range(1, 11)] + ["KO", "TKO", "FIGHT"]     # (kit_fight.asm's FtWords order)
+
+
+def _ref_words(words, where, errors):
+    """The referee's words as the NES game draws them: per word its 8x8 sprites, [x, y, pixels] from his frame's
+    top-left (pixels 2 white, 3 black, in his shirt's palette)."""
+    try:
+        out = {}
+        for k in REF_WORDS:
+            out[k] = [(int(x), int(y), px) for x, y, px in words[k]]
+            assert all(isinstance(px, str) and len(px) == 64 and set(px) <= set("0123") and -64 <= x < 96 and -32 <= y < 48
+                       for x, y, px in out[k])
         return out
-    data = {"pals": pals, "still": put(still), "doc": [put(ls) for ls in docs], "rival": [put(ls) for ls in rivals]}
-    most = lambda groups: max((len(g) for g in groups), default=0)
-    if len(data["still"]) + most(data["doc"]) + most(data["rival"]) > 40 - OVERLAY_TILE0 or len(tiles) > 128 - OVERLAY_TILE0:
-        errors.append(f"{where}: the overlay needs too many sprites or sprite tiles.")
-    for d in data["doc"] or [[]]:
-        for r in data["rival"] or [[]]:
-            on = data["still"] + d + r
-            if any(sum(1 for sy, _, _, _ in on if sy - 16 <= line < sy - 8) > 10 for line in range(H)):
-                errors.append(f"{where}: the overlay puts more than 10 sprites on a line.")
-                return None
-    data["tiles"] = tiles
-    return data
+    except (TypeError, KeyError, ValueError, AssertionError):
+        errors.append(f"{where}: the referee's words are each word's sprites (x, y, 64 pixels).")
+        return None
 
 
 def _menu(menu, where, index, scene_count, errors):
@@ -591,7 +634,8 @@ def _cutscene(cs, where, n_bg, n_obj, errors):
         errors.append(f"{where}: the cutscene is damaged (a 256x{H} picture, its cells' palettes, actors, its box).")
         return None
     return {"pixels": [int(v) for v in px], "cells": cells, "actors": actors, "box": box, "speed": speed, "music": music, "end_x": end_x,
-            "bands": bands or [{"y": 0, "speed": speed * 64, "end_x": end_x}]}
+            "bands": bands or [{"y": 0, "speed": speed * 64, "end_x": end_x}],
+            "dark_odd": bool(cs.get("dmgDarkOdd"))}
 
 
 def _press_start(press, pressed, where, index, scene_count, errors):
@@ -651,6 +695,9 @@ def _press_start(press, pressed, where, index, scene_count, errors):
                                  and at[0] >= 0 and all(a < b for a, b in zip(at, at[1:])) and all(b - a <= 255 for a, b in zip([-1] + at, at))):
         errors.append(f"{where}: the press's ring is an NES effect (1-255) on rising frames (up to 32, at most 255 apart), "
                       "on a screen that goes on by itself."); ok = False
+    never = press.get("never", False)       # Start ignored, and it stays (Punch-Out!!'s THE END, its staff credits)
+    if not isinstance(never, bool) or (never and auto):
+        errors.append(f"{where}: the press's never is true or false (and not with auto)."); ok = False
     quiet = press.get("quiet", False)       # no sound on the press (the NES game's own music stopped, as its screens do)
     if not isinstance(quiet, bool):
         errors.append(f"{where}: the press's quiet is true or false."); ok = False
@@ -660,7 +707,7 @@ def _press_start(press, pressed, where, index, scene_count, errors):
     if not ok:
         return None
     return {"target": target, "flashes": flashes, "prompt": prompt, "nes_dmc": dmc, "hold": hold, "quiet": quiet,
-            **({"auto": auto} if auto else {}),
+            **({"auto": auto} if auto else {}), **({"never": True} if never else {}),
             **({"ring": {"sfx": ring["nesSfx"], "gaps": [b - a for a, b in zip([-1] + at, at)]}} if ring else {}),
             **({"card": card} if card else {}),
             "area": dict(area) if area else None,
@@ -956,7 +1003,8 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
             "player": {"palette": pl.get("palette"), "tired_palette": pl.get("tiredPalette", pl.get("palette")),
                        "down_palette": pl.get("downPalette", pl.get("palette")),
                        "poses": pposes, **({"cgb_poses": pcgb} if pcgb else {})}, "hud": hud,
-            "referee": {"palette": ref.get("palette"), "shirt_palette": shirt, "poses": rposes_ref},
+            "referee": {"palette": ref.get("palette"), "shirt_palette": shirt, "poses": rposes_ref,
+                        **({"words": _ref_words(ref.get("words"), where, errors)} if ref.get("words") else {})},
             "text_slot": slots[0], "bar_slot": slots[1], "crowd_row": crowd, "opening": opening, "loop": loop, "timed": timed,
             **({"rope_row": rope} if rope else {}), **({"side_rope": [ord(c) - 48 for c in side]} if side else {}),
             "win": ft["win"], "lose": ft["lose"], "corner": corner, "win_tko": win_tko, "game_over": game_over,
@@ -1261,9 +1309,33 @@ def _texts(texts, where, errors):
         elif slot not in (0, 1, 2, 3):
             errors.append(f'{where}: the text "{label}" needs a color slot 1-4.')
         else:
+            key = t.get("passKey")              # Punch-Out!!'s pass key for this circuit (0-2), from his record as it stands
+            if key is not None and not (key in (0, 1, 2) and re.fullmatch(r"\d{3} \d{3} \d{4}", label)):
+                errors.append(f'{where}: the text "{label}" is a pass key: ten digits as 000 000 0000, and a circuit 0-2.')
+                continue
             out.append({"label": label, "x": x, "y": y, "text_slot": slot, **({"record": True} if t.get("record") else {}),
-                        **({"fight_time": True} if t.get("fightTime") else {})})
+                        **({"fight_time": True} if t.get("fightTime") else {}), **({"pass_key": key} if key is not None else {})})
     return out
+
+
+def _cycle(cycle, where, errors, n_palettes):
+    """Colors in turn (Punch-Out!!'s TITLE BOUT!! letters): a slot of these palettes, each color in the list held
+    every frames, after frames from the screen's start, the list loops times; then its last. Color only."""
+    if cycle is None:
+        return None
+    try:
+        pals, slot, colors = cycle["palettes"], cycle["slot"], cycle["colors"]
+        after, every, loops = cycle.get("after", 1), cycle.get("every", 1), cycle.get("loops", 1)
+        ok = (isinstance(pals, list) and 1 <= len(pals) <= 4 and all(isinstance(p, int) and 0 <= p < n_palettes for p in pals)
+              and slot in (0, 1, 2, 3) and isinstance(colors, list) and 2 <= len(colors) <= 16
+              and all(isinstance(c, list) and len(c) == 3 and all(isinstance(v, int) and 0 <= v <= 31 for v in c) for c in colors)
+              and all(isinstance(v, int) and 1 <= v <= 255 for v in (after, every, loops)) and loops * len(colors) <= 255)
+    except (TypeError, KeyError):
+        ok = False
+    if not ok:
+        errors.append(f"{where}: cycle is its palettes (1-4), slot, 2-16 colors, after, every (frames) and loops.")
+        return None
+    return {"palettes": pals, "slot": slot, "colors": colors, "after": after, "every": every, "loops": loops}
 
 
 TYPED_SOUNDS = (None, "type", "type_alt")   # (Punch-Out!!'s: Doc's letters, the rival's)
@@ -1571,6 +1643,20 @@ def compose(scene):
                 glyphs.append(tile_of(cell_key(img, c0)))
             rec.append((t["x"], t["y"], glyphs + [tile_of(cell_key(scene["pixels"], c0))]))
     scene["record_glyphs"] = rec
+    keys = []                       # a pass key (Punch-Out!!'s KO News): its digits' glyphs on its background
+    for t in scene.get("texts") or []:
+        if t.get("pass_key") is not None:
+            c0 = t["y"] * CW + t["x"]
+            glyphs = []
+            for ch in "0123456789":
+                img = list(scene["pixels"])
+                for x, y in text_ink(ch, t["x"], t["y"]):
+                    img[y * W + x] = t["text_slot"]
+                glyphs.append(tile_of(cell_key(img, c0)))
+            keys.append((t["x"], t["y"], t["pass_key"], glyphs))
+    scene["key_glyphs"] = keys
+    if isinstance(scene.get("slide"), dict) and scene["slide"]["fill_slot"] is not None:   # (above it as it creeps up)
+        scene["slide"]["fill_tile"] = tile_of((scene["slide"]["fill_slot"],) * (CELL * CELL))
     aw_rec = []                     # (the Another World Circuit's record, live where its words have it)
     for t in scene.get("aw_texts") or []:
         if t.get("record"):
@@ -1833,7 +1919,7 @@ def _fight_compose_tiles(scene, tile_of):
     rare = {pose: ([], []) if mac_pics else
             slot_list(ft["player"]["poses"][pose], kit.PLAYER_W, kit.PLAYER_H, lambda k: pal, lambda k: k, (), "pl")
             for pose in kit.PLAYER_RARE}
-    ref_attr = ft["referee"]["palette"] | 0x10          # Color: its palette; original: OBP1
+    ref_attr = ft["referee"]["palette"]                 # Color: its palette; original: OBP0 (the shirt's: OBP1)
     shirt = ft["referee"].get("shirt_palette")
     in_shirt = lambda key: shirt is not None and key.count(4) > key.count(2)     # (the palette its colors need
     ref_ink = lambda key: tuple((2 if in_shirt(key) else 1) if v == 4 else (1 if in_shirt(key) and v == 2 else v)
@@ -1850,20 +1936,37 @@ def _fight_compose_tiles(scene, tile_of):
                             lambda k: shirt | 0x10 if in_shirt(k) else ref_attr, ref_ink, shared, "ref")
             for pose in kit.REF_POSES}
     count_first = len(obj)
-    for ch in kit.COUNT_GLYPHS:                 # the referee's words, each letter on a piece of speech bubble
-        g = active_font()[ch]
-        key = tuple(3 if y == 7 else (3 if g[y][x] else 2) for y in range(8) for x in range(8))
-        index.pop(key, None)
-        obj.append(key)
+    words = ft["referee"].get("words")
+    if words:                                   # the NES game's bubbles: each word's sprites (FtWords), a tile
+        at = {key: kit.OBJ_FIRST_TILE + n for n, key in enumerate(obj)}   # already there shared
+        scene["fight_words"] = []
+        for k in REF_WORDS:
+            spr = []
+            for x, y, px in words[k]:
+                key = tuple(int(c) for c in px)
+                if key not in at:
+                    at[key] = kit.OBJ_FIRST_TILE + len(obj)
+                    obj.append(key)
+                spr.append((y, x, at[key]))
+            scene["fight_words"].append(spr)
+    else:
+        for ch in kit.COUNT_GLYPHS:             # the referee's words, each letter on a piece of speech bubble
+            g = active_font()[ch]
+            key = tuple(3 if y == 7 else (3 if g[y][x] else 2) for y in range(8) for x in range(8))
+            index.pop(key, None)
+            obj.append(key)
+    getup_first = len(obj)
     if ft.get("nes"):                           # Punch-Out!!'s GET UP! while Mac's down: white letters (the shirt's)
         for ch in kit.GETUP_GLYPHS:
             g = active_font()[ch]
             key = tuple(2 if g[y][x] else 0 for y in range(8) for x in range(8))
             index.pop(key, None)
             obj.append(key)
-    for art in kit.BUBBLE_ENDS:
-        obj.append(tuple(int(ch) if ch != "." else 0 for row in art for ch in row))
+    if not words:
+        for art in kit.BUBBLE_ENDS:
+            obj.append(tuple(int(ch) if ch != "." else 0 for row in art for ch in row))
     scene["fight_bubble"] = [kit.OBJ_FIRST_TILE + len(obj) - 2, kit.OBJ_FIRST_TILE + len(obj) - 1]
+    scene["fight_getup_tile"] = kit.OBJ_FIRST_TILE + getup_first
     scene["fight_sprites"], scene["fight_obj"] = sprites, obj
     scene["fight_count_tile"] = kit.OBJ_FIRST_TILE + count_first
     for effect, art, key in (("stars", kit.STAR_TILE, "fight_star_tile"),        # the dazed star

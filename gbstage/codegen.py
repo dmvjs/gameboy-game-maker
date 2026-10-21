@@ -121,13 +121,16 @@ def _rival_talk(s):
 
 def _overlay_has(s):
     o = s.get("overlay")
-    return bool(o and (o["still"] or any(o["doc"]) or any(o["rival"])))
+    return bool(o and any(d["still"] or any(d["doc"]) or any(d["rival"]) for d in (o, o["dmg"])))
 
 
 def _overlay_body(s):
-    o = s["overlay"]
-    return (f"    db {len(o['tiles'])}\n" + _db([b for px in o["tiles"] for b in encode_tile([int(c) for c in px])]) + "\n"
-            + f"    db {len(o['still'])}\n" + "".join(f"    db {y}, {x}, {t}, {pal}\n" for y, x, t, pal in o["still"]))
+    out = []
+    for o in (s["overlay"], s["overlay"]["dmg"]):       # (Color's, then the original's)
+        out.append(f"    db {len(o['tiles'])}\n" + (_db([b for px in o["tiles"] for b in encode_tile([int(c) for c in px])]) + "\n"
+                                                     if o["tiles"] else "")
+                   + f"    db {len(o['still'])}\n" + "".join(f"    db {y}, {x}, {t}, {pal}\n" for y, x, t, pal in o["still"]))
+    return "".join(out)
 
 
 def _label(prefix, body):
@@ -154,15 +157,180 @@ def _overlay_anim(s):
     place, its sprites a state (the fewer filled out hidden), every state's."""
     o = s.get("overlay") if _overlay_has(s) else None
     if not o:
-        return "    db 0, 0, 0, 0              ; (no sprites)\n"
-    out, at = [], 8 + 4 * len(o["still"])
-    for states in (o["doc"], o["rival"]):
-        n = max((len(g) for g in states), default=0)
-        out.append(f"    db {at}, {n}\n")
-        for g in states if n else []:
-            out.append("".join(f"    db {y}, {x}, {t}, {pal}\n" for y, x, t, pal in g) + "    db 0, 0, 0, 0\n" * (n - len(g)))
-        at += 4 * n
+        return "    db 0, 0, 0, 0, 0, 0, 0, 0  ; (no sprites)\n"
+    out = []
+    for d in (o, o["dmg"]):                             # (Color's, then the original's)
+        at = 8 + 4 * len(d["still"])
+        for states in (d["doc"], d["rival"]):
+            n = max((len(g) for g in states), default=0)
+            out.append(f"    db {at}, {n}\n")
+            for g in states if n else []:
+                out.append("".join(f"    db {y}, {x}, {t}, {pal}\n" for y, x, t, pal in g) + "    db 0, 0, 0, 0\n" * (n - len(g)))
+            at += 4 * n
     return "".join(out)
+
+
+def _obp1(scenes):
+    """OBP1 at a fade step (A: BGP's): the same; or white for 1 (a scene's close-up sprites up on the original), or
+    the lightest grey for 2 (a fight: the referee's shirt and words, the NES's white over its blue mat, on the
+    original's white one), or each a shade darker (3: a cutscene's dark sprites, the training run's Doc and bike)."""
+    return """    ld b, a
+    ld a, [wObp1Mode]
+    dec a
+    jr z, .white1
+    dec a
+    jr z, .grey2
+    dec a
+    ld a, b
+    jr nz, .obp1
+    and %11000000           ; (3: 1 as 2 is, 2 and 3 as 3)
+    ld c, a
+    ld a, b
+    srl a
+    srl a
+    or c
+    jr .obp1
+.grey2:
+    ld a, b
+    and %11001111           ; (2: as 1 is)
+    ld c, a
+    ld a, b
+    and %1100
+    add a
+    add a
+    or c
+    jr .obp1
+.white1:
+    ld a, b
+    and %11110011           ; (1: as 0 is)
+    ld c, a
+    ld a, b
+    and %11
+    add a
+    add a
+    or c
+.obp1:
+    ldh [rOBP1], a
+"""
+
+
+def _ft_words(s):
+    """The referee's words (the NES game's bubbles): per word its sprites, y and x from his frame's top-left, tile."""
+    if not s.get("fight_words"):
+        return ""
+    names = [f"FtWord{k}" for k in range(len(s["fight_words"]))]
+    return ("FtWords:                    ; 1-10, KO!, TKO, Fight!: each its sprites (y, x from his frame, tile)\n"
+            f"    dw {', '.join(names)}\n"
+            + "".join(f"{n}:\n    db {len(spr)}\n" + "".join(f"    db {y & 0xFF}, {x & 0xFF}, {t}\n" for y, x, t in spr)
+                      for n, spr in zip(names, s["fight_words"])))
+
+
+def _cycle_data(i, s):
+    """Its colors in turn (CycleStart, CycleVBlank: read with the scene's bank mapped): the palette entries it's put
+    in (their BCPS), after, every, how many turns, the colors."""
+    cy = s.get("cycle")
+    if not cy:
+        return ""
+    slot_of = s.get("pal_slots") or {}
+    at = [0x80 | (slot_of.get(p, p) * 8 + cy["slot"] * 2) for p in cy["palettes"]]
+    return (f"Scene{i}Cycle:              ; its colors in turn (Color): where, after, every, turns, the colors\n"
+            f"    db {len(at)}, {', '.join(f'${a:02X}' for a in at)}\n    db {cy['after']}, {cy['every']}, {cy['loops'] * len(cy['colors'])}, {len(cy['colors'])}\n"
+            f"    dw {_rgb555(cy['colors'])}\n")
+
+
+CYCLE_CODE = """
+SECTION "Colors in turn", WRAM0
+wCycOn: db                  ; (Color) a scene's colors in turn: on, frames till the next, turns left, its data
+wCycWait: db
+wCycLeft: db
+wCycStep: db
+wCycData: dw
+
+SECTION "Code: colors in turn", ROM0
+; HL = the scene's colors in turn (where, after, every, turns, the colors): started (Color only).
+CycleStart:
+    ldh a, [hIsCGB]
+    and a
+    ret z
+    ld a, l
+    ld [wCycData], a
+    ld a, h
+    ld [wCycData + 1], a
+    ld a, [hl+]             ; (past where it's put)
+    add l
+    ld l, a
+    adc h
+    sub l
+    ld h, a
+    ld a, [hl+]
+    ld [wCycWait], a
+    inc hl
+    ld a, [hl+]
+    ld [wCycLeft], a
+    ld a, [hl]              ; (its first turn: the first color)
+    dec a
+    ld [wCycStep], a
+    ld a, 1
+    ld [wCycOn], a
+    ret
+
+; (VBlank) a frame on: the next color in, every so many frames, till its turns are done.
+CycleVBlank:
+    ld hl, wCycWait
+    dec [hl]
+    ret nz
+    ld hl, wCycData
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    ld c, [hl]              ; C: where it's put, how many
+    inc hl
+    push hl                 ; (its places)
+    ld a, l
+    add c
+    ld l, a
+    adc h
+    sub l
+    ld h, a
+    inc hl                  ; (past after)
+    ld a, [hl+]
+    ld [wCycWait], a        ; every
+    inc hl                  ; (past turns)
+    ld b, [hl]              ; B: how many colors
+    inc hl
+    ld a, [wCycStep]
+    inc a
+    cp b
+    jr c, .step
+    xor a
+.step:
+    ld [wCycStep], a
+    add a
+    add l
+    ld l, a
+    adc h
+    sub l
+    ld h, a
+    ld e, [hl]
+    inc hl
+    ld d, [hl]              ; DE: its color
+    pop hl
+.put:
+    ld a, [hl+]
+    ldh [rBCPS], a
+    ld a, e
+    ldh [rBCPD], a
+    ld a, d
+    ldh [rBCPD], a
+    dec c
+    jr nz, .put
+    ld hl, wCycLeft
+    dec [hl]
+    ret nz
+    xor a
+    ld [wCycOn], a
+    ret
+"""
 
 
 def _knee(x):
@@ -387,6 +555,12 @@ def reachable_scenes(project):
             todo.append(s["fight"]["game_over"])
         if s.get("fight") and s["fight"].get("win_tko") is not None:
             todo.append(s["fight"]["win_tko"])
+        aw = (s.get("fight") or {}).get("another_world") or {}  # (Punch-Out!!'s Another World Circuit: its own ways on)
+        todo += [aw[k] for k in ("next", "drop") if aw.get(k) is not None]
+        pk = (s["menu"] or {}).get("pass_key")                  # (a title's pass keys: their scenes, and the staff credits
+        if pk:                                                  #  the NES's own key reaches)
+            todo += [c["target"] for c in pk.get("codes") or []]
+            todo += [j for j, sc in enumerate(project["scenes"]) if sc.get("credits")]
     return sorted(seen)
 
 
@@ -529,7 +703,8 @@ Scene{i}Map:"""
 {_db(s['cell_tiles'] if s.get('cutscene') else _pad_rows(s['cell_tiles'], bool(s.get('fight'))), 32)}
 Scene{i}Attr:               ; palette number per tile (Game Boy Color only)
 {_db(s['cell_pal'] if s.get('cutscene') else _pad_rows(s['cell_pal'], bool(s.get('fight'))), 32)}
-""" + _far(f"Scene{i}Record{n}:             ; Mac's record's glyphs: 0-9, -, K, O, blank\n    db {', '.join(map(str, g))}\n"
+""" + _cycle_data(i, s) + _far(f"Scene{i}Key{n}:                ; his pass key's glyphs: 0-9\n    db {', '.join(map(str, g))}\n"
+              for n, (_, _, _, g) in enumerate(s.get("key_glyphs") or ())) + _far(f"Scene{i}Record{n}:             ; Mac's record's glyphs: 0-9, -, K, O, blank\n    db {', '.join(map(str, g))}\n"
               for n, (_, _, g) in enumerate(s.get("record_glyphs") or ())) + _far(
         f"Scene{i}AwRecord{n}:           ; (the Another World Circuit's record's glyphs)\n    db {', '.join(map(str, g))}\n"
         for n, (_, _, g) in enumerate(s.get("aw_record_glyphs") or ())) + _far(
@@ -682,6 +857,21 @@ SLIDE_STEP_CODE = """    ldh a, [hScrollY]       ; sliding in: climb (wraps to 0
     jr z, .still
     add SLIDE_STEP
     ldh [hScrollY], a
+.still:
+"""
+SLIDE_SLOW_CODE = """    ldh a, [hScrollY]       ; sliding in: climb a line every hSlideEvery frames (wraps to 0, the resting place)
+    and a
+    jr z, .still
+    ld b, a
+    ldh a, [hSlideTick]
+    dec a
+    jr nz, .wait
+    ld a, b
+    add SLIDE_STEP
+    ldh [hScrollY], a
+    ldh a, [hSlideEvery]
+.wait:
+    ldh [hSlideTick], a
 .still:
 """
 SCREEN_ON_CHECK = """    ldh a, [hScene]         ; a plain screen: the display stays on (black, faded out), interrupts off
@@ -947,6 +1137,10 @@ def _scene_load(i, s, sprites, opt_index=None, markers=False):
     n = len(s["tiles"])
     lines = [f"Scene{i}Load:", f"    ld hl, Scene{i}Tiles", "    ld de, $9000            ; tiles 0-127",
              f"    ld c, {min(n, 128)}", "    call CopyTiles"]
+    cs = s.get("cutscene")
+    if cs:                              # (a cutscene loading with the screen on: placed from its first frame)
+        b, after = cs["bands"][0], cs["box"]["after"] if cs["box"] else 0
+        lines = lines[:1] + [f"    ld a, {((b['end_x'] * 256 + b['speed'] * after) % 65536) >> 8}", "    ldh [rSCX], a"] + lines[1:]
     if n > 128:
         lines += [f"    ld hl, Scene{i}Tiles + 128 * 16", "    ld de, $8800            ; tiles 128-255",
                   f"    ld c, {n - 128}", "    call CopyTiles"]
@@ -954,6 +1148,14 @@ def _scene_load(i, s, sprites, opt_index=None, markers=False):
         lines += ["    ldh a, [hIsCGB]", "    and a", "    jr nz, .greysDone", f"    ld hl, Scene{i}Greys", f"    ld de, Scene{i}Tiles",
                   "    call DmgRemap", ".greysDone:"]
     lines += [f"    ld hl, Scene{i}Map", "    call CopyMap", f"    ld hl, Scene{i}Attr", "    call CopyAttr"]
+    if s.get("cutscene"):               # (the original: CopyMap's a screen wide; a cutscene's map goes round, all 32)
+        lines += ["    ldh a, [hIsCGB]", "    and a", "    jr nz, .mapDone", f"    ld hl, Scene{i}Map + MAP_W",
+                  "    ld de, $9800 + MAP_W", "    ld b, MAP_H", ".mapRow:", "    ld a, b", "    cp MAP_H", "    jr z, .mapWait",
+                  "    cp MAP_H - 6", "    jr z, .mapWait", "    cp MAP_H - 12", "    jr nz, .mapCols", ".mapWait:",
+                  "    call VWait              ; (six rows a VBlank)", ".mapCols:", "    ld c, 32 - MAP_W", ".mapCol:",
+                  "    ld a, [hl+]", "    ld [de], a", "    inc de", "    dec c", "    jr nz, .mapCol", "    ld a, l", "    add MAP_W",
+                  "    ld l, a", "    adc h", "    sub l", "    ld h, a", "    ld a, e", "    add MAP_W", "    ld e, a", "    adc d",
+                  "    sub e", "    ld d, a", "    dec b", "    jr nz, .mapRow", ".mapDone:"]
     for n, (x, y, _) in enumerate(s.get("record_glyphs") or ()):    # Mac's record, as it stands
         lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Record{n}", "    call RecordDraw"]
     if s.get("aw_patch"):               # (Punch-Out!!'s Another World Circuit on: its words over those, its record)
@@ -973,11 +1175,23 @@ def _scene_load(i, s, sprites, opt_index=None, markers=False):
         lines += [f"    ld hl, Scene{i}Doc", "    call DocLoad"]
     if (s.get("cut_key") or {}).get("circuit") is not None:     # Punch-Out!!'s pass key, from his record
         lines += [f"    ld b, {s['cut_key']['circuit']}", "    call PwKeyFar"]
-    if s.get("slide"):
+    if isinstance(s.get("slide"), dict):                        # (Punch-Out!!'s KO News: a few lines low, creeping up)
+        sl = s["slide"]
+        tile, pal = sl.get("fill_tile", s["cell_tiles"][0]), s["cell_pal"][0]
+        lines += [f"    ld de, ${tile:02X} << 8 | {pal}       ; above it: its fill, its top-left cell's palette",
+                  "    call SlideFill", f"    ld a, {sl['every']}", "    ldh [hSlideEvery], a", "    ldh [hSlideTick], a",
+                  f"    ld a, {256 - sl['from']}", "    ldh [hScrollY], a"]
+    elif s.get("slide"):
         pairs = list(zip(s["cell_tiles"], s["cell_pal"]))
         tile, pal = max(set(pairs), key=lambda tp: (pairs.count(tp), -pairs.index(tp)))
         lines += [f"    ld de, ${tile:02X} << 8 | {pal}       ; the scene's background: its most common tile and palette",
-                  "    call SlideFill", f"    ld a, SLIDE_START", "    ldh [hScrollY], a"]
+                  "    call SlideFill"] + (["    ld a, 1", "    ldh [hSlideEvery], a", "    ldh [hSlideTick], a"] if s.get("_slow_slides") else []) + [
+                  f"    ld a, SLIDE_START", "    ldh [hScrollY], a"]
+    for n, (x, y, circuit, _) in enumerate(s.get("key_glyphs") or ()):     # (Punch-Out!!'s KO News: his pass key)
+        lines += [f"    ld b, {circuit}", "    call PwKeyFar", f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Key{n}",
+                  "    call KeyDraw"]
+    if s.get("cycle"):                                          # (Color: its colors in turn, TITLE BOUT!!'s letters)
+        lines += [f"    ld hl, Scene{i}Cycle", "    call CycleStart"]
     if s.get("puzzle"):
         lines.append("    call PuzzleLoad")
     if s.get("fight"):
@@ -999,6 +1213,10 @@ def _scene_load(i, s, sprites, opt_index=None, markers=False):
                   "    ld b, [hl]", "    inc hl", "    ld de, wCutBands", ".cutBand:", "    inc hl", "    inc hl", "    inc hl",
                   "    ld a, [hl+]", "    ld [de], a", "    inc de", "    ld a, [hl+]", "    ld [de], a", "    inc de",
                   "    dec b", "    jr nz, .cutBand",
+                  *(["    ld a, 3                 ; (the original: OBP1 a shade darker, its dark sprites')",
+                     "    ld [wObp1Mode], a"] if cs.get("dark_odd") else []),
+                  "    ld a, [wCutBands + 1]   ; (shown before its first split: placed as the first band starts)",
+                  "    ldh [rSCX], a",
                   f"    ld a, LOW({after})", "    ld [wCutWait], a",
                   f"    ld a, HIGH({after})", "    ld [wCutWait + 1], a"]
         if cs["music"]:
@@ -1238,6 +1456,10 @@ def _press_code(i, s, index_of, corner=False):
     ret nz
     {_press_target(s, index_of)}
     jp StartTransition
+"""
+    if p.get("never"):                      # Start ignored, and it stays (Punch-Out!!'s THE END, its credits)
+        return f"""Scene{i}Update:              ; a screen that stays: its words written, Start does nothing
+{typed}    ret
 """
     if p.get("auto"):                       # Start ignored: on by itself once its time is up
         ring = (f"""    ld a, [wRingTick]       ; its effect on its frames (the bells)
@@ -1994,10 +2216,16 @@ def _career(scenes, fights, index_of):
         f = press(j) if s.get("press") and not s.get("fight") else None
         if f in fights and j not in (rematch[f], corner[f]) and f not in chal:
             chal[f] = j
+    def through(j):                     # (past Punch-Out!!'s TITLE BOUT!!: on its way to the challenger)
+        seen = set()
+        while j is not None and scenes[j].get("announce") and j not in seen:
+            seen.add(j)
+            j = press(j)
+        return j
     title = {}
     for k, f in enumerate(fights):
         nxt = fights[k + 1] if k + 1 < len(fights) else None
-        title[f] = nxt is not None and press(index_of[scenes[f]["fight"]["win"]]) != chal.get(nxt)
+        title[f] = nxt is not None and through(press(index_of[scenes[f]["fight"]["win"]])) != chal.get(nxt)
     out = {}
     for k, f in enumerate(fights):
         flags = 0x80 | (1 << 0 if title[f] else 0) | (1 << 1 if k == 0 or title[fights[k - 1]] else 0) \
@@ -2342,8 +2570,8 @@ DEF FT_OBJ_TILES EQU {len(s['fight_obj'])}
 DEF FT_REF_SLOT EQU {s['fight_slots']['ref']}               ; the referee's poses' own tiles: two areas of FT_REF_TILES
 DEF FT_REF_TILES EQU {s['fight_slots']['ref_tiles']}
 DEF FT_PL_SLOT EQU {s['fight_slots']['pl']}                ; the player's rare poses' own tiles (one at a time)
-DEF FT_COUNT_TILE EQU {s['fight_count_tile']}
-DEF FT_GETUP_TILE EQU {s['fight_count_tile'] + len(kit.COUNT_GLYPHS)}   ; (GET UP!'s letters, NES fights')
+DEF FT_COUNT_TILE EQU {s['fight_count_tile']}{nl + "DEF FT_WORDS EQU 1           ; (the referee's words as the NES game draws them: FtWords)" if s.get('fight_words') else ""}
+DEF FT_GETUP_TILE EQU {s['fight_getup_tile']}   ; (GET UP!'s letters, NES fights')
 DEF FT_GETUP_ATTR EQU {(s['fight']['referee'].get('shirt_palette') or 0) | 0x10}
 DEF FT_PLAYER_W EQU {kit.PLAYER_W}
 {pl_cgb_def}
@@ -2353,7 +2581,7 @@ DEF FT_PLAYER_Y EQU {144 - kit.PLAYER_H + 16}
 DEF FT_PLAYER_PAL EQU {ft['player']['palette']}
 DEF FT_TIRED_PAL EQU {ft['player']['tired_palette']}
 DEF FT_DOWN_PAL EQU {ft['player']['down_palette']}
-DEF FT_REF_ATTR EQU {ft['referee']['palette'] | 0x10}
+DEF FT_REF_ATTR EQU {ft['referee']['palette']}
 DEF FT_SAY_ATTR EQU {(ft['referee']['shirt_palette'] if ft['referee'].get('shirt_palette') is not None else ft['referee']['palette']) | 0x10}   ; his words' bubble: white and black
 DEF FT_STAR_TILE EQU {s['fight_star_tile']}
 DEF FT_DROP_TILE EQU {s['fight_drop_tile']}
@@ -2476,7 +2704,7 @@ PlayerPoses:
 RefTiles:                   ; per pose: its own tiles' address and count, loaded into his area as his pose changes
 {nl.join(f"    dw RefTiles_{p}" + nl + f"    db {len(s['fight_ref_tiles'][p])}" for p in kit.REF_POSES)}
 {nl.join(f"RefTiles_{p}:" + nl + (_db([b for t in s['fight_ref_tiles'][p] for b in encode_tile(list(t))]) or "") for p in kit.REF_POSES)}
-PlayerRare:                 ; per player pose: 1 if it's loaded as it's needed
+{_ft_words(s)}PlayerRare:                 ; per player pose: 1 if it's loaded as it's needed
     db {", ".join("1" if p in kit.PLAYER_RARE else "0" for p in kit.PLAYER_POSES)}
 PlayerRareHold:             ; per pose: its sequence (the star punch 1, down and up 2): one held while the next loads
     db {", ".join(str(kit.PLAYER_HOLD.get(p, 0)) for p in kit.PLAYER_POSES)}
@@ -2663,7 +2891,8 @@ Scene{i}ConfirmTiles:
 def _pk_menu_code(i, pk, beep=True):
     """Punch-Out!!'s pass key, under its menu item while that's chosen: left/right change the digit (the first
     press shows it, 0), A, B or Start go on to the next (0 again); after the tenth the key is checked: a code
-    plays out as a choice does, to its scene, else the key is forgotten (dashes again). Moving off hides it."""
+    plays out as a choice does, to its scene, else (as the NES's) back to the first item, the key hidden and
+    forgotten. Moving off hides it too."""
     item = pk["item"]
     return f"""    ldh a, [hSel]           ; the pass key: shown while its item's chosen
     cp {item}
@@ -2776,10 +3005,9 @@ def _pk_menu_code(i, pk, beep=True):
     add hl, de
     dec c
     jp nz, .pkCode
-.pkWrong:                   ; no match: forgotten, dashes again
-{_pk_nes() if pk.get("_nes") else ""}    call PkReset
-    ld hl, Scene{i}PkShow
-    QUEUE_PATCH PkListPatch
+.pkWrong:                   ; no match: as Punch-Out!!'s, back to the first item (next frame the key's hidden,
+{_pk_nes() if pk.get("_nes") else ""}    xor a                   ; forgotten: moved off it)
+    ldh [hSel], a
     jp .cursor
 .pkDigit:                   ; HL -> the digit being set, A = it
     ld a, [wPkPos]
@@ -3102,11 +3330,12 @@ def _cut_data(i, s):
     cs = s["cutscene"]
     after = cs["box"]["after"] if cs["box"] else 0
     split = (cs["box"]["y"] + len(cs["box"]["lines"]) + 2) * 8 if cs["box"] else 0
-    out.append(f"Scene{i}CutBands:             ; per band: its line, speed (8.8, a frame), start (8.8: where it ends up at endX)")
+    out.append(f"Scene{i}CutBands:             ; per band: the line before its, speed (8.8, a frame), start (8.8: where it ends up at endX)")
     out.append(f"    db {len(cs['bands'])}")
     for k, b in enumerate(cs["bands"]):
         start = (b["end_x"] * 256 + b["speed"] * after) % 65536 if cs["box"] else b["end_x"] * 256
-        out.append(f"    db {max(b['y'], split) if k == 0 else max(b['y'], split + 1)}")
+        line = max(b["y"], split) if k == 0 else max(b["y"], split + 1)
+        out.append(f"    db {max(line - 1, 0)}             ; (the line before: its scroll in by its HBlank)")
         out.append(f"    dw {b['speed']}, ${start:04X}")
     out.append(f"Scene{i}CutTyped:")
     out += [f"    db LOW({cell(c)}), HIGH({cell(c)}), ${t:02X}" for c, t in s["cut_typed"]]
@@ -3187,7 +3416,12 @@ CutFrame::
 
 ; (VBlank) the box's rows unscrolled; the actors' sprites into OAM.
 CutVBlank::
-    xor a
+    ldh a, [hCutBox]        ; (its box up: its rows unscrolled; till then sky, the first band's place: a frame
+    and a                   ; whose splits don't run, a fade's, shows it placed)
+    ld a, 0
+    jr nz, .top
+    ld a, [wCutBands + 1]
+.top:
     ldh [rSCX], a
     ld hl, wCutOAM
     ld de, $FE08
@@ -3733,6 +3967,10 @@ def generate_asm(project):
         raise ProjectError(["A project can have one puzzle grid scene for now."])
     fights = [i for i, sc in enumerate(scenes) if sc.get("fight")]
     slides = any(s.get("slide") or (s["press"] or {}).get("card") for s in scenes)   # (a round card scrolls too)
+    slow_slides = any(isinstance(s.get("slide"), dict) for s in scenes)             # (Punch-Out!!'s KO News: slower)
+    for s in scenes:
+        if slow_slides and s.get("slide"):
+            s["_slow_slides"] = True
     cards = [i for i, s in enumerate(scenes) if (s["press"] or {}).get("card")]
     glove_scenes = [i for i, s in enumerate(scenes) if (s["menu"] or {}).get("gloves")]
     if len(glove_scenes) > 1:
@@ -3818,6 +4056,8 @@ def generate_asm(project):
         hram += ["hPromptHidden: db"]
     if slides:
         hram += ["hScrollY: db            ; SCY: nonzero while a scene slides up into view"]
+    if slow_slides:
+        hram += ["hSlideEvery: db         ; frames a line, sliding in (Punch-Out!!'s KO News: 8)", "hSlideTick: db"]
     if cursor_on:
         hram += ["hCursorY: db", "hCursorX: db"]
     if gloves:
@@ -3839,6 +4079,10 @@ def generate_asm(project):
         vblank_work.append("""    ld a, [wOvlStill + 1]
     and a
     call nz, OvlSlide""")
+    if any(sc.get("cycle") for sc in scenes):           # (Color: a scene's colors in turn)
+        vblank_work.append("""    ld a, [wCycOn]
+    and a
+    call nz, CycleVBlank""")
     if cutscenes:
         vblank_work.append("""    ldh a, [hCutOn]         ; a cutscene: its top unscrolled, its actors' sprites
     and a
@@ -4021,8 +4265,10 @@ def generate_asm(project):
         last_win = index_of[scenes[fights[-1]]["fight"]["win"]]
         if len(ttl) == 3:
             aw_first = next((f for f in fights if (scenes[f]["fight"].get("another_world") or {}).get("first")), None)
-            pw_starts = [chal_of[fights[fights.index(ttl[0]) + 1]], chal_of[fights[fights.index(ttl[1]) + 1]],
-                         chal_of[ttl[2]], chal_of[fights[-1]], index_of.get(scenes[last_win]["press"]["target"], 255),
+            credits = next((j for j, sc in enumerate(scenes) if sc.get("credits")), None)   # (its key: the staff
+            pw_starts = [chal_of[fights[fights.index(ttl[0]) + 1]], chal_of[fights[fights.index(ttl[1]) + 1]],   # credits)
+                         chal_of[ttl[2]], chal_of[fights[-1]],
+                         credits if credits is not None else index_of.get(scenes[last_win]["press"]["target"], 255),
                          chal_of[aw_first] if aw_first is not None else 255]
     for f in fights:                    # (the corner: Punch-Out!!'s Select armed as it comes up)
         if scenes[f]["fight"].get("corner") is not None and (scenes[f]["fight"].get("nes") or {}):
@@ -4205,7 +4451,7 @@ VBlankDone:                 ; everything that must happen during VBlank is done
     ldh [hPadNew], a        ; pressed this frame
     ld a, b
     ldh [hPad], a           ; held
-{REPEAT_CODE if repeat else ""}{(CARD_HOLD_CHECK if cards else "") + SLIDE_STEP_CODE if slides else ""}    call hUpdateJump
+{REPEAT_CODE if repeat else ""}{(CARD_HOLD_CHECK if cards else "") + (SLIDE_SLOW_CODE if slow_slides else SLIDE_STEP_CODE) if slides else ""}    call hUpdateJump
 {"    ldh a, [hCutOn]         ; (a cutscene runs the sound itself, before its mid-frame scroll splits)" + nl + "    and a" + nl + "    jp nz, MainLoop" + nl if cutscenes else ""}    call SfxUpdate
 {"    ldh a, [hFtActive]      ; a fight on the original: the CPU's free till VBlank, his coming picture's tiles in it" + nl + "    and a" + nl + "    call nz, FtDmgStream" + nl if nes_any else ""}{"    ld a, [wPcmMix]         ; (a fight on Color with the crowd recorded: its mixed buffers topped up)" + nl + "    and a" + nl + "    call nz, PcmProduce" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}    jp MainLoop
 
@@ -4213,7 +4459,7 @@ SECTION "Code: Scenes", ROM0
 ; Load scene A with the screen off. Tiles, map and palette map go by DMA on Game Boy Color.
 LoadScene:
     ldh [hScene], a
-{"    xor a                   ; (no close-up sprites sliding till this scene's say)" + nl + "    ld [wOvlStill + 1], a" + nl + "    ldh a, [hScene]" + nl if any(_overlay_has(sc) for sc in scenes) else ""}{"    ld a, [wPcmOn]          ; (the recorded crowd stopped: its interrupts off, the loads below borrow the stack)" + nl + "    and a" + nl + "    call nz, PcmStop" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}{"    xor a                   ; (a cutscene's VBlank work done)" + nl + "    ldh [hCutOn], a" + nl + "    ldh [rSCX], a" + nl if cutscenes else ""}{"    xor a                   ; (not loading with the display on, unless a plain screen turns it so)" + nl + "    ldh [hLoadOn], a" + nl if load_on else ""}{"    ldh a, [hFtActive]      ; leaving a fight: its scroll split ends now (it held through the fade)" + nl + "    and a" + nl + "    call nz, FtStop" + nl if fights else ""}    ldh a, [rLCDC]
+{"    xor a                   ; (no colors in turn till this scene's say: WRAM is random at power-on)" + nl + "    ld [wCycOn], a" + nl + "    ldh a, [hScene]" + nl if any(sc.get("cycle") for sc in scenes) else ""}{"    xor a                   ; (no close-up sprites sliding till this scene's say)" + nl + "    ld [wOvlStill + 1], a" + nl + "    ldh a, [hScene]" + nl if any(_overlay_has(sc) for sc in scenes) else ""}{"    xor a                   ; (OBP1 as BGP till this scene's say: a fight's, close-ups')" + nl + "    ld [wObp1Mode], a" + nl + "    ldh a, [hScene]" + nl if fights else ""}{"    ld a, [wPcmOn]          ; (the recorded crowd stopped: its interrupts off, the loads below borrow the stack)" + nl + "    and a" + nl + "    call nz, PcmStop" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}{"    xor a                   ; (a cutscene's VBlank work done)" + nl + "    ldh [hCutOn], a" + nl + "    ldh [rSCX], a" + nl if cutscenes else ""}{"    xor a                   ; (not loading with the display on, unless a plain screen turns it so)" + nl + "    ldh [hLoadOn], a" + nl if load_on else ""}{"    ldh a, [hFtActive]      ; leaving a fight: its scroll split ends now (it held through the fade)" + nl + "    and a" + nl + "    call nz, FtStop" + nl if fights else ""}    ldh a, [rLCDC]
     add a                   ; screen already off (at boot)? bit 7 -> carry
     jr nc, .screenOff
 {SCREEN_ON_CHECK.replace('{fight_check}', SCREEN_ON_FIGHT if fight_on else '') if load_on else ""}.waitVBlank:
@@ -4362,7 +4608,7 @@ UploadPalettes:
     ld h, a
     ld a, [hl]
     ldh [rBGP], a
-{'    ldh [rOBP0], a' + nl if sprites else ''}{'    ldh [rOBP1], a' + nl if fights else ''}    ret
+{'    ldh [rOBP0], a' + nl if sprites else ''}{_obp1(scenes) if fights else ''}    ret
 
 {'SECTION "Data: Palettes", ROMX' + nl if banked else ""}ScenePalettes:
     dw {", ".join(f"Scene{i}Palettes" for i in range(len(scenes)))}
@@ -4374,9 +4620,7 @@ PalCopy8:                   ; a palette's 8 bytes from HL to the port C names (B
     ret
 
 {nl.join(_scene_palettes(i, s, project, cursor_on) for i, s in enumerate(scenes))}
-{_ovl_pal_tables(scenes, project)}
-{"PUSHS" + nl + _overlays(scenes) + "POPS" if _overlays(scenes) else ""}
-
+{_ovl_pal_tables(scenes, project) + ("PUSHS" + nl + _overlays(scenes) + "POPS" + nl if _overlays(scenes) else "")}
 {'' if banked else 'SECTION "Data: Palettes", ROM0'}
 FadeColor:                  ; RGB555: {n_bg} background{f" + {n_obj} sprite" if n_obj else ""} palettes per fade step
     dw {", ".join(f"FadeColor.step{k}" for k in range(steps + 1))}
@@ -4480,6 +4724,8 @@ FadeIn:
         out.append(PK_CODE)             # (its list patch, for the others too)
     if cutscenes:
         out.append(CUT_CODE.replace("{MAX}", str(max(len(fr) for i in cutscenes for fr in _cut_oam(scenes[i])))))
+    if any(sc.get("cycle") for sc in scenes):
+        out.append(CYCLE_CODE)
     if typed_scenes:
         out.append(TYPE_CODE)
     if cards:

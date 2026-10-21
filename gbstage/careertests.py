@@ -59,21 +59,25 @@ def career(rom):
                 fixed = next((l.replace(" ", "") for l in box if l.replace(" ", "") in passwords.SPECIAL.values()), None)
                 digits = [int(c) for c in fixed] if fixed else [g.m[g.S["wPw"] + 0x10 + i] for i in range(10)]
                 special = fixed is not None             # (a special one, as the game has it: the Tyson code)
+                if not passwords.DISASM.exists():       # (no NES code here, as on CI: its reading not checked)
+                    lines.append(f"    ✓ {names[key_scene]}: pass key {''.join(map(str, digits))} (not read: no disassembly)")
+                    continue
                 want = passwords.decode(digits)
                 good = special or (want is not None and want[:3] == rec)
                 ok = ok and good
                 lines.append(f"    {'✓' if good else '✗'} {names[key_scene]}: pass key {''.join(map(str, digits))}"
                              + ("" if special else f" (the NES reads it as {want})"))
-        seen = set()                            # then the ending, to its last screen and the title
+        seen, held = set(), 0                   # then the ending, to its last screen: held there, Start or not (the NES's)
         for t in range(20000):
             seen.add(names[g.hram("hScene")])
-            if "The end" in seen and g.hram("hScene") == 0:
+            held = held + 1 if names[g.hram("hScene")] == "The end" else 0
+            if held > 600:
                 break
             g.hold(["start"] if t % 120 < 3 else [])
             g.tick(False)
-        good = "The end" in seen and g.hram("hScene") == 0
+        good = held > 600
         ok = ok and good
-        lines.append(f"    {'✓' if good else '✗'} the ending: {len([s for s in seen if s.startswith('Ending')])} portraits, THE END, the title")
+        lines.append(f"    {'✓' if good else '✗'} the ending: {len([s for s in seen if s.startswith('Ending')])} portraits, THE END, held")
     finally:
         bot.Game = game
     return ok, lines
@@ -308,12 +312,225 @@ def original_flow(rom):
                   f"{len(docs)} states, Select {'taken' if used == 1 else 'not taken'}" + (f" ({bad})" if bad else "")]
 
 
+NES_REF = ROOT / "tests" / "nes_reference.json"     # what the NES does (tools/punchout_art/nes_reference.py)
+
+
+def _boot(rom, redirect=None):
+    """PyBoy on the ROM to the title, ready for keys; redirect: Glass Joe's challenger is that scene instead."""
+    from pyboy import PyBoy
+    from . import bot
+    S, B = bot._symbols(rom)
+    pb = PyBoy(rom, window="null", cgb=True)
+    pb.set_emulation_speed(0)
+    if redirect is not None:
+        done = []
+
+        def jump(_):
+            if pb.register_file.A == 1 and not done:
+                pb.register_file.A = redirect
+                done.append(1)
+        pb.hook_register(B["LoadScene"], S["LoadScene"], jump, None)
+    m, f = pb.memory, 0
+    while (m[S["hScene"]] != 0 or f < 400) and f < 6000:
+        pb.tick(1, False)
+        f += 1
+    pb.tick(240, False)
+    return pb, S
+
+
+def _tap(pb, b):
+    pb.button_press(b); pb.tick(3, False); pb.button_release(b); pb.tick(5, False)
+
+
+def _type_key(pb, digits, select=False, partial=None):
+    """CONTINUE, the digits as a player types them (right to step one, A for the next; Select held on the last's
+    A for the special keys), Start after a partial one."""
+    _tap(pb, "down")
+    pb.tick(20, False)
+    _tap(pb, "right")
+    for k, ch in enumerate(digits[:partial or 10]):
+        for _ in range(int(ch)):
+            _tap(pb, "right")
+        if k == 9 and select:
+            pb.button_press("select"); pb.tick(4, False)
+            _tap(pb, "a")
+            pb.button_release("select")
+        else:
+            _tap(pb, "a")
+    if partial:
+        _tap(pb, "start")
+
+
+def _fighter(name):
+    return "Joe" if name in ("Fight", "Challenger") else name.split(": ")[-1]
+
+
+def nes_keys(rom):
+    """The title's pass keys, every one the NES was tried with (valid, special, wrong, half typed): the same
+    challenger and record, or the same back to NEW (busy signals after their beeps), or still waiting."""
+    names, _ = _scenes()
+    ref = json.loads(NES_REF.read_text())["pass_keys"]
+    lines, ok = [], True
+    for case in ref:
+        pb, S = _boot(rom)
+        m = pb.memory
+        _type_key(pb, case["digits"], case["select"], case["partial"])
+        pb.tick(900, False)
+        scene = names[m[S["hScene"]]]
+        if case["to"] == "credits":                     # (the staff credits: typed in, and they stay, Start or not)
+            pb.tick(2400, False)
+            for _ in range(3):
+                pb.button_press("start"); pb.tick(4, False); pb.button_release("start"); pb.tick(120, False)
+            scene = scene if names[m[S["hScene"]]] == scene else names[m[S["hScene"]]] + " (after Start)"
+        rec = [m[S[n]] for n in ("wRecWins", "wRecLosses", "wRecKOs")]
+        sel, shown, aw = m[S["hSel"]], m[S["wPkShown"]], m[S["wAw"]]
+        pb.stop(save=False)
+        want = case["to"]
+        if want == "challenger":
+            good = (scene.startswith("Challenger") and _fighter(scene).rstrip("2") == case["opponent"].rstrip("2")
+                    and rec == case["record"] and aw == bool(case.get("another_world")))
+            got = f"{scene}, {rec[0]}-{rec[1]} {rec[2]}KO"
+        elif want == "title":
+            good, got = scene == "Title" and sel == 0 and not shown, f"{scene}, item {sel}, key {'shown' if shown else 'hidden'}"
+        elif want == "waiting":
+            good, got = scene == "Title" and sel == 1 and shown, f"{scene}, still typing" if shown else scene
+        else:                                           # (the credits: the NES's staff roll, held)
+            good, got = scene == "Credits", scene
+        ok = ok and good
+        lines.append(f"    {'✓' if good else '✗'} {case['name']}: {got}" + ("" if good else f" (the NES: {want})"))
+    return ok, lines
+
+
+def _forced(rom, plan, redirect=None, key=None, select=False, frames=40000, settle=2500, start_after=False):
+    """The fights in turn, each won (the NES's own result, $00 = $FC, as nes_reference.py does it) or lost (Mac's
+    health held at 0), START between: each fight's fighter and Mac's record going in, and the scenes passed."""
+    names, _ = _scenes()
+    pb, S = _boot(rom, redirect)
+    m, w = pb.memory, S["wNes"]
+    if key:
+        _type_key(pb, key, select)
+    fights, seen, infight, t0, held, still, last = [], [], False, 0, False, 0, None
+    for f in range(frames):
+        sc = names[m[S["hScene"]]]
+        if not seen or seen[-1] != sc:
+            seen.append(sc)
+            still = 0
+        else:
+            still += 1
+        active = m[S["hFtActive"]] == 1
+        if active and not infight:
+            infight, t0 = True, f
+            res = plan[len(fights)] if len(fights) < len(plan) else "W"
+            fights.append({"opponent": _fighter(sc), "record": [m[S[n]] for n in ("wRecWins", "wRecLosses", "wRecKOs")],
+                           "result": res})
+        if infight:
+            if res == "L":
+                m[w + 0x391] = 0
+            elif f - t0 == 200:
+                m[w + 0x00] = 0xFC
+            if not active and f - t0 > 210:
+                infight = False
+        if len(fights) > len(plan) or (len(fights) == len(plan) and not infight and still > settle):
+            break
+        press = not infight and f % 90 < 3 and len(fights) < len(plan)
+        if press != held:
+            (pb.button_press if press else pb.button_release)("start")
+            held = press
+        pb.tick(1, False)
+    if start_after:                                     # (where it settled, Start pressed there: THE END stays)
+        for _ in range(3):
+            pb.button_press("start"); pb.tick(4, False); pb.button_release("start"); pb.tick(150, False)
+        sc = names[m[S["hScene"]]]
+        if sc != seen[-1]:
+            seen.append(sc)
+    aw = m[S["wAw"]]
+    pb.stop(save=False)
+    return fights[:len(plan)], seen, aw
+
+
+def _same(gb, nes):
+    """The fights alike: each's fighter (a rematch's, or the Another World Circuit's, by name) and record."""
+    return len(gb) == len(nes) and all(g["opponent"].rstrip("2") == n["opponent"].rstrip("2") and g["record"] == n["record"]
+                                       for g, n in zip(gb, nes))
+
+
+def _fights(fs):
+    return " > ".join(f"{f['opponent']} {f['record'][0]}-{f['record'][1]} {f['result']}" for f in fs)
+
+
+def nes_flows(rom):
+    """NEW and the Another World Circuit's start (to the fight itself); losing (rematches, down the ranks, game over
+    and the record cleared); each circuit's title fight won (its training run or the paper, then the next); Mike
+    Tyson beaten (the ending, held at THE END) -- each fight's fighter and record as the NES's."""
+    names, _ = _scenes()
+    ref = json.loads(NES_REF.read_text())["flows"]
+    start = {"Joe": None, **{n.split(": ")[1]: i for i, n in enumerate(names) if n.startswith("Challenger: ")}}
+    lines, ok = [], True
+    for name, r in ref.items():
+        if name == "the Another World Circuit won through":
+            continue                                    # (its own test: another_world_won)
+        first = r["fights"][0]["opponent"]
+        plan = "".join(f["result"] for f in r["fights"])
+        key = None
+        if name == "Another World":
+            import sys
+            sys.path.insert(0, str(ROOT / "tools" / "punchout_art"))
+            import passwords
+            key = passwords.SPECIAL["another_world"]
+        on = name in ("Piston Honda's title fight lost, then Von Kaiser's", "Bald Bull's title fight lost, then Great Tiger's")
+        gb, seen, aw = _forced(rom, plan + ("W" if on else ""), None if key or first == "Joe" else start[first], key, bool(key),
+                               settle=2500 if name == "Mike Tyson won" else 600, start_after=name == "Mike Tyson won")
+        gb = gb[:len(plan)]                             # (on: one fight more, past its TITLE BOUT!! to the title bout)
+        good = _same(gb, r["fights"])
+        extra = ""
+        if name == "Mike Tyson won":                    # (the ending, and THE END held: Start does nothing there)
+            ends = [s for s in seen if s.startswith("Ending")]
+            good = good and len(ends) == 10 and seen[-1] == "The end"
+            extra = f"; {len(ends)} portraits, {seen[-1]}"
+        between = seen[seen.index(next(s for s in seen if s.startswith("Fight"))) + 1:]
+        between = [s for s in between if not s.startswith(("Bells", "First"))]
+        want = {"Piston Honda's title fight won": ["Training: Honda", "Challenger: Don"],   # (the NES's, between)
+                "Bald Bull's title fight won": ["Training: Bull", "Challenger: Honda2"],
+                "Super Macho Man's title fight won": ["KO News", "The dream fight", "Challenger: Tyson"],
+                "Piston Honda's title fight lost, then Von Kaiser's": ["Title bout: Honda", "Challenger: Honda"],
+                "Bald Bull's title fight lost, then Great Tiger's": ["Title bout: Bull", "Challenger: Bull"]}.get(name)
+        if want:
+            k, hits = 0, []
+            for sc in between:                          # (in that order, others between)
+                if k < len(want) and sc == want[k]:
+                    hits.append(sc)
+                    k += 1
+            good = good and k == len(want)
+            extra = "; " + " > ".join(between)[:140]
+        if name == "Another World":
+            good = good and aw == 1
+        ok = ok and good
+        lines.append(f"    {'✓' if good else '✗'} {name}: {_fights(gb)}{extra}" + ("" if good else f" (the NES: {_fights(r['fights'])})"))
+    return ok, lines
+
+
+def another_world_won(rom):
+    """The Another World Circuit from 135 792 4680 (A+B+Select) through every fight to its ending: each next
+    fighter and the record as the NES's, Mike Tyson's word with the fight's time, the portraits, THE END."""
+    import sys
+    sys.path.insert(0, str(ROOT / "tools" / "punchout_art"))
+    import passwords
+    r = json.loads(NES_REF.read_text())["flows"]["the Another World Circuit won through"]
+    plan = "".join(f["result"] for f in r["fights"])
+    gb, seen, aw = _forced(rom, plan, key=passwords.SPECIAL["another_world"], select=True, frames=90000, settle=2500)
+    ends = [s for s in seen if s.startswith("Ending")]
+    good = _same(gb, r["fights"]) and aw == 1 and any(s.startswith("You win") and s.endswith("Tyson") for s in seen) \
+        and len(ends) == 10 and seen[-1] == "The end" and "Title bout: Another World" in seen   # (its TITLE BOUT!!)
+    return good, [f"    {'✓' if good else '✗'} {_fights(gb)}; {len(ends)} portraits, {seen[-1]}"
+                  + ("" if good else f" (the NES: {_fights(r['fights'])})")]
+
+
 def _job(args):
     name, rom = args
     return globals()[name](rom)
 
 
-def run(log=print):
+def run(log=print, only=None):
     try:
         import pyboy  # noqa: F401
     except ImportError:
@@ -327,7 +544,11 @@ def run(log=print):
     ok = True
     titles = {"career": "The whole game, won (power-on to THE END)", "losses": "Losing", "routes": "Down the ranks",
               "pass_key": "CONTINUE", "another_world": "The Another World Circuit",
-              "original_flow": "The original Game Boy, into the fight and the corner"}
+              "original_flow": "The original Game Boy, into the fight and the corner",
+              "nes_keys": "The title's pass keys, as the NES takes them", "nes_flows": "Starts, losses, title fights, the ending, as the NES's",
+              "another_world_won": "The Another World Circuit won through, as the NES's"}
+    if only:
+        titles = {k: v for k, v in titles.items() if k in only}
     with ProcessPoolExecutor() as pool:
         for name, (good, lines) in zip(titles, pool.map(_job, [(n, str(rom)) for n in titles])):
             log(f"  {titles[name]}:")

@@ -129,7 +129,10 @@ def fighter_frames(opponent, wanted=None, budget=40000):
     for _ in range(450):                    # (past his walk-in: Don's last palette is another's till then)
         b.frame(0)
     start = copy.deepcopy(b)                # his fight from there: back to it whenever a fight ends
-    colors = bytes(b.pal[0x10:0x20])        # the sprites' palettes as they are (a hit's flash whitens his)
+    colors = bytearray(b.pal[0x10:0x20])    # the sprites' palettes as they are (a hit's flash whitens his)
+    for k in (3, 7, 11, 15):                # (his outline as it normally is, $05ED: a dodge cue then, $05EC's,
+        colors[k] = b.ram[0x5ED]            # would color every picture caught)
+    colors = bytes(colors)
     rng = random.Random(1)
     held, hold, pending, ages = 0, 0, None, {k: SETTLED for k in got}
     styles = ["aggressive", "defensive", "standing", "mixed"]

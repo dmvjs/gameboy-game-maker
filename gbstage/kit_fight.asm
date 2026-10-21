@@ -246,6 +246,7 @@ wTalkPtr: dw
 wOvlDoc: dw                 ; (Color) Doc's and the rival's sprites: each its OAM place, how many, every state's
 wOvlTalk: dw
 wOvlStill: dw               ; (Color) the scene's own sprites, while it slides in (high byte 0: none, or done)
+wObp1Mode: db               ; (the original) OBP1: 0 as BGP, 1 white for 1 (close-ups' sprites), 2 light grey for 2 (a fight)
 wRemap: ds 4                ; (DmgRemap: a row's pixels of each slot, its batch: count, tiles, addresses, source)
 wRemapN: db
 wRemapLeft: db
@@ -336,6 +337,8 @@ FtRoom:                     ; A: the piece's time (HL, BC, DE kept)
 ENDC
 
 FightLoad:
+    ld a, 2                 ; (the original: OBP1's 2 the lightest grey, the referee's shirt and words over the mat)
+    ld [wObp1Mode], a
     xor a                   ; (no VBlank's room yet: the first piece waits for one)
     ld [wFtRoom], a
     ld a, [wFtResume]       ; back from the corner: the fight carries on
@@ -3086,11 +3089,24 @@ FtReferee:
     ld c, SAY_TKO
     jr .in
 .counting:
+IF DEF(FT_WORDS)
+    ld a, [wFtCountTimer]   ; the NES's: each number's arm down from 2 frames in to 13, its bubble from 16 on
+    cp FT_COUNT - 14        ; (a frame sooner than its: the sprites go up a frame after they're built)
+    jr nc, .arm
+    ld c, SAY_COUNT
+.arm:
+    cp FT_COUNT
+    jr nc, .in
+    cp FT_COUNT - 12
+    jr c, .in
+    ld b, RF_COUNT
+ELSE
     ld c, SAY_COUNT
     ld a, [wFtCountTimer]   ; arm up for a moment on each number
     cp FT_COUNT - 14
     jr c, .in
     ld b, RF_COUNT
+ENDC
 .in:
     ld e, REF_IN
     jr .walk
@@ -3802,6 +3818,37 @@ RecordDrawIn:
     pop de
     ret
 
+; His pass key as PwKeyFar worked it out (wPw + $10, ten digits), over the label it's baked as (Punch-Out!!'s KO
+; News): HL = its first cell in the map, DE = its digits' glyphs; spaces after the third and the sixth.
+KeyDrawIn:
+    ldh a, [hLoadOn]        ; (the display on: in a VBlank)
+    and a
+    call nz, VWait
+    ld bc, wPw + $10
+.digit:
+    ld a, [bc]
+    push de
+    add e
+    ld e, a
+    adc d
+    sub e
+    ld d, a
+    ld a, [de]
+    ld [hl+], a
+    pop de
+    inc bc
+    ld a, c
+    cp LOW(wPw + $13)
+    jr z, .space
+    cp LOW(wPw + $16)
+    jr z, .space
+    cp LOW(wPw + $1A)
+    ret z
+    jr .digit
+.space:
+    inc hl
+    jr .digit
+
 IF DEF(FT_NES)
 ; The fight's time as Punch-Out!!'s Another World Circuit gives it after its last win, "TIME M:SS.CC,RN" (the NES's
 ; clock, $0302-$0305; its hundredths from the sub-second count, $0306's top four bits, by its table; the round, $06),
@@ -3910,15 +3957,32 @@ DocLoadIn:
     inc hl
     inc hl
 .still:
-    ld a, l                 ; then their sprites (Color): Doc's, the rival's
+    ld a, l                 ; then their sprites, Doc's and the rival's: Color's, then the original's
     ld [wOvlDoc], a
     ld a, h
     ld [wOvlDoc + 1], a
+    ld b, 4
     call OvlSkip
     ld a, l
     ld [wOvlTalk], a
     ld a, h
     ld [wOvlTalk + 1], a
+    ld b, 2
+    call OvlSkip
+    ldh a, [hIsCGB]
+    and a
+    jr nz, .color
+    ld a, l
+    ld [wOvlDoc], a
+    ld a, h
+    ld [wOvlDoc + 1], a
+    ld b, 4
+    call OvlSkip
+    ld a, l
+    ld [wOvlTalk], a
+    ld a, h
+    ld [wOvlTalk + 1], a
+.color:
     xor a
     ld [wTalkState], a
     ld [wDocState], a
@@ -3930,21 +3994,18 @@ DocLoadIn:
     ld [wDocHand], a
     ret
 
-; HL past a set of sprites for each state (its OAM place, how many, then 4 bytes each, 4 states... -- Doc's 4, the
-; rival's 2: HL past the most, Doc's, which is all OvlSkip is asked for).
+; HL past a set of sprites for each of B states (its OAM place, how many, then 4 bytes each a state).
 OvlSkip:
     inc hl
     ld a, [hl+]
     add a
     add a
-    add a
-    add a                   ; (4 states, 4 bytes a sprite)
     ld e, a
     ld d, 0
-    jr nc, .add
-    inc d
-.add:
+.state:
     add hl, de
+    dec b
+    jr nz, .state
     ret
 
 ; (VBlank) HL = a set of sprites by state (its OAM place, how many, every state's), A = the state: put in OAM.
@@ -3985,10 +4046,31 @@ SECTION FRAGMENT "Overlay far", ROMX   ; (with the sprites' data: codegen _overl
 OverlayLoadIn:
     ldh a, [hIsCGB]
     and a
-    ret z
+    jr nz, .color
+    ld a, 1
+    ld [wObp1Mode], a
+    ld a, [hl+]             ; (the original: its own, after Color's tiles and sprites)
+    ld e, a
+    ld d, 0
+    REPT 4
+        sla e
+        rl d
+    ENDR
+    add hl, de
+    ld a, [hl+]
+    add a
+    add a
+    ld e, a
+    ld d, 0
+    add hl, de
+    jr .load
+.color:
     xor a                   ; (sprite tiles: VRAM bank 0)
     ldh [rVBK], a
+.load:
     ld a, [hl+]
+    and a
+    jr z, .tilesIn
     ld b, a
     ld de, $8000 + 16 * 2     ; (sprite tiles from 2: a menu's cursor's first)
 .tile:
@@ -4006,6 +4088,7 @@ OverlayLoadIn:
     pop bc
     dec b
     jr nz, .tile
+.tilesIn:
     call VWait
     ld a, l                 ; (sliding in: OvlSlideIn moves them with it)
     ld [wOvlStill], a
@@ -4163,16 +4246,12 @@ DocVBlankIn:
     bit 0, [hl]             ; run past the original's)
     jr z, .rival
     res 0, [hl]
-    ldh a, [hIsCGB]         ; (Color: his sprites as his state has them)
-    and a
-    jr z, .cells
-    ld hl, wOvlDoc
+    ld hl, wOvlDoc          ; (his sprites as his state has them)
     ld a, [hl+]
     ld h, [hl]
     ld l, a
     ld a, [wDocState]
     call OvlPut
-.cells:
     ld a, [wDocN]
     and a
     ret z
@@ -4209,9 +4288,6 @@ DocVBlankIn:
     ret
 .rival:
     res 1, [hl]
-    ldh a, [hIsCGB]
-    and a
-    jr z, .talk
     ld hl, wOvlTalk
     ld a, [hl+]
     ld h, [hl]
@@ -5837,6 +5913,11 @@ RecordDraw::
     ld [$2100], a
     call RecordDrawIn
     jr ScreensBack
+KeyDraw::
+    ld a, BANK(KeyDrawIn)
+    ld [$2100], a
+    call KeyDrawIn
+    jr ScreensBack
 IF DEF(FT_NES)
 TimeDraw::
     ld a, BANK(TimeDrawIn)
@@ -6947,6 +7028,55 @@ ENDC
     ld a, [wFtSay]          ; his words, in a speech bubble beside his head
     and a
     jp z, .clear
+IF DEF(FT_WORDS)
+    ld b, 10                ; the NES game's bubble for it: 1-10 (0-9), KO! 10, TKO 11, Fight! 12
+    cp SAY_KO
+    jr z, .word
+    ld b, 11
+    cp SAY_TKO
+    jr z, .word
+    ld b, 12
+    cp SAY_FIGHT
+    jr z, .word
+    ld a, [wFtCount]
+    dec a
+    ld b, a
+.word:
+    ld a, b
+    add a
+    add LOW(FtWords)
+    ld e, a
+    adc HIGH(FtWords)
+    sub e
+    ld d, a
+    ld a, [de]
+    inc de
+    push af
+    ld a, [de]
+    ld d, a
+    pop af
+    ld e, a
+    ld a, [de]              ; its sprites: y, x from his frame, tile
+    inc de
+    ld b, a
+.wordSprite:
+    ld a, [de]
+    inc de
+    add FT_REF_Y + 16
+    ld [hl+], a
+    ld a, [de]
+    inc de
+    add c
+    ld [hl+], a
+    ld a, [de]
+    inc de
+    ld [hl+], a
+    ld a, FT_SAY_ATTR
+    ld [hl+], a
+    dec b
+    jr nz, .wordSprite
+    jp .clear
+ENDC
     cp SAY_COUNT
     jr nz, .phrase
     ld de, wFtWord          ; the count: one digit, or "10"
@@ -7165,11 +7295,37 @@ FtNesPresent:
     jr nz, .fighting
     ld a, M_BREAK
     ld [wFtMatch], a
+IF DEF(FT_WORDS)
+    ld a, [wFtCount]        ; "Fight!" as the NES's: up with his call (its effect $0D) for 23 frames, then he stands
+    and a                   ; (wFtCount: called; the timer: its frames left)
+    jr nz, .called
+    ld a, [wNes + $F0]
+    cp $0D
+    jr z, .call
+    ld a, [wNes + $F4]
+    cp $0D
+    ld a, FT_INTRO          ; (not yet: walking in)
+    jr nz, .intro
+.call:
+    ld a, 1
+    ld [wFtCount], a
+    ld a, 23
+    ld [wFtCountTimer], a
+.called:
+    ld hl, wFtCountTimer
+    ld a, [hl]
+    and a
+    ld a, FT_INTRO - 20     ; (said)
+    jr z, .intro
+    dec [hl]
+    xor a
+ELSE
     ld a, [wNes + $BB]      ; "FIGHT!" once the referee's status says go
     and a
     ld a, FT_INTRO
     jr z, .intro
     xor a
+ENDC
 .intro:
     ld [wFtTimer], a
     ret

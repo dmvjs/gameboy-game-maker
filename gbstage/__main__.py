@@ -161,7 +161,7 @@ def cmd_test(args):
     if "career" in stages:
         from . import careertests
         print("\nThe whole game: every fight in turn to the end, losing, and CONTINUE's pass key\n")
-        ok = careertests.run() and ok
+        ok = careertests.run(only=args.career) and ok
     if args.cpu_roms:
         from . import cputests
         print()
@@ -214,6 +214,9 @@ def main(argv=None):
     t.add_argument("--no-bot", action="store_true", help="skip the bot fighting every fight")
     t.add_argument("--stage", action="append", choices=STAGES,
                    help="only this stage (repeatable): CI can run each in a job of its own")
+    t.add_argument("--career", action="append", metavar="NAME",
+                   help="only this career test (career, losses, routes, pass_key, another_world, original_flow, nes_keys, "
+                        "nes_flows, another_world_won)")
     t.add_argument("--cpu-roms", metavar="DIR", help="also run Blargg's CPU test ROMs from DIR against the profiler's CPU")
     t.set_defaults(fn=cmd_test)
 

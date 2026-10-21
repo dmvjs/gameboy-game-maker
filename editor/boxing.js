@@ -138,8 +138,9 @@ export function boxingGame(pack) {
   }
   // A close-up's colors past its background palettes (Color: the NES's sprites over it), state k's, placed at its
   // cell (cx, cy): sprites with their palettes in the scene's list (overlay.pals), added there as needed.
-  function overlaySprites(scene, face, k, cx, cy) {
+  function overlaySprites(scene, face, k, cx, cy, dmg) {
     const o = face.overlay;
+    if (dmg) return (o?.dmg?.[k] || []).map(([x, y, pixels, pal]) => ({ x: cx * 8 + x, y: cy * 8 + y, pixels, pal }));   // (the original's greys)
     if (!o || !o.states[k]) return [];
     scene.overlay = scene.overlay || { pals: [], sprites: [] };
     const at = o.pals.map(c => {
@@ -279,10 +280,11 @@ export function boxingGame(pack) {
   const trainIds = {};                                      // per circuit champion (a rival with `training`): his run
   if (im && rivals.some(rv => rv.training)) {
     const bg0 = p.palettes.length;
-    im.palettes.forEach((colors, k) => p.palettes.push(pal(`Training ${k + 1}`, colors)));
+    im.palettes.forEach((colors, k) => p.palettes.push({ ...pal(`Training ${k + 1}`, colors),   // (the original's greys:
+                                                         ...(im.greys ? { greys: im.greys[k] } : {}) }));   // the picture's)
     const sky = im.palettes[+im.cells[0]][+im.pixels[0]];
     const boxPal = p.palettes.length;
-    p.palettes.push(pal('Training box', [sky, [31, 31, 31], [20, 20, 20], [0, 0, 0]]));
+    p.palettes.push({ ...pal('Training box', [sky, [31, 31, 31], [20, 20, 20], [0, 0, 0]]), ...(im.boxGreys ? { greys: im.boxGreys } : {}) });
     const ob0 = p.objPalettes.length;
     im.objPalettes.forEach((colors, k) => p.objPalettes.push(pal(`Training sprites ${k + 1}`, [[0, 0, 0], ...colors])));
     rivals.forEach((rv, k) => {
@@ -294,13 +296,12 @@ export function boxingGame(pack) {
       for (let y = 0; y < M.H; y++) for (let x = 0; x < M.W; x++) scene.pixels[y * M.W + x] = +im.pixels[y * 256 + x];
       for (let cy = 0; cy < M.CH; cy++) for (let cx = 0; cx < M.CW; cx++) scene.cellPal[cy * M.CW + cx] = bg0 + +im.cells[cy * 32 + cx];
       scene.cutscene = {
-        pixels: im.pixels, cells: [...im.cells].map(c => bg0 + +c), music: 0x1A,
-        // Punch-Out!!'s parallax: each band its own speed (256ths of a pixel a frame: half the NES's, its map twice
-        // as wide), from the sky and skyline (slowest) through the water, the trees, the sidewalk and curb, to the
-        // road (fastest); each stops where the NES's does as the box comes up (the statue)
-        // (the skyline a touch slower than half the NES's: it starts a little to the right, ends the same)
-        bands: [[48, 15, 31], [88, 32, 64], [92, 32, 64], [96, 48, 96], [100, 64, 0], [104, 80, 32], [112, 96, 65],
-                [124, 128, 1], [128, 192, 1]].map(([y, speed, endX]) => ({ y, speed, endX })),
+        pixels: im.pixels, cells: [...im.cells].map(c => bg0 + +c), music: 0x1A, dmgDarkOdd: true,
+        // Punch-Out!!'s parallax, as the NES's (256ths of a pixel a frame: half its, the map half as wide): the
+        // skyline an eighth of a pixel, the water's far edge a quarter, everything from the water down (posts,
+        // trees, sidewalk, road) a pixel and a half; each from where the NES's starts to where it stops as the box
+        // comes up, the NES's screen centred in ours (the statue)
+        bands: [[48, 16, 17], [92, 32, 0], [96, 192, 3]].map(([y, speed, endX]) => ({ y, speed, endX })),
         actors: im.actors.map(a => ({ x: a.x, y: a.y, w: a.w, h: a.h, every: 6,
           frames: a.frames.map(f => ({ pixels: f.pixels, cells: [...f.cells].map(c => ob0 + +c) })) })),
         box: { x: 3, y: 1, lines: ['PASS KEY IS', rv.trainingKey || '000 000 0000', 'PUSH START!'],
@@ -316,9 +317,91 @@ export function boxingGame(pack) {
     const k = p.palettes.findIndex(q => JSON.stringify(q.colors) === JSON.stringify(colors));
     return k >= 0 ? k : p.palettes.push(pal(name, colors)) - 1;
   };
+  // ---- Punch-Out!!'s screens between fights that aren't a fighter's (the game's, at 5/8 its size, the words in our
+  // font): NEXT IS ... TITLE BOUT!! before a circuit's title bout, the KO News page after the World Circuit's (its
+  // paper creeping up into place, his pass key in it), then THE DREAM FIGHT!!; the big letters' colors in turn ----
+  const NS = pack.screens, tbIds = {};
+  let newsId = null, dreamId = null, awTbId = null;
+  const plain = name => ({ name, pixels: new Uint8Array(M.W * M.H), cellPal: new Uint8Array(M.CW * M.CH), menu: null,
+    pressStart: null, pressed: null, options: null, puzzle: null, fight: null, passKey: null, back: null, texts: [] });
+  if (NS && pack.loseGlove) {
+    const big = addPal('Title bout', [NS.navy, NS.cyan, NS.orange, [0, 0, 0]]);
+    const gl = addPal('Title bout glove', [NS.navy, NS.glove[0], NS.glove[1], [0, 0, 0]]);
+    const gll = addPal('Title bout glove, letters', [NS.navy, NS.glove[0], NS.orange, [0, 0, 0]]);
+    const bigScreen = (name, spec, lines, linesY, lettersY, gloveAt, target, note) => {
+      const sc = plain(name), L = spec.letters, lx = (M.W - L.w) >> 1, front = new Set();
+      sc.cellPal.fill(big);
+      for (let i = 0; i < L.w * L.h; i++) {
+        if (!+L.pixels[i]) continue;
+        const k = (lettersY + (i / L.w | 0)) * M.W + lx + i % L.w;
+        sc.pixels[k] = 2; front.add(k);
+      }
+      const lettered = new Set([...front].map(k => ((k / M.W | 0) >> 3) * M.CW + ((k % M.W) >> 3)));
+      const g = pack.loseGlove, gx = lx + gloveAt[0], gy = lettersY + gloveAt[1];   // (behind the letters, as the NES's)
+      for (let i = 0; i < g.w * g.h; i++) {
+        const v = +g.pixels[i], x = gx + i % g.w, y = gy + (i / g.w | 0), k = y * M.W + x, cell = (y >> 3) * M.CW + (x >> 3);
+        if (!v || front.has(k)) continue;
+        if (lettered.has(cell)) { sc.cellPal[cell] = gll; sc.pixels[k] = v === 2 ? 1 : v; }   // (its light red: dark here)
+        else { sc.cellPal[cell] = gl; sc.pixels[k] = v; }
+      }
+      sc.texts = lines.map((label, n) => ({ label, x: centered(label) >> 3, y: linesY + n, textSlot: 1 }));
+      sc.cycle = { palettes: [big, gll], slot: 2, colors: NS.cycleColors, after: spec.after, every: spec.every, loops: spec.loops };
+      sc.pressStart = { target, flashes: 1, area: null, quiet: true,
+                        auto: spec.after + spec.loops * NS.cycleColors.length * spec.every + spec.hold };
+      sc.nesMusic = spec.music;
+      sc.notes = note;
+      return p.scenes.push(sc) - 1;
+    };
+    const tbLines = circuit => ['NEXT', 'IS', 'THE W.V.B.A.', circuit.replace(/ CIRCUIT$/, ''), 'CIRCUIT'];
+    const tbNote = 'Punch-Out!!\'s TITLE BOUT!! before a circuit\'s title bout: its letters\' colors in turn, then on by itself.';
+    rivals.forEach((rv, k) => {
+      if (k > 0 && rv.titleBout && !rivals[k - 1].news) {
+        const sc = bigScreen(`Title bout: ${rv.short}`, NS.titleBout, tbLines(circuitOf(rv)), 1, 56, [28, 5], ids[k].challenger, tbNote);
+        p.scenes[sc].announce = true;
+        tbIds[k] = sc;
+      }
+    });
+    const aw = pack.anotherWorld || [], awLast = rivals.findIndex(rv => rv.short === aw[aw.length - 1]);
+    if (aw.length && awLast >= 0) {
+      awTbId = bigScreen('Title bout: Another World', NS.titleBout, tbLines('ANOTHER WORLD CIRCUIT'), 1, 56, [28, 5],
+                         ids[awLast].challenger, tbNote);
+      p.scenes[awTbId].announce = true;
+    }
+    const macho = rivals.findIndex(rv => rv.news);
+    if (macho >= 0 && macho + 1 < rivals.length) {
+      dreamId = bigScreen('The dream fight', NS.dreamFight, NS.dreamFight.lines, 13, 8, [33, 40], ids[macho + 1].challenger,
+                          'Punch-Out!!\'s THE DREAM FIGHT!!, after the KO News page: its letters\' colors in turn, then on by itself to Mike Tyson.');
+      const N = NS.news, sc = plain('KO News'), newsPal = addPal('KO News', N.colors);
+      sc.cellPal.fill(newsPal);
+      sc.pixels.fill(1);                                    // (the paper)
+      const blit = (pc, x0, y0) => {
+        for (let i = 0; i < pc.w * pc.h; i++) {
+          const x = x0 + i % pc.w, y = y0 + (i / pc.w | 0);
+          if (x >= 0 && x < M.W && y >= 0 && y < M.H) sc.pixels[y * M.W + x] = +pc.pixels[i];
+        }
+      };
+      blit(N.masthead, (M.W - N.masthead.w) >> 1, 0);
+      for (const y of [22, 33]) for (let x = 0; x < M.W; x++) sc.pixels[y * M.W + x] = 3;
+      blit(N.photo, -2, 35);
+      blit(N.headline, 56 + ((M.W - 56 - N.headline.w) >> 1), 35);
+      blit(N.macho, M.W - N.macho.w, M.H - N.macho.w);
+      const right = ['THE W.V.B.A.', 'WORLD CIRCUIT', 'LAST NIGHT,WE', 'FOUND A SMALL', 'BUT GREAT', 'CHAMP HIS', 'NAME IS', '"LITTLE MAC"'];
+      sc.texts = [{ label: 'APRIL 1,1987', x: 0, y: 3, textSlot: 3 },
+                  ...right.map((label, n) => ({ label, x: 7, y: 6 + n, textSlot: 3 })),
+                  { label: 'PUSH START FOR', x: 0, y: 14, textSlot: 3 }, { label: 'THE DREAM FIGHT', x: 0, y: 15, textSlot: 3 },
+                  { label: 'I FOUND A KEY:', x: 0, y: 16, textSlot: 3 },
+                  { label: '000 000 0000', x: 1, y: 17, textSlot: 3, passKey: 2 }];   // (his, the World Circuit's, as it stands)
+      sc.slideIn = { from: Math.round(N.from * 5 / 8), every: Math.round(N.every * 8 / 5), fillSlot: 3 };   // (as long as
+      sc.pressStart = { target: dreamId, flashes: 1, area: null, quiet: true };                            //  the NES's)
+      sc.nesMusic = N.music;
+      sc.notes = 'Punch-Out!!\'s KO News, after the World Circuit\'s title: his pass key in it. Start goes on to THE DREAM FIGHT!!.';
+      newsId = p.scenes.push(sc) - 1;
+    }
+  }
   rivals.forEach((rv, k) => {
     const id = ids[k], after = k + 1 < rivals.length ? ids[k + 1].challenger : 0;
-    const next = trainIds[k] ?? after;                      // (a circuit's title: the training run first)
+    const next = trainIds[k] ?? (rv.news && newsId !== null ? newsId : tbIds[k + 1] ?? after);   // (a circuit's title: the
+                                                            // training run first; before one, its TITLE BOUT!!)
     if (trainIds[k] !== undefined) S[trainIds[k]].pressStart.target = after;
     const rivalPals = k === 0 ? { s: 3, g: 4, h: 5 } : (() => {   // his own three, past the first rival's
       const set = [0, 1, 2].map(j => [matOf(rv), ...rv.palettes[j].slice(1)]);   // (the three apart, as his fight has them:
@@ -350,7 +433,8 @@ export function boxingGame(pack) {
       portrait(scene, lay, P.portraitFull, 0, M.CH - FH);
       const over = [...overlaySprites(scene, rv.portraitFull, 0, M.CW - FW, compact ? 2 : 3),
                     ...overlaySprites(scene, P.portraitFull, 0, 0, M.CH - FH)];
-      if (scene.overlay) scene.overlay.sprites = over;
+      if (scene.overlay) Object.assign(scene.overlay, { sprites: over, dmg: [
+        ...overlaySprites(scene, rv.portraitFull, 0, M.CW - FW, compact ? 2 : 3, true), ...overlaySprites(scene, P.portraitFull, 0, 0, M.CH - FH, true)] });
       const right = (text, y, textSlot) => {
         const label = nesText(text);
         return { label, x: M.CW - label.length, y, textSlot };
@@ -458,11 +542,13 @@ export function boxingGame(pack) {
         portrait(scene, lay, talk ? { ...rv.portraitFull, pixels: talk.states[0] } : rv.portraitFull, M.CW - FW, 3);
         portrait(scene, lay, P.portraitFull, 0, M.CH - FH);
         if (P.portraitFull.states) scene.docAnim = { x: 0, y: M.CH - FH, w: FW, h: FH, states: P.portraitFull.states,
-                                                     sprites: [0, 1, 2, 3].map(k => overlaySprites(scene, P.portraitFull, k, 0, M.CH - FH)) };
+                                                     sprites: [0, 1, 2, 3].map(k => overlaySprites(scene, P.portraitFull, k, 0, M.CH - FH)),
+                                                     dmgSprites: [0, 1, 2, 3].map(k => overlaySprites(scene, P.portraitFull, k, 0, M.CH - FH, true)) };
         if (talk) scene.rivalAnim = { x: M.CW - FW, y: 3, w: FW, h: FH, states: talk.states, time: talk.time,
-                                      sprites: [1, 2].map(k => overlaySprites(scene, rv.portraitFull, k, M.CW - FW, 3)) };
+                                      sprites: [1, 2].map(k => overlaySprites(scene, rv.portraitFull, k, M.CW - FW, 3)),
+                                      dmgSprites: [1, 2].map(k => overlaySprites(scene, rv.portraitFull, k, M.CW - FW, 3, true)) };
         const still = talk ? [] : overlaySprites(scene, rv.portraitFull, 0, M.CW - FW, 3);
-        if (scene.overlay) scene.overlay.sprites = still;
+        if (scene.overlay) Object.assign(scene.overlay, { sprites: still, dmg: talk ? [] : overlaySprites(scene, rv.portraitFull, 0, M.CW - FW, 3, true) });
       } else {
       portrait(scene, lay, rv.portrait, M.CW - PT, 3);   // his top right, Mac's bottom left
       portrait(scene, lay, P.portrait, 0, M.CH - PT);
@@ -682,7 +768,7 @@ export function boxingGame(pack) {
     sf.fight = {
       rival: { x: 6, y: 5, palettes: rivalPals, poses: rv.poses, ...(rv.cgbPoses ? { cgbPoses: rv.cgbPoses } : {}) },
       player: { palette: 0, tiredPalette: 2, ...(P.downColors ? { downPalette: 3 } : {}), poses: P.poses, ...(P.cgbPoses ? { cgbPoses: P.cgbPoses } : {}) },
-      referee: { palette: 1, poses: pack.referee?.poses || REF_POSES,
+      referee: { palette: 1, poses: pack.referee?.poses || REF_POSES, ...(pack.referee?.words ? { words: pack.referee.words } : {}),
                  ...(pack.referee?.shirtColors ? { shirtPalette: P.downColors ? 4 : 3 } : {}) },
       hud, ...(ropeRow ? { ropeRow } : {}), ...(sideRope ? { sideRope } : {}),
       textSlot: 0, barSlot: 2, crowdRow: 3,
@@ -760,7 +846,7 @@ export function boxingGame(pack) {
   const awOrder = (pack.anotherWorld || []).map(short => rivals.findIndex(rv => rv.short === short)).filter(k => k >= 0);
   awOrder.forEach((k, j) => {
     S[ids[k].fight].fight.anotherWorld = {
-      next: j + 1 < awOrder.length ? ids[awOrder[j + 1]].challenger : null,
+      next: j + 1 < awOrder.length ? (j + 2 === awOrder.length && awTbId !== null ? awTbId : ids[awOrder[j + 1]].challenger) : null,
       drop: j > 0 ? ids[awOrder[j - 1]].challenger : null, first: j === 0, final: j === awOrder.length - 1 };
   });
 
@@ -794,8 +880,8 @@ export function boxingGame(pack) {
     end.texts = [{ label: record, x: centered(record) >> 3, y: 15, textSlot: 3, record: true }];   // (his, as it stands)
     end.typed = { every: 15, pick: 'random', groups: [[[{ x: centered('THE END') >> 3, y: 17, w: 7, h: 1, lines: ['THE END'],
                                                            textSlot: 3, sound: null, pause: 0 }]]] };
-    end.pressStart = { target: 0, flashes: 1, area: null, quiet: true };
-    end.notes = 'Punch-Out!!\'s last screen: Mac, his record, THE END. Start goes back to the title.';
+    end.pressStart = { target: 0, flashes: 1, area: null, quiet: true, never: true };
+    end.notes = 'Punch-Out!!\'s last screen: Mac, his record, THE END. It stays (Start does nothing, as the game\'s).';
     p.scenes.push(end);
     for (const w of [lid.win, lid.winTko]) {             // his word to Mac, where the win screen was
       const sc = S[w], lay = layer(w);
@@ -808,6 +894,32 @@ export function boxingGame(pack) {
       sc.notes = 'Punch-Out!!\'s ending begins: his word to Mac. It goes on by itself; the end music the fight '
         + 'started as he went down plays on (as the game\'s: none of its ending screens starts a song).';
     }
+  }
+
+  // ---- Punch-Out!!'s staff credits (its key, 106 113 0120 with Select held): on black, each typed a letter at a time
+  // as the NES types them, a pause after each; two pages (the NES's one is wider than ours). It stays. ----
+  if (pack.credits) {
+    const sc = plain('Credits');
+    sc.cellPal.fill(ROLE.t);
+    fillRect({ palettes: p.palettes, pixels: sc.pixels, cellPal: sc.cellPal }, 0, 0, M.W, M.H, 3);
+    const steps = [];
+    let y = 1, page = 0;
+    for (const [role, ...names] of pack.credits) {
+      const lines = [role, ...names.map(n => `  ${n}`)];
+      if (y + lines.length > M.CH - 1) {                 // (a page full: held, cleared, the rest on the next)
+        steps[steps.length - 1].pause = 240;
+        steps.push({ x: 0, y: 0, w: M.CW, h: M.CH, lines: [], textSlot: 0, sound: null, pause: 36, clear: true });
+        y = 1; page++;
+      }
+      steps.push({ x: 0, y, w: M.CW, h: lines.length, lines, textSlot: 0, sound: null, pause: 36 });
+      y += lines.length + page;                           // (the second page has room for a row between)
+    }
+    sc.typed = { every: 4, pick: 'random', groups: [[steps]] };
+    sc.pressStart = { target: 0, flashes: 1, area: null, quiet: true, never: true };
+    sc.credits = true;
+    sc.nesMusic = 0x1A;
+    sc.notes = 'Punch-Out!!\'s staff credits (106 113 0120, Select held on its last digit): typed in, then it stays.';
+    p.scenes.push(sc);
   }
 
   // ---- Game over (Punch-Out!!'s: the third loss, or losing the last fight): Mac on his stool, head down, the game's
