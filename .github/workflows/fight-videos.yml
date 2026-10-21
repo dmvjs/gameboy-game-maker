@@ -35,6 +35,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m gbstage install rgbds
+        env:
+          GITHUB_TOKEN: ${{ github.token }}   # (its API calls: many jobs at once pass the anonymous limit)
       - run: python tools/fight_videos.py rom fights.gbc
       - id: list
         run: echo "fights=$(python tools/fight_videos.py list | python -c 'import json,sys; print(json.dumps([f["key"] for f in json.load(sys.stdin)]))')" >> "$GITHUB_OUTPUT"

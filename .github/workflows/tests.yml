@@ -26,6 +26,8 @@ jobs:
           python-version: "3.12"
       - run: pip install $PYTHON_DEPS
       - run: python -m gbstage install rgbds
+        env:
+          GITHUB_TOKEN: ${{ github.token }}   # (its API calls: many jobs at once pass the anonymous limit)
       - run: python -m gbstage test --stage goldens --stage kit
 
   career:
@@ -42,6 +44,8 @@ jobs:
           python-version: "3.12"
       - run: pip install $PYTHON_DEPS
       - run: python -m gbstage install rgbds
+        env:
+          GITHUB_TOKEN: ${{ github.token }}   # (its API calls: many jobs at once pass the anonymous limit)
       - run: python -m gbstage test --stage career --career ${{ matrix.test }}
         env:
           SDL_AUDIODRIVER: dummy
