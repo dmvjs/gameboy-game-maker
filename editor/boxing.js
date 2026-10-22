@@ -463,7 +463,6 @@ export function boxingGame(pack) {
       const aw = (pack.anotherWorld || []).indexOf(rv.short);   // (the Another World Circuit's words: as the other)
       if (aw >= 0) {
         const last = aw === pack.anotherWorld.length - 1, n = pack.anotherWorld.length;
-        const macRank = rv.playerRank || P.rank;
         const awTag = rematch ? 'REMATCH' : last ? 'TITLE BOUT' : null;   // (in CIRCUIT's place: no room for both)
         const low = !compact && nesText(rv.name).length >= 13 ? 3 : 2;   // (a long name over row 2: Mac's lines a row down)
         scene.awTexts = [
@@ -474,7 +473,7 @@ export function boxingGame(pack) {
           ...(last ? [right('MCHAMPIONN', 2, 0)] : []),               //  over his name's MIKE TYSON, its ends left)
           ...['"WORLD"', '"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER'].map((label, j) => ({ label, x: j < 4 ? 1 : 2, y: low + j, textSlot: 0 })),
           { label: nesText('0-0 0KO'), x: 0, y: low + 5, textSlot: 0, record: true },
-          ...(low === 2 ? [{ label: nesText(macRank).replace(/\d+$/, String(n - aw)), x: 0, y: 8, textSlot: 2 }] : []),
+          ...(low === 2 ? [{ label: nesText(`RANKED: #${n - aw}`), x: 0, y: 8, textSlot: 2 }] : []),
         ];
       }
       scene.pressStart = { target: id.fight, flashes: 3, area: null, prompt: null,   // (no room left for PUSH START!)
@@ -513,7 +512,6 @@ export function boxingGame(pack) {
       if (aw >= 0) {                                       // screen with its words (shown when that circuit's on)
         const last = aw === pack.anotherWorld.length - 1, n = pack.anotherWorld.length;
         const rank = scene.texts.find(t => t.label === nesText(rv.rank) && t.y === 1);
-        const macRank = rv.playerRank || P.rank;
         scene.awTexts = [
           { label: 'ANOTHER WORLD', x: 0, y: 0, textSlot: 1 }, { label: 'CIRCUIT', x: 0, y: 1, textSlot: 1 },
           ...(rematch ? [{ label: 'REMATCH', x: 0, y: 2, textSlot: 1 }] : last ? [{ label: 'TITLE BOUT', x: 0, y: 2, textSlot: 1 }] : []),
@@ -523,7 +521,7 @@ export function boxingGame(pack) {
                               : ['"WORLD"', '"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER'].map((label, j) =>   // (the NES's: its
                                   ({ label, x: j < 4 ? 1 : 2, y: 2 + j, textSlot: 0 }))),          // lines indented)
           { label: nesText('0-0 0KO'), x: 0, y: 7, textSlot: 0, record: true },
-          { label: nesText(macRank).replace(/\d+$/, String(n - aw)), x: 0, y: 8, textSlot: 2 },
+          { label: nesText(`RANKED: #${n - aw}`), x: 0, y: 8, textSlot: 2 },
         ];
       }
       scene.pressStart = { target: id.fight, flashes: 3, area: null, prompt: { label: 'PUSH START!', x: 9, y: 17, textSlot: 1, blink: true },
