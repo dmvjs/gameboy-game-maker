@@ -469,8 +469,9 @@ export function boxingGame(pack) {
         scene.awTexts = [
           { label: 'ANOTHER WORLD', x: 0, y: 0, textSlot: 1 },
           compact ? { label: nesText(rv.name), x: 0, y: 1, textSlot: 0 } : { label: awTag || 'CIRCUIT', x: 0, y: 1, textSlot: 1 },
-          ...scene.texts.filter(t => t.y > 1 && !(t.x <= 2 && t.y >= 2 && t.y <= 8)),
-          right(last ? 'CHAMPION' : `RANKED: #${n - 1 - aw}`, 1, 2),
+          ...scene.texts.filter(t => t.y > 1 && !(t.x <= 2 && t.y >= 2 && t.y <= 8) && !(last && t.label === nesText(rv.name))),
+          right(last ? 'ANOTHER' : `RANKED: #${n - 1 - aw}`, 1, 2),   // (the champion: the NES's own slip, CHAMPION
+          ...(last ? [right('MCHAMPIONN', 2, 0)] : []),               //  over his name's MIKE TYSON, its ends left)
           ...['"WORLD"', '"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER'].map((label, j) => ({ label, x: j < 4 ? 1 : 2, y: low + j, textSlot: 0 })),
           { label: nesText('0-0 0KO'), x: 0, y: low + 5, textSlot: 0, record: true },
           ...(low === 2 ? [{ label: nesText(macRank).replace(/\d+$/, String(n - aw)), x: 0, y: 8, textSlot: 2 }] : []),

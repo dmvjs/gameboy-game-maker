@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test: [career, losses, routes, pass_key, another_world, original_flow, nes_keys, nes_flows, another_world_won, beat_mac, tells]
+        test: [career, losses, routes, pass_key, another_world, original_flow, nes_keys, nes_flows, another_world_won, beat_mac, tells, another_world_played]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

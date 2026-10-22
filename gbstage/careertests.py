@@ -525,6 +525,69 @@ def another_world_won(rom):
                   + ("" if good else f" (the NES: {_fights(r['fights'])})")]
 
 
+def another_world_played(rom):
+    """The Another World Circuit as a player plays it: 135 792 4680 typed with Select held on its last digit, then
+    the bot (buttons only, the crowd's tells too) wins each of its nine fights in turn; the record and the next fight
+    after each; Mike Tyson's word, the portraits, THE END."""
+    from . import bot
+    names, _ = _scenes()
+    order = ["Hippo", "Tiger", "Honda2", "Soda", "Bull2", "Don2", "Sandman", "Macho", "Tyson"]
+    g = bot.Game(rom, 2)                        # (no redirect: the title's own way in, by the key)
+    g.stop = lambda: None
+    pb, m, S = g.pb, g.m, g.S
+
+    def tap(b):
+        pb.button_press(b); pb.tick(3, False); pb.button_release(b); pb.tick(5, False)
+    f = 0
+    while (m[S["hScene"]] != 0 or f < 400) and f < 6000:
+        pb.tick(1, False)
+        f += 1
+    pb.tick(240, False)
+    tap("down")
+    pb.tick(20, False)
+    tap("right")
+    for k, ch in enumerate("1357924680"):
+        for _ in range(int(ch)):
+            tap("right")
+        if k == 9:
+            pb.button_press("select"); pb.tick(4, False)
+        tap("a")
+    pb.button_release("select")
+    pb.tick(300, False)
+    lines, ok, kos = [], m[S["wAw"]] == 1, 0
+    lines.append(f"    {'✓' if ok else '✗'} 135 792 4680: {names[m[S['hScene']]]}, the circuit {'on' if m[S['wAw']] else 'off'}")
+    game, bot.Game = bot.Game, lambda *a, **k: g
+    try:
+        for k, who in enumerate(order):
+            scene = names.index(f"Fight: {who}")
+            r = bot.play(rom, scene)
+            kos += r["won"] and r["result"] in (0xFC, 0xFE)
+            rec = _record(g)
+            nxt = m[S["wRecNext"]]
+            good = r["won"] and rec == (k + 1, 0, kos)
+            ok = ok and good
+            lines.append(f"    {'✓' if good else '✗'} {names[scene]}: {'won' if r['won'] else 'lost'}, record {rec[0]}-{rec[1]} "
+                         f"{rec[2]}KO, next {names[nxt] if nxt < len(names) else nxt}")
+            if not good:
+                return False, lines
+        seen, held = [], 0                      # then Mike Tyson's word with the time, the portraits, THE END held
+        for t in range(20000):
+            sc = names[g.hram("hScene")]
+            if not seen or seen[-1] != sc:
+                seen.append(sc)
+            held = held + 1 if sc == "The end" else 0
+            if held > 600:
+                break
+            g.hold(["start"] if t % 120 < 3 else [])
+            g.tick(False)
+        good = held > 600
+        ok = ok and good
+        lines.append(f"    {'✓' if good else '✗'} the ending: {len([s for s in seen if s.startswith('Ending')])} portraits, THE END, held")
+    finally:
+        bot.Game = game
+    return ok, lines
+
+
 def beat_mac(rom, only=None):
     """Each opponent beats Mac standing still, as the NES game's do (its, recorded: tests/nes_reference.json
     idle_losses): counted out ($FD), his states those of the NES's (taunts with them), on to the fight the NES goes
@@ -665,6 +728,7 @@ def run(log=print, only=None):
               "original_flow": "The original Game Boy, into the fight and the corner",
               "nes_keys": "The title's pass keys, as the NES takes them", "nes_flows": "Starts, losses, title fights, the ending, as the NES's",
               "another_world_won": "The Another World Circuit won through, as the NES's",
+              "another_world_played": "The Another World Circuit, played through by the bot",
               "beat_mac": "Every opponent beats a still Mac, as the NES's",
               "tells": "The crowd's tells, used by the bot as the NES's"}
     if only:
