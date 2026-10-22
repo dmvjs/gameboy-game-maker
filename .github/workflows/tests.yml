@@ -32,7 +32,7 @@ jobs:
 
   career:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150         # (the whole game, bot-played: about 80 on a hosted runner)
     strategy:
       fail-fast: false
       matrix:
