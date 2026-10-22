@@ -81,6 +81,12 @@ def _pick_release(version):
     for v, r in releases:
         if v == wanted[0]:
             return v, r
+    try:                                    # (the list can come back short or empty: that release asked for by name)
+        r = json.loads(_get(f"https://api.github.com/repos/gbdev/rgbds/releases/tags/v{deps.fmt_version(wanted[0])}"))
+        if r.get("assets"):
+            return wanted[0], r
+    except (InstallError, ValueError):
+        pass
     raise InstallError(f"RGBDS v{version} isn't a published release.")
 
 
