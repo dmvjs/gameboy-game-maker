@@ -34,7 +34,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m gbstage install rgbds
+      - id: rgbds
+        uses: actions/cache@v4      # (RGBDS once, not downloaded by every job)
+        with:
+          path: ~/.gbstage
+          key: gbstage-rgbds-${{ runner.os }}-${{ hashFiles('gbstage/install.py', 'gbstage/deps.py') }}
+      - if: steps.rgbds.outputs.cache-hit != 'true'
+        run: python -m gbstage install rgbds
         env:
           GITHUB_TOKEN: ${{ github.token }}   # (its API calls: many jobs at once pass the anonymous limit)
       - run: python tools/fight_videos.py rom fights.gbc

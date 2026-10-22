@@ -28,15 +28,20 @@ def _get(url, accept=None):
     token = os.environ.get("GITHUB_TOKEN")
     if token and "api.github.com" in url:
         headers["Authorization"] = f"Bearer {token}"
-    try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as r:
-            return r.read()
-    except urllib.error.HTTPError as e:
-        if e.code == 403 and "api.github.com" in url:
-            raise InstallError("GitHub API rate limit hit. Wait an hour or set GITHUB_TOKEN.")
-        raise InstallError(f"Download failed ({e.code}): {url}")
-    except urllib.error.URLError as e:
-        raise InstallError(f"Couldn't reach {url}: {e.reason}. Check your internet connection.")
+    import time
+    for attempt in range(5):                # (busy servers, many installs at once: a few tries, waiting longer each)
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as r:
+                return r.read()
+        except urllib.error.HTTPError as e:
+            if e.code not in (403, 429, 500, 502, 503, 504) or attempt == 4:
+                if e.code == 403 and "api.github.com" in url:
+                    raise InstallError("GitHub API rate limit hit. Wait an hour or set GITHUB_TOKEN.")
+                raise InstallError(f"Download failed ({e.code}): {url}")
+        except urllib.error.URLError as e:
+            if attempt == 4:
+                raise InstallError(f"Couldn't reach {url}: {e.reason}. Check your internet connection.")
+        time.sleep(5 * 2 ** attempt)
 
 
 def _platform_asset_matcher():
