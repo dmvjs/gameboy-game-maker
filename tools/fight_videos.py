@@ -96,6 +96,8 @@ def record(rom, key, out, grey=False):
         if down and not state.get("down"):
             state["ko"] = state["n"]        # (his last knockdown's first frame: where the preview's built round)
         state["down"] = down
+        if "tell" not in state and self.hram("hScene") == scene and (self.nes(0x46) == 1 or (grey and key == "tyson" and self.m[self.S["wNesCue"]])):
+            state["tell"] = state["n"]      # (his first tell, the crowd's or, on the original, his warning: the preview's)
         state["n"] += 1
 
     def stop(self):
@@ -104,6 +106,13 @@ def record(rom, key, out, grey=False):
         ostop(self)
 
     bot.Game.tick, bot.Game.stop = tick, stop
+    ohold = bot.Game.hold
+    if key == "bull":                       # (his camera flash comes only in his charge: the bot holds its punches,
+        def hold(self, buttons):            #  dodging and blocking, till he's charged, so the video has it)
+            if "tell" not in state and state["n"] < 60 * FPS:
+                buttons = [b for b in buttons if b not in ("a", "b")]
+            ohold(self, buttons)
+        bot.Game.hold = hold
     if grey:                                # as a real one boots (A = $01; PyBoy gives $11)
         oinit = bot.Game.__init__
 
@@ -112,7 +121,10 @@ def record(rom, key, out, grey=False):
             S, B = bot._symbols(rom)
             self.pb.hook_register(B["Start"], S["Start"], lambda _: setattr(self.pb.register_file, "A", 1), None)
         bot.Game.__init__ = init
-    r = bot.play(rom, scene, sound=True, cgb=not grey)
+    try:
+        r = bot.play(rom, scene, sound=True, cgb=not grey)
+    finally:
+        bot.Game.hold = ohold
     video.stdin.close()
     video.wait()
     wav.close()
@@ -121,6 +133,8 @@ def record(rom, key, out, grey=False):
     gif = str(Path(out).with_suffix(".gif"))
     ko = state.get("ko", state["n"]) / FPS  # the run-up to his last knockdown and his fall: the fight's best seconds
     start = max(0.0, ko - PREVIEW[1] + PREVIEW[0])
+    if "tell" in state:                     # (a fight with a tell: the seconds round it instead, so it shows)
+        start = max(0.0, state["tell"] / FPS - PREVIEW[1] / 2)
     subprocess.run([ff, "-y", "-loglevel", "error", "-ss", f"{start:.2f}", "-t", str(PREVIEW[1]), "-i", tmp + ".mp4",
                     "-vf", "fps=30,scale=320:288:flags=neighbor,split[a][b];[a]palettegen=max_colors=64[p];"
                     "[b][p]paletteuse=dither=none", gif], check=True)
