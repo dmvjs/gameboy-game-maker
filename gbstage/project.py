@@ -375,6 +375,14 @@ def _dmg_greys(s, greys):
     return [(tl, cd) for tl, cd in owner.items() if cd is not None]
 
 
+CUES = {        # the NES's crowd tells by cue byte: the cell column on ours (its NES screen x, scaled), the NES tile's
+    # top rows moving and at rest (bank 7 $8A13: 2 $2132 $E9/$F1, 6 $253E $3C/$F5, 10 $212E $3B/$F9)
+    2: (17, None, None),                                                    # x 225: a camera flashes (Bald Bull)
+    6: (5, ["10000011", "00000001", "01111100", "11010110"],                 # x 65: the bearded man ducks
+        ["10000011", "01111101", "01010100", "01111100"]),
+    10: (15, ["00111001", "01111101", "11010110", "10000010"],               # x 193: the man in shades reacts
+         ["00111001", "01111101", "10000010", "10010010"]),
+}
 OVERLAY_TILE0 = 2                   # the close-ups' sprites: tiles and OAM entries from 2 (0-1: a menu's cursor)
 
 
@@ -1161,6 +1169,7 @@ def _nes_fighter(nes, where, errors):
         pictures = {"poses": pp, "places": {k: tuple(v) for k, v in pl.items()}, **({"next": nx} if nx else {}),
                     **({"jewel": {k: tuple(v) for k, v in gem.items()}} if gem else {})}
     return {"bank": bank, "offset": offset, "frames": frames, "places": places, "home": home, "scale": float(scale),
+            "eyes": bool(nes.get("eyes")),      # (the original: his eyes' whites white, over the crowd too)
             **({"pictures": pictures, "frame_names": {str(k): v for k, v in (nes.get("frames") or {}).items()}}
                if pictures else {}),
             **({"tell": {"frame": tell["frame"], "state": tell["state"], "color": tell["color"]}} if tell else {}),
@@ -2048,6 +2057,37 @@ def _fight_compose_tiles(scene, tile_of):
     if rope:                                    # the rope row's tiles, always in video memory (its own map row)
         scene["fight_rope_tiles"] = [tile_of(tuple(rope["pixels"][y * W + c * CELL + x] for y in range(CELL) for x in range(CELL)))
                                      for c in range(CW)]
+        cue = _nes_cue(ft)
+        if cue is not None:                     # Punch-Out!!'s crowd tell (its fighter's script's $46, NES bank 7 $8A2A)
+            col, on, off = CUES[cue]
+            cell = lambda c: [rope["pixels"][y * W + c * CELL + x] for y in range(CELL) for x in range(CELL)]
+            def drawn(rows):                    # (the NES tile's top 4 rows: the rope row's lines 4-7, its man on the
+                px = cell(col)                  #  dark, 1:1 as the crowd)
+                for y, row in enumerate(rows):
+                    for x, ch in enumerate(row):
+                        px[(4 + y) * CELL + x] = 1 if ch == "1" else 3
+                return px
+            if off is None:                     # the camera: a white plus on our own tile
+                lit = cell(col)
+                for x, y in ((6, 5), (5, 6), (6, 6), (7, 6), (6, 7)):
+                    lit[y * CELL + x] = 0
+            else:                               # a spectator: his NES tile, at rest and moving
+                lit = drawn(on)
+                scene["fight_rope_tiles"][col] = tile_of(tuple(drawn(off)))
+            scene["fight_cue"] = (col, tile_of(tuple(lit)))
+
+
+def _nes_cue(ft):
+    """The fight's crowd tell: its fighter's cue byte ($05BE: his data block's, NES bank 7 $8A2A's table), if a
+    tell ($46 set by his script: Bald Bull's charge, Piston Honda's rush, Super Macho Man's spin)."""
+    nes = ft.get("nes") or {}
+    if not nes.get("bank") or nes.get("cue") is False:
+        return None
+    import base64
+    b, off = nes["bank"], nes.get("offset", 0)
+    b = base64.b64decode(b) if isinstance(b, str) else bytes(b)
+    p = (b[0x0E + off] | b[0x0F + off] << 8) - 0x8000
+    return b[p + 0x1E] if 0 <= p < len(b) - 0x20 and b[p + 0x1E] in CUES else None
 
 
 def _head_keys(keys, pose, blank):
@@ -2079,7 +2119,8 @@ def _fight_swap(scene):
     if (scene["fight"].get("nes") or {}).get("pictures"):     # his NES pictures, on both machines: none of his poses'
         mat = tiles[scene["cell_tiles"][min(region)]]          # tiles kept (every pose his area's mat)
         keys = {pose: [mat] * len(k) for pose, k in keys.items()}
-    scene_keys = [tiles[t] for t in scene["cell_tiles"]] + [tiles[t] for t in scene["fight_lut"]] + [tiles[scene["fight_flash_tile"]]]
+    scene_keys = [tiles[t] for t in scene["cell_tiles"]] + [tiles[t] for t in scene["fight_lut"]] + [tiles[scene["fight_flash_tile"]]] \
+        + ([tiles[scene["fight_cue"][1]]] if scene.get("fight_cue") else [])
     scene_keys += [tiles[t] for t in scene.get("fight_rope_tiles", [])]
     always = list(scene_keys)
     for pose, k in keys.items():
@@ -2088,7 +2129,7 @@ def _fight_swap(scene):
     high = []                                           # the always-there poses' top rows (sprites reach them)
     if rope:                                            # (the screen's own tiles: his area's aside, his pose's)
         sk = {tiles[t] for c, t in enumerate(scene["cell_tiles"]) if c not in region}
-        sk |= {tiles[t] for t in scene["fight_lut"]} | {tiles[scene["fight_flash_tile"]]}
+        sk |= {tiles[t] for t in scene["fight_lut"]} | {tiles[scene["fight_flash_tile"]]} | ({tiles[scene["fight_cue"][1]]} if scene.get("fight_cue") else set())
         sk |= {tiles[t] for t in scene.get("fight_rope_tiles", [])}
         for pose in keys:
             if pose not in in_set:
@@ -2135,8 +2176,12 @@ def _fight_swap(scene):
     scene["cell_tiles"] = [base_index.get(tiles[t], high_index.get(tiles[t])) for t in scene["cell_tiles"]]
     scene["fight_lut"] = [base_index[tiles[t]] for t in scene["fight_lut"]]
     scene["fight_flash_tile"] = base_index[tiles[scene["fight_flash_tile"]]]
+    if scene.get("fight_cue"):
+        scene["fight_cue"] = (scene["fight_cue"][0], base_index[tiles[scene["fight_cue"][1]]])
     if rope:
         scene["fight_rope_tiles"] = [base_index[tiles[t]] for t in scene["fight_rope_tiles"]]
+        if scene.get("fight_cue"):
+            scene["fight_cue_old"] = scene["fight_rope_tiles"][scene["fight_cue"][0]]
         scene["fight_blank"] = base_index[blank]
     scene["fight_swap"] = {"first": first, "count": size, "sets": [padded[n] for n in ("attack", "knockdown", "special")],
                            "sizes": {n: len(own) for n, own in sets.items()}}
@@ -2183,6 +2228,7 @@ def _fight_cgb(scene):
     region = {(ft["y"] + r) * CW + ft["x"] + c for r in range(kit.REGION_H) for c in range(kit.REGION_W)}
     keep = {0} | {t for c, t in enumerate(scene["cell_tiles"]) if c not in region}   # tile 0, the rows' padding),
     keep |= set(scene["fight_lut"]) | {scene["fight_flash_tile"]} | set(scene.get("fight_rope_tiles", []))   # the
+    keep |= {scene["fight_cue"][1]} if scene.get("fight_cue") else set()
     free0 = [t for t in range(256) if t not in keep]  # HUD's, the camera flash's, the rope row's; the rest his: the
     rope = ft.get("rope_row")                          # original's poses go (Color draws its own)
     blank = cell_key(scene["composed"], min(region)) if rope else None
@@ -2381,6 +2427,24 @@ def _fight_pics(scene):
     scene["fight_pics"] = out
 
 
+def _face_whites(rgb, W, H):
+    """A picture's eyes' (and teeth's) whites: {pixel index}. A light pixel with few others of its kind near (both eyes,
+    not his trunks: at most 8 in the 5x5 round it) and no
+    glove's red beside it (not his trunks, nor a glove's shine). rgb(i): its color (0-31 a channel), None: none."""
+    lum = lambda c: (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) / 31
+    red = lambda c: c is not None and c[1] < 0.4 * c[0] and c[2] < 0.4 * c[0]
+    light = {i for i in range(W * H) if rgb(i) is not None and lum(rgb(i)) >= 0.8}
+    def near(i, j, k):
+        y, x = divmod(i, W)
+        return 0 <= y + j < H and 0 <= x + k < W and (y + j) * W + x + k
+    out = set()
+    for i in light:
+        n = sum(1 for j in range(-2, 3) for k in range(-2, 3) if near(i, j, k) is not False and near(i, j, k) in light)
+        if n <= 8 and not any(near(i, j, k) is not False and red(rgb(near(i, j, k))) for j in (-1, 0, 1) for k in (-1, 0, 1)):
+            out.add(i)
+    return out
+
+
 def _grey_shades(scene, beta=3.0):
     """The original Game Boy: each color of his pictures (wherever it's used) to a grey, 1-3 (0 the mat, white):
     of every assignment, the one keeping brightness best (by use) while telling touching areas apart (by how much
@@ -2444,6 +2508,8 @@ def _fight_pics_dmg(scene):
     for key in order:
         v = pics[key]
         px, cells = v["pixels"], v["cells"]
+        rgb = lambda i: color[(cells[(i // W // CELL) * kit.REGION_W + (i % W) // CELL], int(px[i]))] if px[i] != "0" else None
+        eyes = _face_whites(rgb, W, kit.REGION_H * CELL) if ft["nes"].get("eyes") else set()
         cell_tiles = []
         for r in range(kit.REGION_H):
             for c in range(kit.REGION_W):
@@ -2451,22 +2517,41 @@ def _fight_pics_dmg(scene):
                 t = []
                 for y in range(CELL):
                     for x in range(CELL):
-                        sl = int(px[(r * CELL + y) * W + c * CELL + x])
-                        t.append(grey.get(color[(kind, sl)], 3) if sl else 0)
+                        i = (r * CELL + y) * W + c * CELL + x
+                        sl = int(px[i])         # (his eyes' whites: the mat's white, 0, in his band; over the crowd, a
+                        t.append(0 if i in eyes else grey.get(color[(kind, sl)], 3) if sl else 0)   # sprite of their own)
                 cell_tiles.append(tuple(t))
         rows = kit.HEAD_ROWS_TALL         # (any picture can rise into the crowd: his get-up, his walk-in)
+        whites = {}                       # (his top rows' cells with an eye's white: its white as a sprite, OBP1's 1)
+        for i in range(rows * kit.REGION_W):
+            r, c = divmod(i, kit.REGION_W)
+            t = tuple(1 if (r * CELL + y) * W + c * CELL + x in eyes else 0 for y in range(CELL) for x in range(CELL))
+            if any(t):
+                whites[i] = t
+        heads = [(i // kit.REGION_W * CELL, i % kit.REGION_W * CELL, cell_tiles[i], 0)
+                 for i in range(rows * kit.REGION_W) if any(cell_tiles[i])]
+        per_row = collections.Counter(dy for dy, _, _, _ in heads)
+        for i, t in sorted(whites.items()):             # (each row's sprites at most 10: his alone up there)
+            dy = i // kit.REGION_W * CELL
+            if per_row[dy] < 10:
+                heads.append((dy, i % kit.REGION_W * CELL, t, 0x10))
+                per_row[dy] += 1
+        heads.sort(key=lambda h: h[0])                  # (top row first: FtHeadSprites stops at his band)
         own = []
-        for t in cell_tiles[:rows * kit.REGION_W] + cell_tiles:     # (his top rows' first)
+        for t in cell_tiles[:rows * kit.REGION_W] + [h[2] for h in heads] + cell_tiles:     # (his top rows' first)
             if t not in own:
                 own.append(t)
+        if len(own) > PIC_ROOM:                         # (no room for the whites' own: without them)
+            heads = [h for h in heads if not h[3]]
+            own = [t for t in own if t in cell_tiles]
         if len(own) > PIC_ROOM:
             raise ProjectError([f'Scene "{scene["name"]}": the rival\'s NES picture {key} has {len(own)} tiles in greys; '
                                 f"a picture can have {PIC_ROOM}."])
         local = {t: n for n, t in enumerate(own)}
         out["tiles"].append(own)
         out["maps"].append([PIC_BASE + local[t] for t in cell_tiles])
-        out["heads"].append([(i // kit.REGION_W * CELL, i % kit.REGION_W * CELL, PIC_BASE + local[cell_tiles[i]])
-                             for i in range(rows * kit.REGION_W) if any(cell_tiles[i])])
+        out["heads"].append([(dy, dx, PIC_BASE + local[t], a) for dy, dx, t, a in heads])
+        out["white"] = out.get("white", False) or any(a for _, _, _, a in heads)
     scene["fight_pics_dmg"] = out
 
 

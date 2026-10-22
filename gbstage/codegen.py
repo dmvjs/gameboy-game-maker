@@ -170,7 +170,7 @@ def _overlay_anim(s):
     return "".join(out)
 
 
-def _obp1(scenes):
+def _obp1(scenes, fights=False):
     """OBP1 at a fade step (A: BGP's): the same; or white for 1 (a scene's close-up sprites up on the original), or
     the lightest grey for 2 (a fight: the referee's shirt and words, the NES's white over its blue mat, on the
     original's white one), or each a shade darker (3: a cutscene's dark sprites, the training run's Doc and bike)."""
@@ -211,7 +211,7 @@ def _obp1(scenes):
     or c
 .obp1:
     ldh [rOBP1], a
-"""
+""" + ("    ldh [hFtObp1], a\n" if fights else "")
 
 
 def _ft_words(s):
@@ -331,6 +331,23 @@ CycleVBlank:
     ld [wCycOn], a
     ret
 """
+
+
+def _cue_src(s):
+    """The original Game Boy, a rival's dodge cue: his black turns the grey (1 or 2) that touches it least in his grey
+    pictures, so the outline stands out from what it outlines (BGP shade source: 1's at 2, 2's at 4)."""
+    d = s.get("fight_pics_dmg")
+    if not d:
+        return 4
+    touch = [0] * 4
+    for tiles in d["tiles"]:
+        for t in tiles:
+            for i, v in enumerate(t):
+                if v == 3:
+                    for j in (i - 1 if i % 8 else None, i + 1 if i % 8 < 7 else None, i - 8, i + 8):
+                        if j is not None and 0 <= j < 64:
+                            touch[t[j]] += 1
+    return 2 if touch[1] < touch[2] else 4
 
 
 def _knee(x):
@@ -2258,7 +2275,9 @@ def _fight_entry(i, s, index_of, suffix, all_pics=False, career=None):
             f"    db {f'BANK(RivalHeads{suffix})' if ft.get('rope_row') and not all_pics else '0'}\n"
             f"    db {f'BANK(PicHeader{suffix})' if s.get('fight_pics') else '0'}\n"
             f"    db {f'BANK(PicHeaderDmg{suffix})' if s.get('fight_pics_dmg') and s.get('fight_pics') else '0'}\n"
-            f"    db {', '.join(str(v) for v in (career or (0, 255, 255, 255, 255, 0, 255, 255)))}")
+            f"    db {', '.join(str(v) for v in (career or (0, 255, 255, 255, 255, 0, 255, 255)))}\n"
+            f"    db {s['fight_cue'][1] if s.get('fight_cue') else 0}, {s['fight_cue_old'] if s.get('fight_cue') else 0}, "
+            f"{s['fight_cue'][0] if s.get('fight_cue') else 0}")
 
 
 def _heads_data(s, suffix):
@@ -2672,6 +2691,8 @@ RivalPalNormal:
     dw {", ".join(_rgb555(project["palettes"][k]).split(", ")[j] for k in rival_pals for j in range(4))}
 RivalPalFlash:              ; a hit flushes him red; the background and outline stay
     dw {", ".join(_rgb555([c if j in (0, 3) else ([31, 16, 12] if j == 1 else [26, 4, 4]) for j, c in enumerate(project["palettes"][k])]).split(", ")[j] for k in rival_pals for j in range(4))}
+RivalCueSrc:                ; the original, his dodge cue: his black as 1's grey (2) or 2's (4), what touches it least
+    db {_cue_src(s)}
 RivalCueOutline:            ; per palette of his: which color is his outline ($FF: none), for his dodge cue
     db {", ".join("$FF" if o is None else str(o) for o in cue_outline + [None] * (8 - len(cue_outline)))}
 NesRgb:                     ; the NES's colors as Color ones: his dodge cue's outline, by its number ($05EC)
@@ -2815,7 +2836,7 @@ ASSERT PicHeader{suffix} == $4000
         entries = "\n".join(f"    dw {lab(k)}\n    db BANK({lab(k)}), {max(1, len(dpics['tiles'][k]))}\n    dw PicHeadDmg{suffix}_{k}"
                             for k in range(n))
         heads = "\n".join(f"PicHeadDmg{suffix}_{k}:\n    db {len(dpics['heads'][k])}" + "".join(
-            f"\n    db {dy}, {dx}, {t}, 0" for dy, dx, t in dpics["heads"][k]) for k in range(n))
+            f"\n    db {dy}, {dx}, {t}, ${a:02X}" for dy, dx, t, a in dpics["heads"][k]) for k in range(n))
         body = []
         for k in range(n):
             tb = [b for t in dpics["tiles"][k] for b in encode_tile(list(t))] or [0] * 16
@@ -4066,6 +4087,9 @@ def generate_asm(project):
         hram += ["hFtActive: db", "hFtHudReady: db", "hFtScx: db", "hFtBandX: db", "hFtBandY: db", "hFtBandTop: db", "hFtBandGap: db", "hFtBandBottom: db", "hFtBandOn: db", "hFtShowX: db", "hFtShowY: db", "hFtShowBottom: db", "hFtOamBuild: db", "hFtOamShown: db", "hFtFlash: db",
                  "hFtFlashShown: db", "hFtPalLate: db          ; (his palettes missed VBlank: the next frame's top lines, above him)", "hFtHeadN: db            ; (his top rows' sprites to go)",
                  "hFtPlY: db              ; (Mac's sprites: y, x, tiles' copy)", "hFtPlX: db", "hFtPlTile: db",
+                 "hFtCueSrc: db           ; (the original) his dodge cue: 0 none, else 2/4, the shade his black takes (1's, 2's)",
+                 "hFtCueOn: db            ; (its BGP up in his band: bit 0; OBP0 over his top rows: bit 1)", "hFtBgp: db", "hFtObp: db",
+                 "hFtObp1: db             ; (the original) OBP1 below his top rows, as the fade has it",
                  "hOAMDMA: ds 8           ; OAM DMA routine (runs from HRAM)"]
         if any((scenes[i]["fight"].get("nes") or {}).get("sound") for i in fights):
             hram += ["hNesSound: db           ; nonzero: the NES's sound engine has the sound hardware"]
@@ -4324,7 +4348,7 @@ DEF FADE_FRAMES EQU {fade['frames'] if fade else 1}
 DEF BLINK_FRAMES EQU {BLINK_FRAMES}
 DEF LCDC_ON EQU %{lcdc:08b}
 {SLIDE_DEFS if slides else ""}
-{"DEF FT_LOAD_ON EQU 1           ; fights load with the display on, on Color (VWait)" + nl if fight_on else ""}{"DEF FT_ALL_PICS EQU 1          ; every fight's rival in pictures, Color's and the original's: no pose sets" + nl if fights and all(scenes[i].get("fight_pics") and scenes[i].get("fight_pics_dmg") for i in fights) else ""}{"DEF FT_NES_SOUND EQU 1         ; the fight's NES sound engine plays the game's sounds" + nl if nes_sound_any else ""}; joypad bits in hPad / hPadNew (d-pad in the high nibble)
+{"DEF FT_LOAD_ON EQU 1           ; fights load with the display on, on Color (VWait)" + nl if fight_on else ""}{"DEF FT_ALL_PICS EQU 1          ; every fight's rival in pictures, Color's and the original's: no pose sets" + nl if fights and all(scenes[i].get("fight_pics") and scenes[i].get("fight_pics_dmg") for i in fights) else ""}{"DEF FT_NES_SOUND EQU 1         ; the fight's NES sound engine plays the game's sounds" + nl if nes_sound_any else ""}{"DEF FT_DMG_WHITE EQU 1         ; the original: his eyes' whites over the crowd, OBP1's 1 white above the lower sprites" + nl if any((scenes[i].get("fight_pics_dmg") or {}).get("white") for i in fights) else ""}; joypad bits in hPad / hPadNew (d-pad in the high nibble)
 DEF PAD_A EQU 0
 DEF PAD_B EQU 1
 DEF PAD_START EQU 3
@@ -4608,7 +4632,7 @@ UploadPalettes:
     ld h, a
     ld a, [hl]
     ldh [rBGP], a
-{'    ldh [rOBP0], a' + nl if sprites else ''}{_obp1(scenes) if fights else ''}    ret
+{'    ldh [rOBP0], a' + nl if sprites else ''}{_obp1(scenes, fights=True) if fights else ''}    ret
 
 {'SECTION "Data: Palettes", ROMX' + nl if banked else ""}ScenePalettes:
     dw {", ".join(f"Scene{i}Palettes" for i in range(len(scenes)))}

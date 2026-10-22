@@ -1638,7 +1638,9 @@ SODA_FROM_NES = dict(idle="C0", idle2="C4", idle3="C2", guard="08", guard_low="0
 # The rivals after Joe, from their NES fights: opponent number, fighter bank (and offset), frames, and the game's
 # nth fight (where their tiles are measured).
 NES_RIVALS = {
-    "joe": dict(name="Glass Joe", opp=0, bank=0, offset=0x00, frames=NES_FRAMES, canon=JOE_FROM_NES, nth=0, pictures=True),
+    "joe": dict(name="Glass Joe", opp=0, bank=0, offset=0x00, frames=NES_FRAMES, canon=JOE_FROM_NES, nth=0, pictures=True,
+                lines=False, eyes=True),   # (his face's fine strokes voted down, not lines dropped through his eyes;
+                                           #  the original: his eyes' whites white)
     "kaiser": dict(name="Von Kaiser", opp=1, bank=2, offset=0x00, frames=KAISER_FRAMES, canon=KAISER_FROM_NES, nth=1, pictures=True),
     "honda": dict(name="Piston Honda", opp=2, bank=5, offset=0x30, frames=HONDA_FRAMES, canon=HONDA_FROM_NES, nth=2, pictures=True),
     "don": dict(name="Don Flamenco", opp=3, bank=0, offset=0x10, frames=DON_FRAMES, canon=DON_FROM_NES, nth=3, pictures=True),
@@ -1851,18 +1853,136 @@ def picture_places(frames, s, shapes):
     return {k: [rx - x, ry - y] for k, (x, y) in found.items() if (rx - x, ry - y) != (0, 0)}
 
 
+TOUCHUPS = HERE / "touchups"            # hand touch-ups of a rival's pictures (touchup.py writes and checks them)
+
+
+def frame_hash(fr):
+    """A picture's pixels' hash: what a touch-up was drawn over (it's applied only over that same picture)."""
+    import hashlib
+    return hashlib.sha1("".join(",".join(map(str, c[:3])) if c else "-" for row in fr for c in row).encode()).hexdigest()[:16]
+
+
+def touchup_name(key):
+    return key.replace("|", "m")
+
+
+def read_touchup(path):
+    """(the auto picture's hash, the touched-up picture) from a touch-up file: '#' comments, 'auto HASH', 'legend
+    .=- K=r,g,b ...', then the picture's rows, a character a pixel."""
+    auto, legend, rows = None, {}, []
+    for line in path.read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("auto "):
+            auto = line.split()[1]
+        elif line.startswith("legend "):
+            for item in line.split()[1:]:
+                ch, v = item.split("=")
+                legend[ch] = None if v == "-" else tuple(map(int, v.split(","))) + (255,)
+        else:
+            rows.append([legend[ch] for ch in line])
+    return auto, rows
+
+
+def apply_touchups(key, frames):
+    """A rival's hand touch-ups (touchups/KEY/FRAME.txt) put in, each only over the auto picture it was drawn on:
+    one whose auto picture has changed since is left out, and said so (redo it: touchup.py)."""
+    d = TOUCHUPS / key
+    if not d.exists():
+        return frames
+    out = dict(frames)
+    for path in sorted(d.glob("*.txt")):
+        k = path.stem.replace("m", "|") if path.stem.endswith("m") else path.stem
+        if k not in frames:
+            print(f"  touch-up {path.name}: no picture {k}")
+            continue
+        auto, rows = read_touchup(path)
+        if auto != frame_hash(frames[k]):
+            print(f"  touch-up {path.relative_to(HERE)} is stale (its auto picture changed): not applied -- redo it")
+            continue
+        out[k] = rows
+    return out
+
+
+WHITE_DEAR = 20                         # (an eye's white lost: as dear as this many of its distance in other colors)
+
+
+def _small_whites(fr):
+    """A picture's small bright features in his face: eyes' whites, teeth (a light pixel with few others of its kind
+    near, none of a glove's red beside it: not his trunks, nor a glove's shine, which its red keeps)."""
+    lum = lambda c: 2 * c[0] + 4 * c[1] + c[2]
+    red = lambda c: c and c[1] < 0.4 * c[0] and c[2] < 0.4 * c[0]
+    H, W = len(fr), len(fr[0])
+    at = lambda x, y: fr[y][x] if 0 <= x < W and 0 <= y < H else None
+    light = {(x, y) for y in range(H) for x in range(W) if fr[y][x] and lum(from8(fr[y][x][:3])) >= 200}
+    return {(x, y) for x, y in light
+            if sum((x + i, y + j) in light for i in range(-2, 3) for j in range(-2, 3)) <= 4
+            and not any(red(at(x + i, y + j)) for i in (-1, 0, 1) for j in (-1, 0, 1))}
+
+
+def align_pictures(frames, palettes, reach=7):
+    """Each picture moved (up to `reach` pixels, its art kept whole in its frame) to where his colors fit his
+    palettes best: a tile can't hold four colors and the mat, so where a tile's edges fall decides whether, say,
+    an eye's white and the hair beside it share one (and the white's lost). Its tiles never more than before, so
+    nothing more to stream; picture_places finds where he sits in it after, so on screen he's where he was.
+    -> (frames, {key: (dx, dy) moved})"""
+    import numpy as np
+    pal = np.array([[c[:3] for c in p] for p in palettes], dtype=float)
+    out, moved = {}, {}
+    for key, fr in frames.items():
+        mask = np.array([[c is not None for c in row] for row in fr])
+        if not mask.any():
+            out[key] = fr
+            continue
+        rgb = np.array([[from8(c[:3]) if c else (0, 0, 0) for c in row] for row in fr], dtype=float)
+        small = np.zeros(mask.shape, bool)
+        for x, y in _small_whites(fr):
+            small[y, x] = True
+        errs = []
+        for p in pal:                   # (each pixel's cost in this palette: its colors 1-3; eyes' whites dear)
+            d = np.min([((rgb - p[k]) ** 2).sum(-1) for k in (1, 2, 3)], axis=0)
+            errs.append(np.where(mask, d * np.where(small & (d > 0), WHITE_DEAR, 1), 0))
+        errs = np.array(errs)
+        ys, xs = np.where(mask)
+        H, W = mask.shape
+        def score(sx, sy):
+            e = np.zeros((len(pal), H + 16, W + 16))
+            e[:, 8 + sy:8 + sy + H, 8 + sx:8 + sx + W] = errs
+            m = np.zeros((H + 16, W + 16), bool)
+            m[8 + sy:8 + sy + H, 8 + sx:8 + sx + W] = mask
+            e, m = e[:, 8:8 + H, 8:8 + W], m[8:8 + H, 8:8 + W]
+            t = e.reshape(len(pal), H // 8, 8, W // 8, 8).sum((2, 4)).min(0)
+            n = m.reshape(H // 8, 8, W // 8, 8).any((1, 3)).sum()
+            return t.sum(), n
+        base, tiles = score(0, 0)
+        best = (base, 0, 0)
+        for sy in range(-reach, reach + 1):
+            for sx in range(-reach, reach + 1):
+                if ys.min() + sy < 0 or ys.max() + sy >= H or xs.min() + sx < 0 or xs.max() + sx >= W:
+                    continue
+                t, n = score(sx, sy)
+                if n <= tiles and t < best[0]:
+                    best = (t, sx, sy)
+        _, sx, sy = best
+        moved[key] = (sx, sy)
+        out[key] = [[fr[y - sy][x - sx] if 0 <= y - sy < H and 0 <= x - sx < W else None for x in range(W)] for y in range(H)]
+    return out, moved
+
+
 def import_pictures(frames, palettes):
     """The pictures in his own palettes (the poses'): {key: {"pixels", "cells"}} as import_rival gives poses."""
     def near(c, pal):
         return min((1, 2, 3), key=lambda k: dist(c, pal[k]))
     out = {}
     for key, fr in frames.items():
+        small = {y * RW + x for x, y in _small_whites(fr)}   # (an eye's white the palette lacks: dear -- white to pink
         px = [from8(fr[y][x][:3]) if fr[y][x] else None for y in range(RH) for x in range(RW)]   # (as the sheets':
         pix = [0] * (RW * RH); kinds = []                                                         # Color's 5 bits)
         for cy in range(FIGHT_H):
             for cx in range(FIGHT_W):
                 cell = [(cy * 8 + y) * RW + cx * 8 + x for y in range(8) for x in range(8)]
-                errs = [sum(min(dist(px[i], pal[k]) for k in (1, 2, 3)) for i in cell if px[i]) for pal in palettes]
+                errs = [sum(min(dist(px[i], pal[k]) for k in (1, 2, 3)) * (WHITE_DEAR if i in small else 1)
+                            for i in cell if px[i]) for pal in palettes]
                 bp = min(range(len(palettes)), key=lambda k: errs[k])
                 for i in cell:
                     if px[i]:
@@ -2102,10 +2222,17 @@ def rival_art(key, s, colors, pposes, max_share=24):
     if r.get("pictures"):               # Color: every NES picture of his, exact (streamed as he shows it)
         every = joe_shapes(r["opp"], everything=True)
         frames_ = pictures_from_nes(s, every, r["opp"], blank_frames(r["opp"]))
-        art["pictures"] = {"poses": import_pictures(frames_, pals), "places": picture_places(frames_, s, every)}
+        places = picture_places(frames_, s, every)      # (found as drawn, then each picture's move undone: he's
+        drawn = frames_                                 # on screen where he was, the idle one's too)
+        frames_, moved = align_pictures(frames_, pals)
+        frames_ = apply_touchups(key, frames_)           # (hand touch-ups, over the very pictures they were drawn on)
+        places = {k: [x - moved.get(k, (0, 0))[0], y - moved.get(k, (0, 0))[1]]
+                  for k, (x, y) in {k: places.get(k, [0, 0]) for k in frames_}.items()}
+        art["pictures"] = {"poses": import_pictures(frames_, pals), "places": {k: v for k, v in places.items() if v != [0, 0]}}
         if r.get("jewel"):              # (Great Tiger's gem: where each picture shows it, not its pose's)
-            gems = {k: _jewel({(x, y): c for y, row in enumerate(f) for x, c in enumerate(row) if c}) for k, f in frames_.items()}
-            art["pictures"]["jewel"] = {k: [round(g[0]), round(g[1])] for k, g in sorted(gems.items()) if g}
+            gems = {k: _jewel({(x, y): c for y, row in enumerate(f) for x, c in enumerate(row) if c}) for k, f in drawn.items()}
+            art["pictures"]["jewel"] = {k: [round(g[0]) + moved.get(k, (0, 0))[0], round(g[1]) + moved.get(k, (0, 0))[1]]
+                                        for k, g in sorted(gems.items()) if g}     # (found as drawn, moved with it)
         nxt = json.loads(PIC_NEXT.read_text()).get(key) if PIC_NEXT.exists() else None
         if nxt:                         # (the original: the picture likely next, loaded early: pic_next.py)
             art["pictures"]["next"] = {k: v for k, v in nxt.items() if k in frames_ and v[0] in frames_}
@@ -2237,7 +2364,8 @@ def _rival_js(key, art):
                if art.get("pictures") else [])
             + [f"export const {up}_NES = {{ bank: '{base64.b64encode(bank).decode()}', offset: {r['offset']},",
                f"  frames: {json.dumps(r['frames'])}, home: [135, 182], scale: {SCALE_JOE},",
-               f"  places: {json.dumps(art['places'])}" + (f", pictures: {up}_PICTURES" if art.get("pictures") else "") + " };"]
+               f"  places: {json.dumps(art['places'])}" + (f", pictures: {up}_PICTURES" if art.get("pictures") else "")
+               + (", eyes: true" if r.get("eyes") else "") + " };"]
             + ([f"export const {up}_JEWEL = {json.dumps(art['jewels'])};   // his turban's gem: per pose, where (pixels in his area)"]
                if art.get("jewels") else []) + [""])
 

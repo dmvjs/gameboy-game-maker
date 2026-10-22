@@ -209,6 +209,9 @@ wFtWinNext: db              ; won: on to (the win screen's way on)
 wFtAwCareer: db             ; Punch-Out!!'s Another World Circuit (bit 7: in it): its first, its last (CAREER_*);
 wFtAwNext: db               ; won there: on to; lost (a rematch lost): down to
 wFtAwDrop: db
+wFtCueTile: db              ; Punch-Out!!'s crowd tell: its tile moving (0: none), at rest, its column in the rope row
+wFtCueOld: db
+wFtCueCol: db
 wFtFightEnd:
 wRvNesX: db                 ; NES rival: his offset from his place (pixels right, down)
 wRvNesY: db
@@ -223,6 +226,7 @@ wRvPlaceY: db
 wFtFreeze: db               ; hit stop: frames both fighters hold still after a clean hit
 wFtExcite: db               ; frames the crowd's cameras keep flashing
 wFtRand: db
+wFtCue: db                  ; the Bull Charge camera's cell: its tile now (FtCrowdDraw puts it)
 wFtBulbs: ds 4 * 2          ; per flash: map address, the tile it covers, state (0 free, frames left, $FF restore)
 wFtOAMEnd: ds 3             ; per sprite list (wFtOAM, wFtOAM2, wFtOAM3): where it ended last time (slots past it hidden)
 wRvPicPrev: db              ; (the original: the picture shown before the shown one)
@@ -396,6 +400,8 @@ ENDC
     inc de
     dec b
     jr nz, .fight
+    ld a, [wFtCueOld]       ; (the Bull Charge camera: unlit)
+    ld [wFtCue], a
     call FtSwapSetup
     ld a, [wFtBankData]     ; the fight's data stays mapped while it runs
     ld [$2000], a
@@ -584,6 +590,8 @@ ENDC
     ldh [hFtBandGap], a
     ldh [hFtFlash], a       ; (not flashing: his palettes come up with the fade)
     ldh [hFtFlashShown], a
+    ldh [hFtCueSrc], a      ; (nor his cue's greys up: HRAM's random at power-on)
+    ldh [hFtCueOn], a
     ld a, FT_BAND_BOTTOM
     ldh [hFtBandBottom], a
     ldh [hFtShowBottom], a
@@ -678,6 +686,9 @@ ENDC
     dec a
     jp nz, .bottom
 .end:
+IF DEF(FT_NES)
+    call FtCueOff           ; (his cue's greys: his lines only)
+ENDC
     ldh a, [hFtShowY]       ; his band's end: raised (scrolled down), the background below him down to its
     and a                   ; usual end
     jp z, .bottom
@@ -701,6 +712,11 @@ ENDC
     reti
 .top:
 IF DEF(FT_ROPE)
+IF DEF(FT_NES)
+    ldh a, [hFtCueSrc]      ; (the original, his dodge cue: his top rows' sprites too, till they're drawn)
+    and a
+    call nz, .cueObj
+ENDC
     ldh a, [hFtScx]         ; the bottom rope's row (its own map row) over his area's first, his band after
     ldh [rSCX], a
     ld a, FT_ROPE_SCY
@@ -730,6 +746,11 @@ ENDC
     ldh [rSCX], a
     ldh a, [hFtShowY]
     ldh [rSCY], a
+IF DEF(FT_NES)
+    ldh a, [hFtCueSrc]      ; (the original, his dodge cue: his black lighter in his band's lines)
+    and a
+    call nz, .cueBand
+ENDC
 IF DEF(FT_ROPE)
     ld a, FT_DMA_LINE       ; then the lower part's sprites, where none are
     ldh [rLYC], a
@@ -741,6 +762,15 @@ IF DEF(FT_ROPE)
     pop af
     reti
 .dma:                       ; mid-frame: the lower part's 40 sprites in (his top rows' have all been drawn)
+IF DEF(FT_DMG_WHITE)
+    ldh a, [hFtObp1]        ; (OBP1 as the referee's again)
+    ldh [rOBP1], a
+ENDC
+IF DEF(FT_NES)
+    ldh a, [hFtCueOn]       ; (his cue's OBP0 back: Mac's and the referee's below)
+    and 2
+    call nz, .cueObjOff
+ENDC
     ldh a, [hFtOamShown]
     call hOAMDMA
     ldh a, [hFtShowBottom]
@@ -771,8 +801,44 @@ ENDC
     ldh [hFtBandOn], a
     ldh a, [hFtBandTop]
     ldh [rLYC], a
+IF DEF(FT_NES)
+    call FtCueOff
+ENDC
     pop af
     reti
+IF DEF(FT_NES)
+.cueBand:                   ; A = hFtCueSrc: BGP's 3 as its 1's or 2's for his band
+    push bc
+    ld c, a
+    ldh a, [rBGP]
+    ldh [hFtBgp], a
+    call FtCueMap
+    ldh [rBGP], a
+    ldh a, [hFtCueOn]
+    or 1
+    ldh [hFtCueOn], a
+    pop bc
+    ret
+.cueObj:                    ; and OBP0's for his top rows' sprites
+    push bc
+    ld c, a
+    ldh a, [rOBP0]
+    ldh [hFtObp], a
+    call FtCueMap
+    ldh [rOBP0], a
+    ldh a, [hFtCueOn]
+    or 2
+    ldh [hFtCueOn], a
+    pop bc
+    ret
+.cueObjOff:
+    ldh a, [hFtObp]
+    ldh [rOBP0], a
+    ldh a, [hFtCueOn]
+    and ~2
+    ldh [hFtCueOn], a
+    ret
+ENDC
 
 IF DEF(FT_NES)
 ; His palettes in his dodge cue, for VBlank to put up (FtFlashPalettes, 2): each palette's outline
@@ -876,6 +942,57 @@ FtPalDone:
     ret
 
 IF DEF(FT_NES)
+; (VBlank) the original: no palettes of his own, so his dodge cue goes in the screen's greys for his lines only
+; (FtStat): his black as the grey touching it least in his pictures (RivalCueSrc), so it reads. Any left up, back.
+FtCueGrey:
+    call FtCueOff
+    ldh a, [hIsCGB]
+    and a
+    ret nz
+    ld a, [wNesCue]
+    and a
+    jr z, .set
+    ld a, [RivalCueSrc]
+.set:
+    ldh [hFtCueSrc], a
+    ret
+
+; (FtStat, interrupts) his cue's greys taken down, if up. Keeps BC, DE, HL.
+FtCueOff:
+    ldh a, [hFtCueOn]
+    and a
+    ret z
+    rra
+    jr nc, .obj
+    ldh a, [hFtBgp]
+    ldh [rBGP], a
+.obj:
+    ldh a, [hFtCueOn]
+    and 2
+    jr z, .done
+    ldh a, [hFtObp]
+    ldh [rOBP0], a
+.done:
+    xor a
+    ldh [hFtCueOn], a
+    ret
+
+; (FtStat) A = a palette (BGP, OBP0), C = 2 or 4: its 3's shade made its 1's (2) or 2's (4). Keeps DE, HL.
+FtCueMap:
+    ld b, a
+.shift:
+    srl a
+    dec c
+    jr nz, .shift
+    and 3
+    rrca
+    rrca
+    ld c, a
+    ld a, b
+    and $3F
+    or c
+    ret
+
 ; A = 2 while his dodge cue is up (the NES's $C440: his outline in its color, wNesCue), else 0.
 FtTellShown:
     ld a, [wNesCue]
@@ -905,6 +1022,19 @@ DEF FT_PIC_WHOLE EQU 44        ; a picture of up to this many tiles goes up in o
 
 FtVBlank:
 IF DEF(FT_NES)
+    ld a, [wFtCueTile]      ; (the crowd's tell: its cell, first, on the frame it's due, as the NES's)
+    and a
+    jr z, .noCue
+    ld a, [wFtCueCol]
+    ld l, a
+    ld h, HIGH($9800 + 30 * 32)
+    ld a, l
+    add LOW($9800 + 30 * 32)
+    ld l, a
+    ld a, [wFtCue]
+    ld [hl], a
+.noCue:
+    call FtCueGrey          ; (the original: his dodge cue as greys in his lines, the frame's splits')
     call FtDmgSwitch        ; (the original: his next grey picture's rows, before the sprites built for it)
 ENDC
 IF DEF(FT_MAC_PICS)
@@ -913,6 +1043,18 @@ ENDC
 IF DEF(FT_NES)
     call FtPicSwitch        ; (his rival's: before the sprites built for both)
     ld [wFtPicDrew], a
+ENDC
+IF DEF(FT_DMG_WHITE)
+    ldh a, [hFtObp1]        ; (the original: OBP1's 1 the mat's white over his top rows, his eyes' whites; the
+    ld b, a                 ; lower sprites' back at FT_DMA_LINE)
+    and %11110011
+    ld c, a
+    ld a, b
+    and %11
+    add a
+    add a
+    or c
+    ldh [rOBP1], a
 ENDC
     ldh a, [rIE]            ; (the crowd's timer held off through the DMA: mid-DMA the CPU can't fetch from ROM,
     push af                 ; where its handler is; it runs straight after)
@@ -7237,8 +7379,18 @@ FtNesFrame:
     jp FtNesHud
 
 ; The crowd's cameras, as Punch-Out!!'s: flashing while either is down (and on through the count, his KO) and as he
-; walks in.
+; walks in. And the crowd's tells: his script's $46 1 (the moment to punch), the fight's spectator moves (its cue,
+; $05BE: NES bank 7 $8A2A's tile; a camera for Bald Bull, the bearded man for Piston Honda; wFtCue: FtVBlank puts it).
 FtNesCameras:
+    ld a, [wNes + $46]
+    dec a
+    jr nz, .noCue
+    ld a, [wFtCueTile]
+    jr .cue
+.noCue:
+    ld a, [wFtCueOld]
+.cue:
+    ld [wFtCue], a
     ld a, [wNes + $05]      ; down
     and a
     jr nz, .flash
