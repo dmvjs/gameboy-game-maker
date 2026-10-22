@@ -321,6 +321,22 @@ def think(g, idle_for, last_hand=None):
     return plan
 
 
+# Punch-Out!!'s crowd tells: frames from the cell lighting to his counter's right body blow. The NES's windows
+# (tests/nes_reference.json "tells"), from the cue byte's frame: +8-12 for Bald Bull's charge and Piston Honda's
+# rematch rush, +6-10 for Bald Bull's rematch; the cell shows a frame after it, so 8 lands in all three. The cue's
+# kind ($05BE): 2 the camera, 6 the bearded man; 10 (Super Macho Man's man in shades, a dodge's) isn't used.
+TELL_DELAY = 8
+
+
+def _cue(g):
+    """(the tell's map cell, its tile at rest, the counter's delay) for this fight, or None (none, or not the port)."""
+    S = getattr(g, "S", {})
+    if "wFtCueCol" not in S or not hasattr(g, "pb") or not g.m[S["wFtCueTile"]] or g.nes(0x05BE) not in (2, 6):
+        return None
+    cell = 0x9800 + 30 * 32 + g.m[S["wFtCueCol"]]
+    return cell, g.m[0, cell], TELL_DELAY
+
+
 def play(rom, scene, frames=60 * 60 * 15, log=None, cgb=True, sound=False):
     g = Game(rom, scene, cgb, sound)
     t = 0
@@ -328,6 +344,8 @@ def play(rom, scene, frames=60 * 60 * 15, log=None, cgb=True, sound=False):
         g.hold(["start"] if t % 50 < 3 else [])
         g.tick(); t += 1
     plan, k0 = None, 0
+    cue = _cue(g)                           # Punch-Out!!'s crowd tell, read off the screen as a player reads it
+    cue_on = False
     mode = result = None
     mac_kd = his_kd = last_kd = rnd_prev = mash = last_act = last_think = 0
     last_seen = None; due = 0; events = []; last_hand = None
@@ -359,6 +377,12 @@ def play(rom, scene, frames=60 * 60 * 15, log=None, cgb=True, sound=False):
             g.hold([["a"], [], ["b"], []][(mash // 3) % 4]); g.tick(); continue
         if kd:
             g.hold([]); g.tick(); continue
+        if cue:                             # the tell: his counter's body blow, in the NES's window
+            lit = g.m[0, cue[0]] != cue[1]
+            if lit and not cue_on:
+                plan, k0 = Plan((cue[2], cue[2] + 3, ["a"])), f
+                events.append((f, rnd, "crowd tell"))
+            cue_on = lit
         if plan is not None and f - k0 > plan.end() + 2:
             plan = None
         seen = (g.nes(0x90), g.nes(0xA1), g.nes(0x50), g.nes(0x398), g.nes(0x391), g.nes(0x342))

@@ -525,6 +525,124 @@ def another_world_won(rom):
                   + ("" if good else f" (the NES: {_fights(r['fights'])})")]
 
 
+def beat_mac(rom, only=None):
+    """Each opponent beats Mac standing still, as the NES game's do (its, recorded: tests/nes_reference.json
+    idle_losses): counted out ($FD), his states those of the NES's (taunts with them), on to the fight the NES goes
+    to, and lost again there. Don Flamenco never attacks a still Mac."""
+    names, _ = _scenes()
+    ref = json.loads((ROOT / "tests" / "nes_reference.json").read_text())["idle_losses"]
+    lines, ok = [], True
+    for who, want in ref.items():
+        if only and who not in only:
+            continue
+        entry = {"Honda": "Title bout: Honda", "Bull": "Title bout: Bull", "Macho": "Title bout: Macho",   # (the title
+                 "Tyson": "The dream fight"}.get(who, "Challenger" if who == "Joe" else f"Challenger: {who}")  # fights' way in)
+        pb, S = _boot(rom, names.index(entry))
+        m, w = pb.memory, S["wNes"]
+
+        def until_fight(limit=6000):
+            left = m[S["hFtActive"]] != 1               # (the fight that ended first, then the next's start)
+            for f in range(limit):
+                if m[S["hFtActive"]] != 1:
+                    left = True
+                elif left:
+                    return True
+                (pb.button_press if f % 60 < 3 else pb.button_release)("start")
+                pb.tick(1, False)
+            return False
+        pb.button_press("start"); pb.tick(3, False); pb.button_release("start")
+        until_fight()
+        pb.button_release("start")
+
+        def lose(limit):
+            states, down = set(), False
+            for f in range(limit):
+                pb.tick(1, False)
+                if m[w + 0x00] == 1:
+                    states.add(m[w + 0x90] & 0x7F)
+                down = down or m[w + 0x05] == 2
+                if m[w + 0x00] in (0xFB, 0xFC, 0xFD, 0xFE):
+                    return m[w + 0x00], states, f, down
+            return None, states, limit, down
+        res, states, frames, down = lose(9000)
+        if want["result"] is None:              # (Don Flamenco: waits for Mac to throw something)
+            good = res is None and not down
+            lines.append(f"    {'✓' if good else '✗'} {who}: never attacks a still Mac ({frames} frames, Mac {'down' if down else 'never down'})")
+        else:
+            nxt = None
+            if res is not None and until_fight():
+                nxt = _fighter(names[m[S["hScene"]]])
+            again = lose(9000)[0] if nxt else None
+            extra = sorted(states - set(want["states_used"]))
+            good = res == want["result"] and not extra and nxt == want["next"] and again == want["result"]
+            lines.append(f"    {'✓' if good else '✗'} {who}: ${res or 0:02X} after {frames} frames (the NES's ${want['result']:02X}, "
+                         f"{want['frames']}), states {sorted(states)}{f' (not the NES: {extra})' if extra else ''}, "
+                         f"then {nxt} (the NES's {want['next']}), lost again ${again or 0:02X}")
+        ok = ok and good
+        pb.stop(save=False)
+    return ok, lines
+
+
+def tells(rom):
+    """Punch-Out!!'s crowd tells used as a player uses them: the bot (bot.py) watches the tell's cell on the screen and
+    throws his counter in the NES's window (tests/nes_reference.json "tells"): in a real fight it knocks him down; from
+    the tell's frame, the body blow at the bot's delay knocks him down and one straight away, or 20 frames late,
+    doesn't."""
+    from . import bot
+    names, _ = _scenes()
+    ref = json.loads((ROOT / "tests" / "nes_reference.json").read_text())["tells"]
+    lines, ok = [], True
+    for who in ref:
+        scene = names.index(f"Fight: {who}")
+        trials, tried, orig = {}, [], bot.Game.tick       # (a tell Mac can't answer, mid-hit: the next, up to 3)
+
+        state, live = ref[who]["state"], [0]
+
+        def tick(self, render=True, _orig=orig):
+            _orig(self, render)
+            if not render or trials.get("bot's") or len(tried) >= 3 or not hasattr(self, "_cue_cell"):
+                return
+            live[0] += self.hram("hFtActive") == 1 and self.nes(0x05) == 0
+            if live[0] > 2400 and live[0] % 900 == 899 and self.nes(0x90) & 0x7F in (1, 2):   # (not reached by now: his move forced,
+                self.m[self.w + 0x90] = state | 0x80                      # from standing, as the NES's script has it)
+            lit = self.m[0, self._cue_cell[0]] != self._cue_cell[1]
+            first, self._was_lit = lit and not getattr(self, "_was_lit", False), lit
+            if first:                                                # (the tell's first frame on screen)
+                snap = self.save()
+                for name, at in (("early", 0), ("bot's", self._cue_cell[2]), ("late", 20)):
+                    self.load(snap)
+                    down = False
+                    for k in range(at + 60):
+                        self.hold(["a"] if at <= k < at + 3 else [])
+                        _orig(self, False)
+                        self.m[self.w + 0x391] = 0x60
+                        if self.nes(0x05) == 1:
+                            down = True
+                            break
+                    trials[name] = down
+                tried.append(dict(trials))
+                self.load(snap)
+        cue_of = bot._cue
+
+        def cue(g, _cue=cue_of):
+            c = _cue(g)
+            if c:
+                g._cue_cell = c
+            return c
+        bot.Game.tick, bot._cue = tick, cue
+        try:
+            r = bot.play(rom, scene, frames=20000)
+        finally:
+            bot.Game.tick, bot._cue = orig, cue_of
+        ev = r["events"]
+        countered = any(e[2] == "him down" and any(t[2] == "crowd tell" and 0 < e[0] - t[0] < 40 for t in ev) for e in ev)
+        good = countered and trials == {"early": False, "bot's": True, "late": False}
+        ok = ok and good
+        lines.append(f"    {'✓' if good else '✗'} {who}: {sum(e[2] == 'crowd tell' for e in ev)} tells, countered into a knockdown: "
+                     f"{'yes' if countered else 'no'}; from the tell: {trials}")
+    return ok, lines
+
+
 def _job(args):
     name, rom = args
     return globals()[name](rom)
@@ -546,7 +664,9 @@ def run(log=print, only=None):
               "pass_key": "CONTINUE", "another_world": "The Another World Circuit",
               "original_flow": "The original Game Boy, into the fight and the corner",
               "nes_keys": "The title's pass keys, as the NES takes them", "nes_flows": "Starts, losses, title fights, the ending, as the NES's",
-              "another_world_won": "The Another World Circuit won through, as the NES's"}
+              "another_world_won": "The Another World Circuit won through, as the NES's",
+              "beat_mac": "Every opponent beats a still Mac, as the NES's",
+              "tells": "The crowd's tells, used by the bot as the NES's"}
     if only:
         titles = {k: v for k, v in titles.items() if k in only}
     with ProcessPoolExecutor() as pool:
