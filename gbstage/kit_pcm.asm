@@ -10,7 +10,8 @@ DEF rTIMA EQU $FF05
 DEF rTMA EQU $FF06
 DEF rTAC EQU $FF07
 DEF _AUD3WAVERAM EQU $FF30
-DEF MIX_N EQU 6
+DEF MIX_N EQU 12              ; (the ring's buffers: room for a slow frame)
+DEF MIX_AHEAD EQU 9           ; (how many it keeps ready: some 35 ms of it, a slow frame covered, the triangle kept close)
 
 SECTION "Crowd PCM buffer", WRAMX[$D000]
 wPcm: ds CROWD_PCM_SIZE
@@ -28,7 +29,10 @@ wMixPhase: dw               ; the triangle: its phase (32 steps a turn, the top 
 wMixInc: dw
 wMixPer: dw
 wMixOn: db                  ; (sounding)
+
+SECTION "Crowd mix ring", WRAMX     ; (with the crowd's samples: no bank is ever switched)
 wMixRing: ds 16 * MIX_N
+wMixStop: db                ; (PcmProduce's A: the screen line its topping up stops at, VBlank's lines free)
 
 SECTION "Crowd mix scratch", WRAM0, ALIGN[5]
 wMixTmp: ds 32              ; a buffer's 32 steps, in playing order (one page: its loop counts on the low byte)
@@ -87,7 +91,8 @@ PcmMaybeFar::
     ld a, [wPcmMix]
     and a
     jr z, .plain
-    call PcmProduce         ; (the ring's first, then its first up)
+    ld a, 144               ; (the ring's first, whatever the line: then its first up)
+    call PcmProduce
     call PcmMixOut
     jr .timer
 .plain:
@@ -153,7 +158,11 @@ PcmResume::
     xor a
     ld [wMixHead], a
     ld [wMixTail], a
-    ret
+    ld a, [wPcmMix]         ; (mixed: the ring filled now, before the timer's first asks for it)
+    and a
+    ret z
+    ld a, 144
+    jp PcmProduce
 
 ; Timer: the next 32 steps.
 PcmTick::
@@ -220,8 +229,11 @@ PcmMixOut:
     ldh [rAUD3HIGH], a
     ret
 
-; Each frame of a fight (Color, the crowd on): the ring topped up, from its bank (the mixer and its tables there).
+; Each frame of a fight (Color, the crowd on): the ring topped up, from its bank (the mixer and its tables there),
+; stopping at screen line A (a buffer takes some 13 lines: the frame's work never runs into VBlank for it; VBlank's own
+; lines are free, and 144 never stops).
 PcmProduce::
+    ld [wMixStop], a
     ld a, BANK(PcmProduceIn)
     ld [$2100], a
     call PcmProduceIn
@@ -294,6 +306,23 @@ SECTION FRAGMENT "Screens far", ROMX
 ; through MixTable; written back rotated, as the wave channel's restart wants.
 PcmProduceIn:
 .more:
+    ld a, [wMixStop]
+    ld c, a
+    ldh a, [rLY]
+    cp 144
+    jr nc, .go              ; (VBlank's lines: room)
+    cp c
+    ret nc                  ; (another buffer would run on into VBlank: the rest next time)
+.go:
+    ld a, [wMixTail]        ; (MIX_AHEAD ready: enough)
+    ld b, a
+    ld a, [wMixHead]
+    sub b
+    jr nc, .ahead
+    add MIX_N
+.ahead:
+    cp MIX_AHEAD
+    ret nc
     ld a, [wMixHead]
     inc a
     cp MIX_N

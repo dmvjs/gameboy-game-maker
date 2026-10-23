@@ -1910,13 +1910,18 @@ def _fight_compose_tiles(scene, tile_of):
     # Tiles loaded as they're needed (two areas past the rest, sized to what they hold): the player's rare poses
     # (one at a time) and the referee's (two areas: the next pose loads into the one not shown). A tile already
     # kept for good, or (the referee's) used by more than one of his poses, is kept for good instead.
-    def slot_list(px, w, h, attr_of, map_of, shared, area):
+    def slot_list(px, w, h, attr_of, map_of, shared, area, overlay_of=None):
         out, slot = [], {}
         for by in range(h // 8):
             for bx in range(w // 8):
                 key = tuple(px[(by * 8 + y) * w + bx * 8 + x] for y in range(8) for x in range(8))
                 if not any(key):
                     continue
+                over = overlay_of(key) if overlay_of else None
+                if over:                    # (a color its palette lacks, in a sprite of its own over it: first, in
+                    okey, oattr = over      #  front)
+                    k = slot.setdefault(okey, len(slot))
+                    out.append((by * 8, bx * 8, (area, k), oattr))
                 attr, key = attr_of(key), map_of(key)
                 flipped = tuple(key[y * 8 + 7 - x] for y in range(8) for x in range(8))
                 if key in index or flipped in index or key in shared:
@@ -1942,8 +1947,12 @@ def _fight_compose_tiles(scene, tile_of):
         for k in set(ref_tiles(ft["referee"]["poses"][pose])):
             seen_in[k] = seen_in.get(k, 0) + 1
     shared = {k for k, n in seen_in.items() if n > 1}
+    def ref_whites(key):                # (his eyes' whites in a tile of his cap's colors: the shirt's white over it)
+        if shirt is None or in_shirt(key) or 4 not in key:
+            return None
+        return tuple(2 if v == 4 else 0 for v in key), shirt | 0x10
     refs = {pose: slot_list(ft["referee"]["poses"][pose], kit.REF_W, kit.REF_H,
-                            lambda k: shirt | 0x10 if in_shirt(k) else ref_attr, ref_ink, shared, "ref")
+                            lambda k: shirt | 0x10 if in_shirt(k) else ref_attr, ref_ink, shared, "ref", ref_whites)
             for pose in kit.REF_POSES}
     count_first = len(obj)
     words = ft["referee"].get("words")

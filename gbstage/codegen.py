@@ -4484,9 +4484,9 @@ VBlankDone:                 ; everything that must happen during VBlank is done
     ldh [hPadNew], a        ; pressed this frame
     ld a, b
     ldh [hPad], a           ; held
-{REPEAT_CODE if repeat else ""}{(CARD_HOLD_CHECK if cards else "") + (SLIDE_SLOW_CODE if slow_slides else SLIDE_STEP_CODE) if slides else ""}    call hUpdateJump
+{REPEAT_CODE if repeat else ""}{(CARD_HOLD_CHECK if cards else "") + (SLIDE_SLOW_CODE if slow_slides else SLIDE_STEP_CODE) if slides else ""}{"    ld a, [wPcmMix]         ; (and first, in VBlank's spare lines and the screen's first few: drained since)" + nl + "    and a" + nl + "    ld a, 20" + nl + "    call nz, PcmProduce" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}    call hUpdateJump
 {"    ldh a, [hCutOn]         ; (a cutscene runs the sound itself, before its mid-frame scroll splits)" + nl + "    and a" + nl + "    jp nz, MainLoop" + nl if cutscenes else ""}    call SfxUpdate
-{"    ldh a, [hFtActive]      ; a fight on the original: the CPU's free till VBlank, his coming picture's tiles in it" + nl + "    and a" + nl + "    call nz, FtDmgStream" + nl if nes_any else ""}{"    ld a, [wPcmMix]         ; (a fight on Color with the crowd recorded: its mixed buffers topped up)" + nl + "    and a" + nl + "    call nz, PcmProduce" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}    jp MainLoop
+{"    ldh a, [hFtActive]      ; a fight on the original: the CPU's free till VBlank, his coming picture's tiles in it" + nl + "    and a" + nl + "    call nz, FtDmgStream" + nl if nes_any else ""}{"    ld a, [wPcmMix]         ; (a fight on Color with the crowd recorded: its mixed buffers topped up, till line 130)" + nl + "    and a" + nl + "    ld a, 130" + nl + "    call nz, PcmProduce" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}    jp MainLoop
 
 SECTION "Code: Scenes", ROM0
 ; Load scene A with the screen off. Tiles, map and palette map go by DMA on Game Boy Color.

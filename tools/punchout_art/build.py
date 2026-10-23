@@ -2214,6 +2214,10 @@ def ref_from_nes():
         frame = [[small[y - oy][x - ox] if 0 <= y - oy < len(small) and 0 <= x - ox < len(small[0]) else None
                   for x in range(REF_W)] for y in range(REF_H)]
         out[look] = "".join(str(REF_INK.get(tuple(c[:3]), 3)) if c else "0" for row in frame for c in row)
+        baked = TOUCHUPS / "ref" / f"{look}.txt"         # (baked: touchups/ref/LOOK.txt, his eyes redrawn)
+        if baked.exists():
+            rows = [l for l in baked.read_text().splitlines() if l and not l.startswith(("#", "final"))]
+            out[look] = "".join({".": "0", "s": "1", "r": "2", "K": "3", "W": "4"}[c] for r in rows for c in r)
     return out
 
 
