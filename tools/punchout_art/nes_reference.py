@@ -200,12 +200,76 @@ def dodge_tells():
     return {"Macho": out}
 
 
+TAS_CLOCK_STOP = "https://tasvideos.org/6742S?handler=Download"     # (McHazard's "clock stop glitch" run, BizHawk)
+OPP_KEYS = {8: "soda", 10: "don2", 12: "macho"}
+
+
+def clock_stops():
+    """The clock-stop glitch as the NES has it: TASVideos' clock-stop run (downloaded; its inputs a frame on from
+    cynes' power-on), and each of its long clock holds (halted, no one down, not his own scripted pause $19/$1A,
+    240 frames or more): the NES's RAM a while before (from where the clock last ran, his pause's own stop run too),
+    the run's inputs from there, Mac's and his states each frame ($50, $90) to 30 past the hold's start, and how long
+    the hold is. The port gets the RAM, the inputs, and
+    has to hold the clock only briefly (gbstage/careertests.py glitches)."""
+    import io, tempfile, urllib.request, zipfile
+    data = urllib.request.urlopen(urllib.request.Request(TAS_CLOCK_STOP, headers={"User-Agent": "Mozilla/5.0"})).read()
+    bk2 = zipfile.ZipFile(io.BytesIO(data))
+    movie = zipfile.ZipFile(io.BytesIO(bk2.read(bk2.namelist()[0])))
+    lines = [l for l in movie.read("Input Log.txt").decode().splitlines() if l.startswith("|..|")]
+    bits = [0x08, 0x04, 0x02, 0x01, START, SEL, B, A]               # (its order: U D L R Start Select B A)
+    inputs = [sum(b for b, c in zip(bits, l.split("|")[2]) if c != ".") for l in lines][1:]
+    nes, run, hist, holds = _nes(), 0, [], []
+    for t, b in enumerate(inputs):
+        nes.controller = b
+        nes.step()
+        hist.append(nes[0x301] & 1)
+        if nes[0x00] == 1 and nes[0x301] == 1 and nes[0x05] == 0 and nes[0x90] & 0x7F not in (0x19, 0x1A):
+            run += 1
+        else:
+            if run >= 240 and nes[0x01] in OPP_KEYS:
+                start = t - run
+                ran = max(k for k in range(start) if not hist[k])       # (the clock last running before it)
+                holds.append((start, start - ran + 40 if start - ran > 30 else 32))
+            run = 0
+    out = []
+    for start, back in holds:
+        nes = _nes()
+        for t in range(start - back):
+            nes.controller = inputs[t]
+            nes.step()
+        ram, opp = bytes(nes[a] for a in range(0x800)), nes[0x01]
+        held, trace = 0, []
+        for t in range(start - back, start + 600):
+            nes.controller = inputs[t]
+            nes.step()
+            if t < start + 30:
+                trace.append([nes[0x50], nes[0x90] & 0x7F])
+            if t >= start:
+                held = held + 1 if nes[0x301] & 1 and nes[0x05] == 0 else held
+                if not nes[0x301] & 1:
+                    break
+        out.append({"opponent": OPP_KEYS[opp], "back": back, "held": held, "ram": ram.hex(),
+                    "inputs": inputs[start - back:start + 200], "states": trace})
+        print(" ", OPP_KEYS[opp], "hold at", start, "back", back, "held", held, flush=True)
+    return out
+
+
 def main():
     if sys.argv[1:] == ["dodge_tells"]:             # (just these, into the reference as it stands)
         ref = json.loads(OUT.read_text())
         ref["dodge_tells"] = dodge_tells()
         OUT.write_text(json.dumps(ref, indent=1) + "\n")
         print("wrote", OUT, ref["dodge_tells"])
+        return
+    if sys.argv[1:] == ["clock_stops"]:
+        ref = json.loads(OUT.read_text())
+        ref["clock_stops"] = clock_stops()
+        ref["clock_stops_note"] = (
+            "The clock-stop glitch on the NES (cynes, TASVideos submission 6742's inputs): per long hold, the NES's RAM "
+            "`back` frames before it starts, the run's inputs from there, and how long the NES holds the clock (frames, "
+            "no one down; capped at 600). The port, given the RAM and inputs, must not hold it like that.")
+        OUT.write_text(json.dumps(ref, indent=1) + "\n")
+        print("wrote", OUT, len(ref["clock_stops"]), "holds")
         return
     print("pass keys:")
     keys = pass_keys()

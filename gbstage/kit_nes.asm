@@ -59,6 +59,8 @@ wNes:: ds $800                      ; the NES's 2 KB of RAM, at its own addresse
 wNesRand: db                        ; random source (the NES rotates $18 through the carry)
 wNesCue: db                         ; 1: his outline in the dodge cue's color
 wNesAnim: db                        ; his sprite changes ($A0) the GB hasn't shown yet
+wNesClockBy: db                     ; whose script stopped the clock: bit 0 Mac's, bit 1 his (NesClockOwners)
+wNesCueState: db                    ; his state when the crowd's tell ($46) went up (NesCueOwner), 0: none up
 
 ;;PART common
 
@@ -596,6 +598,16 @@ OppClock:                   ; $C6EA: start (1) or stop (0) the round clock
     jp nz, .set
     ld [wNes + nRoundTmrStart], a
 .set:
+    ld b, a                 ; (whose stop it is: NesClockOwners lifts it if his script's cut off before its start)
+    ld hl, wNesClockBy
+    and a
+    jr z, .stop
+    res 1, [hl]
+    jr .own
+.stop:
+    set 1, [hl]
+.own:
+    ld a, b
     xor 1
     ld b, a
     ld a, [wNes + nRoundTmrCntrl]
@@ -1458,6 +1470,8 @@ NesFightStart::
     ENDR
     dec b
     jp nz, .clear2
+    ld [wNesClockBy], a     ; (A still 0)
+    ld [wNesCueState], a
     ld a, [wFtNesOffset]    ; FightOffset ($03) as the NES has it (scripts test it: a fighter's rematch
     ld [wNes + $03], a      ; shares his bank)
     add LOW(NesFighter + $0E)   ; his entry's $0E: the pointer to his AI tables
@@ -2183,6 +2197,16 @@ MacClock:                   ; $8465: start / stop the clock
     jp nz, .set
     ld [wNes + nRoundTmrStart], a
 .set:
+    ld b, a                 ; (whose stop it is: NesClockOwners lifts it if his script's cut off before its start)
+    ld hl, wNesClockBy
+    and a
+    jr z, .stop
+    res 0, [hl]
+    jr .own
+.stop:
+    set 0, [hl]
+.own:
+    ld a, b
     xor 1
     ld b, a
     ld a, [wNes + nRoundTmrCntrl]
@@ -2824,6 +2848,7 @@ NesEngineFrame::
     ld a, [wFtBankNes]
     ld [$2000], a
     call NesClock
+    call NesCueOwner
     call NesPoints
     call NesHp
     call NesHearts
@@ -4041,10 +4066,82 @@ NesFightPhase::
 
 ; ==== The round: clock, points, Mac's get-up, the phase machine ====================================
 
+; Not the NES's: its clock-stop glitches fixed. A script that stops the clock (Mac's landing a punch, his special
+; move) starts it again a few commands on; cut off before that (a delayed jab after rapid punches, face-gut-face:
+; the punch's new script never starts it), the NES leaves it stopped till a knockdown. Here, a stop whose script's
+; fighter is back to waiting (Mac's $50 1, his state 1) with no one down is lifted, the clock running on as the
+; script would have left it. A script run through starts it itself first, so play without the glitch is the NES's.
+NesClockOwners:
+    ld a, [wNes + nRoundTmrCntrl]
+    cp 1
+    jr z, .halted
+    and 1
+    ret nz
+    ld [wNesClockBy], a     ; (running: no one's stop)
+    ret
+.halted:
+    ld a, [wNes + nKnockdownSts]
+    and a
+    ret nz                  ; (a knockdown's: the get-up starts it)
+    ld hl, wNesClockBy
+    ld a, [hl]
+    and a
+    ret z                   ; (a knockdown's halt, $8421: not a script's)
+    bit 0, a
+    jr z, .his
+    ld a, [wNes + nMacStatus]
+    cp 1
+    jr nz, .his
+    res 0, [hl]
+.his:
+    bit 1, [hl]
+    jr z, .lift
+    ld a, [wNes + nOppCurState]
+    and $7F
+    cp 1
+    jr nz, .lift
+    res 1, [hl]
+.lift:
+    ld a, [hl]
+    and a
+    ret nz
+    ld hl, wNes + nRoundTmrCntrl
+    res 0, [hl]
+    ret
+
+; Not the NES's: Super Macho Man's crowd freeze fixed. His tell's script raises $46 (1, then 2, then 0: the man in
+; shades lowering his glasses, the crowd held for it, bank 7 $8A75) all in the one state; punched in it, before his
+; spin, he's knocked out of that state and the script never lowers it: the crowd frozen for the match (the NES's
+; first revision then softlocks at the winner's celebration; ours lowers it when the referee walks on). Here, the
+; tell still up when he's left the state that raised it is lowered then. A tell run through (every one's in a single
+; state: a counter lands after it's down) is the NES's; $46 is the crowd's alone, not the fight's.
+NesCueOwner:
+    ld a, [wNes + $46]
+    and a
+    jr z, .none
+    ld a, [wNes + nOppCurState]
+    and $7F
+    ld b, a
+    ld a, [wNesCueState]
+    and a
+    jr z, .own
+    cp b
+    ret z
+    xor a                   ; (his move cut off: the crowd back to its own)
+    ld [wNes + $46], a
+.none:
+    ld [wNesCueState], a
+    ret
+.own:
+    ld a, b
+    ld [wNesCueState], a
+    ret
+
 ; Bank 7 $8759: the round clock. The round's rate ($0308/$0309) is added each frame; every $6400 is a
 ; second: $0311 counts down (the timeline's clock), the digits ($0302 min, $0304/$0305 sec) count up.
 ; At 3:00 the round is over: he holds still, Mac goes to his round-over state ($C2), the clock flashes.
 NesClock::
+    call NesClockOwners
     ld a, [wNes + nRoundTmrStart]
     and a
     ret z

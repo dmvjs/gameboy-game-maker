@@ -708,9 +708,12 @@ def tells(rom):
     for who, want in dodge.items():
         for grey in (False, True):
             got = _dodge_tell(rom, names.index(f"Fight: {who}"), project, want, grey)
-            good = got == {k: want[k] for k in ("shows_after", "shows_for")} | {"hit": want["hit"]}
+            dodged = got.pop("bot's dodge")
+            fixed = dict(want["hit"], shows_through=False)     # (the NES's crowd freeze, not ours: kit_nes.asm NesCueOwner)
+            good = got == {k: want[k] for k in ("shows_after", "shows_for")} | {"hit": fixed} and dodged
             ok = ok and good
-            lines.append(f"    {'✓' if good else '✗'} {who} ({'grey' if grey else 'Color'}): his tell (a dodge's) {got}"
+            lines.append(f"    {'✓' if good else '✗'} {who} ({'grey' if grey else 'Color'}): his tell (a dodge's) {got}; "
+                         f"the bot's dodge from it escapes his punch: {'yes' if dodged else 'no'}"
                          + ("" if good else f" (the NES: {want})"))
     return ok, lines
 
@@ -718,7 +721,9 @@ def tells(rom):
 def _dodge_tell(rom, scene, project, want, grey):
     """A dodge's crowd tell as the NES's (tests/nes_reference.json "dodge_tells"): his move started from standing
     with Mac free, the tell's cell watched on the screen (its rope row shows over his area's first row): left alone,
-    the frame it first shows and for how many; hit in the move, his state next and the cell staying."""
+    the frame it first shows and for how many; hit in the move, his state next and whether the cell stays (the NES's
+    crowd freeze: punched in his tell he's out of it and it never comes down; here it does); and the bot's
+    answer (bot._cue's buttons, its delay from the cell's first showing) leaving Mac untouched by the move."""
     import numpy as np
     from . import bot
     g = bot.Game(rom, scene, cgb=not grey)
@@ -739,6 +744,7 @@ def _dodge_tell(rom, scene, project, want, grey):
     x = g.m[g.S["wFtCueCol"]] * 8
     screen = lambda: g.pb.screen.ndarray[y:y + 8, x:x + 8, :3].copy()
     rest, snap, out = screen(), g.save(), {}
+    cue = None
     for hit in (False, True):
         g.load(snap)
         shown, states = [], []
@@ -758,8 +764,107 @@ def _dodge_tell(rom, scene, project, want, grey):
                           "shows_through": first >= 0 and n == want["window"] - first}
         else:
             out["shows_after"], out["shows_for"] = first, n
+            cue = bot._cue(g)
+    g.load(snap)
+    hurt = False
+    for k in range(want["window"] // 2):        # (the bot's dodge: Mac's health untouched through the move)
+        g.hold(cue[3] if cue and first >= 0 and first + cue[2] <= k < first + cue[2] + 3 else [])
+        if k == 0:
+            g.m[g.w + 0x90] = want["state"] | 0x80
+        g.tick()
+        hurt = hurt or g.nes(0x391) < 0x60
+        if g.nes(0x90) & 0x7F not in (want["state"], 0x01) and k > 0:
+            break                               # (the move over: what follows is another)
+    out["bot's dodge"] = cue is not None and not hurt
     g.stop()
     return out
+
+
+def glitches(rom):
+    """The NES game's glitches, not ours. The clock stop (tests/nes_reference.json "clock_stops": TASVideos' clock-stop
+    run's long holds, from cynes): the NES's RAM put in the port's fight (its script pointers' high bytes as the port
+    keeps them, $40 down; the sound's aside), the run's inputs fed (a frame early: the harness's button reaches the
+    port a frame after cynes'), Mac's and his states following the NES's to the hold, and the clock held there briefly,
+    not the NES's hundreds of frames. Mr. Sandman's midget ($80 and $10's sprite size left 8x8 by a cut-off script: the
+    NES draws him in strips): the port's screen the same either way."""
+    import numpy as np
+    from . import bot
+    names, _ = _scenes()
+    ref = json.loads((ROOT / "tests" / "nes_reference.json").read_text())["clock_stops"]
+    ptr = (0x32, 0x34, 0x3C, 0x55, 0x7F, 0x95, 0x9F)
+    keys = [(0x08, "up"), (0x04, "down"), (0x02, "left"), (0x01, "right"), (0x10, "start"), (0x20, "select"),
+            (0x40, "b"), (0x80, "a")]
+    lines, ok, games = [], True, {}
+
+    def fight(who):
+        if who not in games:
+            scene = names.index(f"Fight: {who.capitalize() if who[-1] != '2' else who[:-1].capitalize() + '2'}")
+            g = bot.Game(rom, scene)
+            t = 0
+            while t < 20000:
+                on = g.hram("hScene") == scene and g.hram("hFtActive") == 1
+                g.hold(["start"] if not on and t % 50 < 3 else [])
+                g.tick(False)
+                t += 1
+                if on and g.nes(0x00) == 1 and g.nes(0x90) & 0x7F == 1 and g.nes(0x50) == 1 and t > 1400:
+                    break
+            games[who] = (g, g.save())
+        return games[who]
+    for c in ref:
+        g, snap = fight(c["opponent"])
+        g.load(snap)
+        ram = bytes.fromhex(c["ram"])
+        for a in range(0x800):
+            if not (0xF0 <= a < 0x100 or a >= 0x700):
+                g.m[g.w + a] = ram[a] - 0x40 if a in ptr and 0x80 <= ram[a] < 0xA0 else ram[a]
+        back, follows, held = c["back"], None, 0
+        for k in range(back + 199):
+            b = c["inputs"][k + 1]
+            g.hold([n for bit, n in keys if b & bit])
+            g.tick(False)
+            if follows is None and (k >= len(c["states"]) or [g.nes(0x50), g.nes(0x90) & 0x7F] != c["states"][k]):
+                follows = k
+            if k >= back:
+                if not g.nes(0x301) & 1:
+                    break
+                held += g.nes(0x05) == 0
+        follows = k + 1 if follows is None else follows     # (followed all the way)
+        good = follows >= back and held < 100 <= c["held"]
+        ok = ok and good
+        lines.append(f"    {'✓' if good else '✗'} the clock stop, {c['opponent']}: the NES's run followed {follows} frames "
+                     f"(to the hold: {back}); the clock held {held} frames (the NES: {c['held']})")
+    for g, _ in games.values():
+        g.stop()
+    g = bot.Game(rom, names.index("Fight: Sandman"))
+    t, prev = 0, 0
+    while t < 20000:                                # (his first punch: in a script that sets them)
+        on = g.hram("hScene") == g.scene and g.hram("hFtActive") == 1
+        g.hold(["start"] if not on and t % 50 < 3 else [])
+        g.tick(False)
+        t += 1
+        if on:
+            g.m[g.w + 0x391] = 0x60
+            if g.nes(0x97) and not prev and g.nes(0x05) == 0:
+                break
+            prev = g.nes(0x97)
+    snap, shots = g.save(), {}
+    for v in (0x10, 8):
+        g.load(snap)
+        frames = []
+        for k in range(120):
+            g.m[g.w + 0x391] = 0x60
+            g.m[g.w + 0x80] = v
+            g.m[g.w + 0x10] = (g.m[g.w + 0x10] & 0xDF) | (0x20 if v == 0x10 else 0)
+            g.hold([])
+            g.tick(True)
+            frames.append(g.pb.screen.ndarray[:, :, :3].copy())
+        shots[v] = frames
+    g.stop()
+    same = all(np.array_equal(a, b) for a, b in zip(shots[0x10], shots[8]))
+    ok = ok and same
+    lines.append(f"    {'✓' if same else '✗'} the midget Sandman: his screen with the NES's 8x8 sprites left on "
+                 f"{'the same' if same else 'changed'} over 120 frames")
+    return ok, lines
 
 
 def _job(args):
@@ -786,7 +891,8 @@ def run(log=print, only=None):
               "another_world_won": "The Another World Circuit won through, as the NES's",
               "another_world_played": "The Another World Circuit, played through by the bot",
               "beat_mac": "Every opponent beats a still Mac, as the NES's",
-              "tells": "The crowd's tells, used by the bot as the NES's"}
+              "tells": "The crowd's tells, used by the bot as the NES's",
+              "glitches": "The NES game's glitches, fixed: the clock stop, the midget Sandman"}
     if only:
         titles = {k: v for k, v in titles.items() if k in only}
     with ProcessPoolExecutor() as pool:

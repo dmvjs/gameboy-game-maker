@@ -2499,6 +2499,8 @@ def _rival_js(key, art):
     import base64
     r, up = NES_RIVALS[key], key.upper()
     pose = lambda v: f"  {{ pixels: '{v['pixels']}', cells: '{v['cells']}' }},"
+    pic = lambda v: (f"  {{ pixels: '{v['pixels']}', cells: '{v['cells']}'"      # (and an eye's white his tile
+                     + (f", whites: {json.dumps(v['whites'])}" if v.get("whites") else "") + " },")   # can't show)
     bank = (DISASM_BANK.with_name(f"PRG_Bank{r['bank']:03X}.bin")).read_bytes()
     return ([f"// {r['name']}: his poses and palettes (from the game's frames), his NES fighter bank (PRG bank {r['bank']}).",
              f"export const {up}_PALETTES = {json.dumps(art['pals'])};", f"export const {up}_POSES = {{"]
@@ -2507,7 +2509,7 @@ def _rival_js(key, art):
             + [f"  {n}:" + pose(v)[1:] for n, v in art["cgb"].items()]
             + ["};"]
             + ([f"export const {up}_PICTURES = {{ poses: {{"]      # (Color: each NES picture of his, exact)
-               + [f"  '{k}':" + pose(v)[1:] for k, v in sorted(art["pictures"]["poses"].items())]
+               + [f"  '{k}':" + pic(v)[1:] for k, v in sorted(art["pictures"]["poses"].items())]
                + [f"}}, places: {json.dumps(art['pictures']['places'])}"
                   + (f", next: {json.dumps(art['pictures']['next'])}" if art["pictures"].get("next") else "")
                   + (f", jewel: {json.dumps(art['pictures']['jewel'])}" if art["pictures"].get("jewel") else "") + " };"]

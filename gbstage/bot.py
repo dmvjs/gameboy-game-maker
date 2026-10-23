@@ -324,17 +324,23 @@ def think(g, idle_for, last_hand=None):
 # Punch-Out!!'s crowd tells: frames from the cell lighting to his counter's right body blow. The NES's windows
 # (tests/nes_reference.json "tells"), from the cue byte's frame: +8-12 for Bald Bull's charge and Piston Honda's
 # rematch rush, +6-10 for Bald Bull's rematch; the cell shows a frame after it, so 8 lands in all three. The cue's
-# kind ($05BE): 2 the camera, 6 the bearded man; 10 (Super Macho Man's man in shades, a dodge's) isn't used.
+# kind ($05BE): 2 the camera, 6 the bearded man; 10 Super Macho Man's man in shades, a dodge's: his spin punch lands
+# 28 frames into it, a dodge pressed from 4 to 20 frames in escapes it, so from the cell's lighting (a frame in)
+# 10 is the window's middle.
 TELL_DELAY = 8
+DODGE_DELAY = 10
 
 
 def _cue(g):
-    """(the tell's map cell, its tile at rest, the counter's delay) for this fight, or None (none, or not the port)."""
+    """(the tell's map cell, its tile at rest, the answer's delay, its buttons) for this fight, or None (none, or not
+    the port): a counter's right body blow, or for a dodge's tell, the dodge."""
     S = getattr(g, "S", {})
-    if "wFtCueCol" not in S or not hasattr(g, "pb") or not g.m[S["wFtCueTile"]] or g.nes(0x05BE) not in (2, 6):
+    if "wFtCueCol" not in S or not hasattr(g, "pb") or not g.m[S["wFtCueTile"]] or g.nes(0x05BE) not in (2, 6, 10):
         return None
     cell = 0x9800 + 30 * 32 + g.m[S["wFtCueCol"]]
-    return cell, g.m[0, cell], TELL_DELAY
+    if g.nes(0x05BE) == 10:
+        return cell, g.m[0, cell], DODGE_DELAY, ["left"]
+    return cell, g.m[0, cell], TELL_DELAY, ["a"]
 
 
 def play(rom, scene, frames=60 * 60 * 15, log=None, cgb=True, sound=False):
@@ -377,10 +383,10 @@ def play(rom, scene, frames=60 * 60 * 15, log=None, cgb=True, sound=False):
             g.hold([["a"], [], ["b"], []][(mash // 3) % 4]); g.tick(); continue
         if kd:
             g.hold([]); g.tick(); continue
-        if cue:                             # the tell: his counter's body blow, in the NES's window
+        if cue:                             # the tell: his counter's body blow (or the dodge), in the NES's window
             lit = g.m[0, cue[0]] != cue[1]
             if lit and not cue_on:
-                plan, k0 = Plan((cue[2], cue[2] + 3, ["a"])), f
+                plan, k0 = Plan((cue[2], cue[2] + 3, cue[3])), f
                 events.append((f, rnd, "crowd tell"))
             cue_on = lit
         if plan is not None and f - k0 > plan.end() + 2:
