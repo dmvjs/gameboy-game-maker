@@ -164,7 +164,49 @@ def flows():
     return out
 
 
+def dodge_tells():
+    """Super Macho Man's crowd tell (his spin, state $19: a dodge's, the man in shades at NES cell row 9, column 24):
+    his spin started from standing with Mac free, then left alone, and then hit (B, the frame after it starts):
+    the frame the man first shows (0: the frame it starts) and for how many; hit, his state next (8: hit) and
+    the man staying (through `window`): the NES never clears $46 then."""
+    import numpy as np
+    nes, t = _start(12), 0
+    while True:
+        nes[0x391] = 0x60
+        nes.controller = START if nes[0x00] != 1 and t % 90 < 4 else 0
+        f = nes.step()
+        t += 1
+        if nes[0x00] == 1 and t > 1400 and nes[0x90] & 0x7F == 1 and nes[0x50] == 1:
+            break
+    box = (slice(72, 80), slice(192, 200))
+    rest, snap, window = f[box].copy(), nes.save(), 300
+    out = {"opponent": 12, "state": 0x19, "window": window}
+    for hit in (False, True):
+        nes.load(snap)
+        shown, states = [], []
+        for k in range(window):
+            nes[0x391] = 0x60
+            nes.controller = B if hit and 1 <= k < 4 else 0
+            if k == 0:
+                nes[0x90] = 0x19 | 0x80
+            shown.append(not np.array_equal(nes.step()[box], rest))
+            states.append(nes[0x90] & 0x7F)
+        first = shown.index(True)
+        n = (shown[first:] + [False]).index(False)
+        if hit:
+            out["hit"] = {"button": "B", "at": 1, "his_state": next(v for v in states if v != 0x19), "shows_through": n == window - first}
+        else:
+            out["shows_after"], out["shows_for"] = first, n
+    return {"Macho": out}
+
+
 def main():
+    if sys.argv[1:] == ["dodge_tells"]:             # (just these, into the reference as it stands)
+        ref = json.loads(OUT.read_text())
+        ref["dodge_tells"] = dodge_tells()
+        OUT.write_text(json.dumps(ref, indent=1) + "\n")
+        print("wrote", OUT, ref["dodge_tells"])
+        return
     print("pass keys:")
     keys = pass_keys()
     print("flows:")

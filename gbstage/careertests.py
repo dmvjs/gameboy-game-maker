@@ -703,7 +703,63 @@ def tells(rom):
         ok = ok and good
         lines.append(f"    {'✓' if good else '✗'} {who}: {sum(e[2] == 'crowd tell' for e in ev)} tells, countered into a knockdown: "
                      f"{'yes' if countered else 'no'}; from the tell: {trials}")
+    dodge = json.loads((ROOT / "tests" / "nes_reference.json").read_text())["dodge_tells"]
+    project = codegen.validate(json.loads(EXAMPLE.read_text()))
+    for who, want in dodge.items():
+        for grey in (False, True):
+            got = _dodge_tell(rom, names.index(f"Fight: {who}"), project, want, grey)
+            good = got == {k: want[k] for k in ("shows_after", "shows_for")} | {"hit": want["hit"]}
+            ok = ok and good
+            lines.append(f"    {'✓' if good else '✗'} {who} ({'grey' if grey else 'Color'}): his tell (a dodge's) {got}"
+                         + ("" if good else f" (the NES: {want})"))
     return ok, lines
+
+
+def _dodge_tell(rom, scene, project, want, grey):
+    """A dodge's crowd tell as the NES's (tests/nes_reference.json "dodge_tells"): his move started from standing
+    with Mac free, the tell's cell watched on the screen (its rope row shows over his area's first row): left alone,
+    the frame it first shows and for how many; hit in the move, his state next and the cell staying."""
+    import numpy as np
+    from . import bot
+    g = bot.Game(rom, scene, cgb=not grey)
+    if grey:                                    # (as a real one boots: A = $01)
+        S, B = bot._symbols(rom)
+        g.pb.hook_register(B["Start"], S["Start"], lambda _: setattr(g.pb.register_file, "A", 1), None)
+    t = 0
+    while t < 20000:
+        on = g.hram("hScene") == scene and g.hram("hFtActive") == 1
+        g.hold(["start"] if not on and t % 50 < 3 else [])
+        g.tick()
+        t += 1
+        if on:
+            g.m[g.w + 0x391] = 0x60
+            if g.nes(0x00) == 1 and t > 1400 and g.nes(0x90) & 0x7F == 1 and g.nes(0x50) == 1:
+                break
+    y = project["scenes"][scene]["fight"]["y"] * 8
+    x = g.m[g.S["wFtCueCol"]] * 8
+    screen = lambda: g.pb.screen.ndarray[y:y + 8, x:x + 8, :3].copy()
+    rest, snap, out = screen(), g.save(), {}
+    for hit in (False, True):
+        g.load(snap)
+        shown, states = [], []
+        for k in range(want["window"]):
+            g.m[g.w + 0x391] = 0x60
+            g.hold([want["hit"]["button"].lower()] if hit and want["hit"]["at"] <= k < want["hit"]["at"] + 3 else [])
+            if k == 0:
+                g.m[g.w + 0x90] = want["state"] | 0x80
+            g.tick()
+            shown.append(not np.array_equal(screen(), rest))
+            states.append(g.nes(0x90) & 0x7F)
+        first = shown.index(True) if True in shown else -1
+        n = (shown[first:] + [False]).index(False) if first >= 0 else 0
+        if hit:
+            out["hit"] = {"button": want["hit"]["button"], "at": want["hit"]["at"],
+                          "his_state": next((v for v in states if v != want["state"]), None),
+                          "shows_through": first >= 0 and n == want["window"] - first}
+        else:
+            out["shows_after"], out["shows_for"] = first, n
+    g.stop()
+    return out
 
 
 def _job(args):

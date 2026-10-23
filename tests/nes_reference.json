@@ -1275,5 +1275,21 @@
    "state": 26
   }
  },
- "tells_note": "Frames after the crowd tell's byte ($46) turns 1 at which a body blow knocks him down (cynes, from a real fight's first tell; earlier or later: no knockdown; head punches: never). Super Macho Man's tell (his spin) wasn't reached in 30,000 frames and isn't measured. state: his script state ($90 & $7F) that throws the move with the tell (forced in the test when a bot fight hasn't reached it)."
+ "tells_note": "Frames after the crowd tell's byte ($46) turns 1 at which a body blow knocks him down (cynes, from a real fight's first tell; earlier or later: no knockdown; head punches: never). Super Macho Man's tell (his spin, a dodge's) is in dodge_tells. state: his script state ($90 & $7F) that throws the move with the tell (forced in the test when a bot fight hasn't reached it).",
+ "dodge_tells": {
+  "Macho": {
+   "opponent": 12,
+   "state": 25,
+   "window": 300,
+   "shows_after": 1,
+   "shows_for": 13,
+   "hit": {
+    "button": "B",
+    "at": 1,
+    "his_state": 8,
+    "shows_through": true
+   }
+  }
+ },
+ "dodge_tells_note": "Super Macho Man's spin ($90 & $7F = state) started from standing with Mac free (cynes): the man in shades' cell first changes shows_after frames after (0: the spin's first frame) and shows shows_for frames; hit in the spin (button pressed from frame at, 3 frames), his state goes to his_state and the man stays through the window ($46 left at 1)."
 }
