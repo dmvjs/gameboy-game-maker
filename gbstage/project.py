@@ -1145,7 +1145,7 @@ def _nes_fighter(nes, where, errors):
             p in kit.RIVAL_POSES and isinstance(v, list) and len(v) == 2 and all(isinstance(c, int) and 0 <= c < 80 for c in v)
             for p, v in jewel.items())):
         errors.append(f"{where}: the NES jewel is per pose, where (pixels in his area)."); return None
-    pictures = nes.get("pictures")          # Color: each NES picture of his, exact ({poses: {key: {pixels, cells}},
+    pictures = nes.get("pictures")          # Color: each NES picture of his, exact ({poses: {key: {pixels, cells, whites}},
     if pictures is not None:                # places: {key: [dx, dy]}}: shown as the game draws them, streamed in)
         area = kit.REGION_W * CELL * kit.REGION_H * CELL
         pp, pl = (pictures or {}).get("poses"), (pictures or {}).get("places") or {}
@@ -1153,6 +1153,7 @@ def _nes_fighter(nes, where, errors):
                 re.fullmatch(r"[0-9A-F]{2}\|?", k) and isinstance(v, dict) and isinstance(v.get("pixels"), str)
                 and len(v["pixels"]) == area and set(v["pixels"]) <= set("0123") and isinstance(v.get("cells"), str)
                 and len(v["cells"]) == kit.REGION_W * kit.REGION_H and set(v["cells"]) <= set("sgh")
+                and all(isinstance(i, int) and 0 <= i < area for i in v.get("whites") or ())
                 for k, v in pp.items())
                 and isinstance(pl, dict) and all(k in pp and isinstance(v, list) and len(v) == 2
                                                  and all(isinstance(c, int) and -64 <= c <= 64 for c in v)
@@ -2376,6 +2377,8 @@ def _fight_pics(scene):
     for k, n in nes["frame_names"].items() if nes.get("frame_names") else ():
         pose_of[k] = n
     out = {"order": order, "tiles": [], "maps": [], "attrs": [], "flips": [], "heads": []}
+    white = next(((g, j) for g in sorted(set(ft["palettes"].values())) for j in (1, 2, 3)
+                  if min(scene["_palettes"][g][j]) >= 26), None)      # (his palette with a white, and its slot)
     for key in order:
         p = pics["poses"][key]
         img = list(scene["composed"])
@@ -2388,8 +2391,14 @@ def _fight_pics(scene):
             canon.append(min(k, m)); fl.append(int(m < k))
         rows = kit.HEAD_ROWS_TALL         # (any picture can rise into the crowd: his get-up, his walk-in)
         head = [k for k in canon[:rows * kit.REGION_W] if k != blank]
+        whites = {}                     # (an eye's white his tile can't show: a sprite's, in his palette with a white)
+        for i in p.get("whites") or ():
+            if white:
+                c = (i // pw // CELL) * kit.REGION_W + (i % pw) // CELL
+                whites.setdefault(c, [0] * 64)[(i // pw % CELL) * CELL + i % CELL] = white[1]
+        whites = {c: tuple(t) for c, t in whites.items()}
         own = []
-        for k in head + canon:          # (his top rows' first: copied first, and where sprites find them)
+        for k in head + canon + list(whites.values()):   # (his top rows' first: copied first, where sprites find them)
             if k not in own:
                 own.append(k)
         if len(own) > PIC_ROOM:
@@ -2401,8 +2410,10 @@ def _fight_pics(scene):
         out["maps"].append([PIC_BASE + local[k] for k in canon])
         out["attrs"].append(attrs)
         out["flips"].append(fl)
-        out["heads"].append([(i // kit.REGION_W * 8, i % kit.REGION_W * 8, PIC_BASE + local[canon[i]], attrs[i], fl[i])
-                             for i in range(rows * kit.REGION_W) if canon[i] != blank])
+        out["heads"].append([(c // kit.REGION_W * 8, c % kit.REGION_W * 8, PIC_BASE + local[t], white[0], 2)
+                             for c, t in sorted(whites.items())]       # (the whites first: in front, and drawn
+                            + [(i // kit.REGION_W * 8, i % kit.REGION_W * 8, PIC_BASE + local[canon[i]], attrs[i], fl[i])
+                               for i in range(rows * kit.REGION_W) if canon[i] != blank])   # wherever they are: f's 2)
     index = {k: n for n, k in enumerate(order)}
     by_pose = {}                        # (a frame never caught: the picture of the pose the original shows for it)
     for k in order:

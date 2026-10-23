@@ -6458,6 +6458,18 @@ IF DEF(FT_ROPE)
     ld e, a                 ; own spot is for the NES's pictures: on ours it can land on his face)
     ld d, 0
     ld hl, RivalPoseRise
+IF DEF(FT_NES)
+    ldh a, [hIsCGB]         ; (Color with his pictures: the picture showing's own rows -- its head is its own)
+    and a
+    jr z, .rise
+    ld a, [wFtBankPics]
+    and a
+    jr z, .rise
+    ld a, [wRvPicShown]
+    ld e, a
+    ld hl, RivalPicRise
+.rise:
+ENDC
     add hl, de
     ld d, [hl]
     pop hl
@@ -6692,7 +6704,19 @@ ENDC
     ld a, [hl+]             ; dy
     add c
     cp FT_HEAD_LIMIT        ; his band shows this row (and every one after: the lists go top row first)
-    jr nc, .full
+    jr c, .shown
+    push af                 ; (nothing written till it's drawn: a slot past the list's end stays hidden)
+    inc hl                  ; (Color: an eye's white his tile can't show, bit 4 -- the original's palette bit, not
+    inc hl                  ; Color's: drawn wherever it is; the whites come first)
+    bit 4, [hl]
+    dec hl
+    dec hl
+    jr z, .fullPop
+    ldh a, [hIsCGB]
+    and a
+    jr z, .fullPop
+    pop af
+.shown:
     ld [de], a
     ld a, [hl+]             ; dx
     add b
@@ -6718,6 +6742,9 @@ ENDC
     dec a
     ldh [hFtHeadN], a
     jr nz, .sprite
+    jr .full
+.fullPop:
+    pop af
 .full:
     ld h, d
     ld l, e

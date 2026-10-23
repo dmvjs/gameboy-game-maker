@@ -121,8 +121,10 @@ def fighter_frames(opponent, wanted=None, budget=40000):
     """{(frame, mirrored): (crop, place)} for this opponent: until every wanted one is in, or (wanted None)
     the whole budget of frames played. Cached per opponent (out/nes-opp{N}-play.pkl)."""
     cache = HERE / "out" / f"nes-opp{opponent}-play.pkl"
+    absent_file = HERE / "out" / f"nes-opp{opponent}-absent.pkl"   # (wanted, never seen in a whole budget's play)
     got = pickle.load(open(cache, "rb")) if cache.exists() else {}
-    if got and (wanted is None or set(wanted) <= set(got)):
+    absent = pickle.load(open(absent_file, "rb")) if absent_file.exists() else set()
+    if got and (wanted is None or set(wanted) - set(got) <= absent):
         return got
     b = fight(opponent)
     import copy
@@ -177,6 +179,8 @@ def fighter_frames(opponent, wanted=None, budget=40000):
                     break
     cache.parent.mkdir(exist_ok=True)
     pickle.dump(got, open(cache, "wb"))
+    if wanted is not None:              # (what a whole budget didn't show: not looked for again)
+        pickle.dump(absent | (set(wanted) - set(got)), open(absent_file, "wb"))
     return got
 
 

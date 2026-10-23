@@ -2332,6 +2332,15 @@ def _suffixed(text, suffix):
 POSES_PER_BANK = 25                 # a pose's map rows: 640 bytes (25 to a 16 KB bank)
 
 
+def _pic_rise(s, ft):
+    """Color, his NES pictures: each one's blank rows on top, as RivalPoseRise's (where a star twinkles over his
+    head: the picture showing, not the pose it stands for -- the pictures' heads are their own)."""
+    pics = s.get("fight_pics")
+    rise = [_blank_top(ft["nes"]["pictures"]["poses"][k]["pixels"]) for k in pics["order"]] if pics else []
+    return ("RivalPicRise:               ; per picture: its blank rows on top (128 of them, every fight's alike)\n    db "
+            + ", ".join(str(v) for v in (rise + [0] * 128)[:128]) + "\n")
+
+
 def _blank_top(pixels):
     """A rival pose's blank pixel rows on top (at most FT_NES_UP_MAX)."""
     from . import fight as kit
@@ -2683,7 +2692,7 @@ RivalPalSlots:              ; his palettes' hardware slots, as BCPS writes ($80:
 {"" if _all_pics(project) else "RivalMaps:" + nl + "    dw " + ", ".join(f"RivalMap_{p}" for p in kit.RIVAL_POSES) + nl + "RivalMapBanks:              ; (each pose's rows' bank)" + nl + "    db " + ", ".join(f"BANK(RivalMap_{p})" for p in kit.RIVAL_POSES)}
 RivalPoseRise:              ; per pose: how far it can rise in his band and stay whole (its blank rows on top)
     db {", ".join(str(_blank_top(ft["poses"][p]["pixels"])) for p in kit.RIVAL_POSES)}
-CrowdMap:                   ; the crowd row's tiles, put back after each camera flash
+{_pic_rise(s, ft)}CrowdMap:                   ; the crowd row's tiles, put back after each camera flash
     db {", ".join(f"${t:02X}" for t in s['cell_tiles'][crowd_y * CW:(crowd_y + 1) * CW])}
 CrowdPulse:                 ; Color, his KO: the crowd's color through the NES's brightnesses (its slot's BCPS, 4 steps)
 {_crowd_pulse(s, project)}
@@ -2801,7 +2810,7 @@ ASSERT (CgbMap{suffix}_idle | CgbSwap{suffix}.set0) & 15 == 0, "GDMA copies from
         for k in range(n):
             hl = pics["heads"][k]
             heads.append(f"PicHead{suffix}_{k}:\n    db {len(hl)}" + "".join(
-                f"\n    db {dy}, {dx}, {t}, ${obj.get(a, 5) | 1 << 3 | f << 5:02X}" for dy, dx, t, a, f in hl))
+                f"\n    db {dy}, {dx}, {t}, ${obj.get(a, 5) | 1 << 3 | (f & 1) << 5 | (f >> 1) << 4:02X}" for dy, dx, t, a, f in hl))
         body = []
         for k in range(n):
             tb = [b for t in pics["tiles"][k] for b in encode_tile(list(t))] or [0] * 16

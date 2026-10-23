@@ -8,3 +8,6 @@ __pycache__/
 .idea
 *.nes
 tools/nes_apu/render
+
+# the art build's previews and sheets, remade every build (its .pkl/.json NES captures are kept)
+tools/punchout_art/out/*.png

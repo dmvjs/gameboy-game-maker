@@ -107,6 +107,100 @@ def scale(f, s, outline_weight=1.8):
 FEATURE = 40                            # (shrink_lines: a thin bright feature's line, this much costlier to drop)
 
 
+MAC_LETTERS = "KGS"                      # (Mac's baked frames: his 3 colors, MAC_INK's order)
+
+
+def mac_baked(name, make):
+    """Mac's frame `name` as baked (touchups/mac/NAME.txt, 'final'): its rows of his colors; not baked, make()'s."""
+    path = TOUCHUPS / "mac" / f"{name}.txt"
+    if path.exists():
+        rows = [l for l in path.read_text().splitlines() if l and not l.startswith(("#", "final"))]
+        return [[MAC_INK[MAC_LETTERS.index(c)] + (255,) if c != "." else None for c in r] for r in rows]
+    return make()
+
+
+def bake_mac(name, rows):
+    path = TOUCHUPS / "mac" / f"{name}.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f"# Little Mac, {name}: from the NES frame by treat_lines (0.7), baked", "final"]
+    lines += ["".join(MAC_LETTERS[MAC_INK.index(tuple(c[:3]))] if c else "." for c in r) for r in rows]
+    path.write_text("\n".join(lines) + "\n")
+
+
+def treat_lines(f, s, ink_color):
+    """Shrink pixel art the way warp.py draws a fighter (uniform here: no head kept larger): each pixel the color
+    most of its area covers, the ink left out of that vote; the ink drawn as lines (each touching pair of the
+    original's inked pixels joined), so outlines stay whole and a pixel thin; lone specks of a color taken by
+    their neighbors'; then swept against the original row by row, ink no line needs given back the color under
+    it. Closer to the original than shrink_lines (a third of the pixels wrong there, an eighth here)."""
+    import math
+    SUB = 5
+    H, W = len(f), len(f[0])
+    key = lambda c: tuple(c[:3]) if c else None
+    ink = tuple(ink_color[:3])
+    src = {(x, y): key(c) for y, row in enumerate(f) for x, c in enumerate(row) if c}
+    full = {key(c): c for row in f for c in row if c}
+    oh, ow = math.ceil(H * s) + 1, math.ceil(W * s) + 1
+    out = [[None] * ow for _ in range(oh)]
+    for Y in range(oh):
+        for X in range(ow):
+            v = {}
+            for j in range(SUB):
+                for i in range(SUB):
+                    c = src.get((math.floor((X + (i + .5) / SUB) / s), math.floor((Y + (j + .5) / SUB) / s)))
+                    k = "ink" if c == ink else c
+                    v[k] = v.get(k, 0) + (0.5 if k == "ink" else 1)
+            if v.get("ink", 0) / 0.5 >= 0.85 * SUB * SUB:      # (solid: a tank top, a boot -- not a lined leg)
+                out[Y][X] = ink
+                continue
+            b = max(v, key=v.get)
+            if b == "ink":
+                b = max((k for k in v if k != "ink"), key=v.get, default=None)
+            out[Y][X] = b
+    to = lambda x, y: (math.floor((x + .5) * s), math.floor((y + .5) * s))
+    def line(a, b):
+        n = max(abs(b[0] - a[0]), abs(b[1] - a[1]))
+        for t in range(n + 1):
+            yield (round(a[0] + (b[0] - a[0]) * t / n), round(a[1] + (b[1] - a[1]) * t / n)) if n else a
+    inks = {p for p, c in src.items() if c == ink}
+    for (x, y) in inks:
+        a = to(x, y)
+        out[a[1]][a[0]] = ink
+        for q in ((x + 1, y), (x, y + 1), (x + 1, y + 1), (x - 1, y + 1)):
+            if q in inks:
+                for X, Y in line(a, to(*q)):
+                    if 0 <= X < ow and 0 <= Y < oh:
+                        out[Y][X] = ink
+    for Y in range(1, oh - 1):
+        for X in range(1, ow - 1):
+            c = out[Y][X]
+            if c in (ink, None):
+                continue
+            nb = [out[Y - 1][X], out[Y + 1][X], out[Y][X - 1], out[Y][X + 1]]
+            fill = [n for n in nb if n not in (ink, None)]
+            if c not in nb and fill:            # (a speck of a color: its neighbors' -- never ink: skin between
+                out[Y][X] = max(set(fill), key=fill.count)   #  two lines is the art, not a speck)
+    def needed(X, Y):
+        ring = [(-1, -1), (0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0)]
+        k = [0 <= Y + dy < oh and 0 <= X + dx < ow and out[Y + dy][X + dx] == ink for dx, dy in ring]
+        return sum(k) == 1 or sum(1 for i in range(8) if k[i] and not k[i - 1]) > 1
+    for _ in range(3):
+        for Y in range(oh):
+            for X in range(ow):
+                if out[Y][X] == ink:
+                    n = src.get((math.floor((X + .5) / s), math.floor((Y + .5) / s)))
+                    if n not in (ink, None) and not needed(X, Y):
+                        out[Y][X] = n
+    rows = [[full[c] if c else None for c in r] for r in out]
+    while rows and not any(rows[-1]):
+        rows.pop()
+    while rows and not any(rows[0]):
+        rows.pop(0)
+    cols = [x for r in rows for x, c in enumerate(r) if c]
+    lo, hi = (min(cols), max(cols)) if cols else (0, 0)
+    return [r[lo:hi + 1] for r in rows]
+
+
 def shrink_lines(f, s):
     """Shrink pixel art by dropping whole rows and columns (3 in every 10 at 0.7): in each block the ones that
     most repeat a neighbour, never two side by side, the blocks' phase the one losing least. What's kept is the
@@ -1369,7 +1463,7 @@ def mac_from_nes(s):
                     on = [x for x, c in enumerate(row) if c]
                     for x in range(on[0], on[-1] + 1) if on else ():
                         if not row[x]: row[x] = MAC_INK[0] + (255,)
-            small = shrink_lines(f, s)          # (the game's own pixels, kept crisp)
+            small = mac_baked(f"pose-{pose}", lambda f=f: treat_lines(f, s, MAC_INK[0]))   # (warp.py's way)
         else:
             small = scale(cut(rip, boxes[MAC[pose]]), s, outline_weight=1.0)
         out.append(place(small, PW, PH, PH - len(small)))
@@ -1390,7 +1484,7 @@ def mac_pictures(s, colors):
         return MAC_INK[1] + (255,)
     raw = {k: mac_nes.mac_frame_at(int(k, 16)) for k in sorted(MAC_FRAMES, key=lambda k: int(k, 16))}
     i0, (x0, y0) = raw["00"]
-    w0 = len(shrink_lines([[ink(c) if c else None for c in row] for row in i0], s)[0])
+    w0 = len(mac_baked("00", lambda: treat_lines([[ink(c) if c else None for c in row] for row in i0], s, MAC_INK[0]))[0])
     bx, by = (PW - w0) // 2, y0 + len(i0)       # (his idle frame's left in the box; its bottom, the box's)
     out = {}
     for k, r in raw.items():
@@ -1405,7 +1499,7 @@ def mac_pictures(s, colors):
                 on = [i for i, c in enumerate(row) if c]
                 for i in range(on[0], on[-1] + 1) if on else ():
                     if not row[i]: row[i] = MAC_INK[0] + (255,)
-        small = shrink_lines(f, s)
+        small = mac_baked(k, lambda f=f: treat_lines(f, s, MAC_INK[0]))
         h, w = len(small), len(small[0])
         left = bx + round((x - x0) * s)
         top = PH + round((y + len(img) - by) * s) - h
@@ -1661,6 +1755,14 @@ for _fm, _canon in FIGHTERS.values():          # up off the knee (2E, his other 
             _canon.setdefault(_rise, _f)
 
 
+MIRROR_OF = {                           # frames caught with another fighter's tiles in them, their mirror right
+    11: {"3C": "3C|"},                  # (Sandman's hook: white trunks)
+}
+NOT_HIS = {                             # frames the plain emulator caught that the real game never shows him in (its
+    2: {"14|", "2E", "30", "32", "38", "38|", "3C|", "40|", "44|", "48|", "4C", "4C|", "84", "86", "88", "CC", "0C"},
+}                                       # bank switched wrong: another fighter's tiles; cynes, 120000 frames: never)
+
+
 def joe_shapes(opponent=0, everything=False):
     """{(frame, mirrored): {(x, y) from his place: color}}: each frame of his from a fight, his biggest piece
     (not a speck of another sprite, nor the referee)."""
@@ -1711,6 +1813,12 @@ def joe_shapes(opponent=0, everything=False):
     for (f, mirrored), shape in list(out.items()):     # a mirrored frame caught the same as its plain one (the
         if mirrored and out.get((f, 0)) == shape:      # capture's mirror flag set, the picture taken unflipped):
             out[(f, 1)] = {(-x, y): c for (x, y), c in shape.items()}   # flipped about his place, as the NES's
+    for k in NOT_HIS.get(opponent, ()):
+        out.pop(_key(k), None)
+    for k, other in MIRROR_OF.get(opponent, {}).items():   # (a frame caught wrong whose mirror was caught right:
+        o = out.get(_key(other))                            #  the NES draws one as the other flipped)
+        if o:
+            out[_key(k)] = {(-x, y): c for (x, y), c in o.items()}
     return out
 
 def joe_from_nes(s, shapes=None, opponent=0):
@@ -1793,6 +1901,8 @@ def pictures_from_nes(s, shapes, opponent, blank=()):
             if 0 <= X < W and 0 <= Y < H:
                 img[Y][X] = tuple(c) + (255,)
         small = shrink_lines(img, s) if lines else scale(img, s)
+        if opponent in LINE_REDRAW and not getattr(pictures_from_nes, "plain", False):
+            small = redraw_lines(img, small, s)
         return [[small[y][x] if y < len(small) and x < len(small[0]) else None for x in range(RW)] for y in range(RH)]
     out = {}
     for (f, mi) in sorted(shapes):
@@ -1875,6 +1985,8 @@ def read_touchup(path):
             continue
         if line.startswith("auto "):
             auto = line.split()[1]
+        elif line.startswith("moved ") or line == "final":
+            pass                            # (touchup_moved's; touchup_final's)
         elif line.startswith("legend "):
             for item in line.split()[1:]:
                 ch, v = item.split("=")
@@ -1884,9 +1996,26 @@ def read_touchup(path):
     return auto, rows
 
 
+def touchup_final(path):
+    """A touch-up baked: 'final' in it, the picture as drawn for good, whatever its auto picture comes to."""
+    return "final" in path.read_text().splitlines()
+
+
+def touchup_moved(key):
+    """How far each touch-up moved its picture in its frame ('moved DX DY': a tile's colors kept, say), to be undone
+    in its place on screen: {key: (dx, dy)}."""
+    out = {}
+    for path in sorted((TOUCHUPS / key).glob("*.txt")) if (TOUCHUPS / key).exists() else []:
+        for line in path.read_text().splitlines():
+            if line.startswith("moved "):
+                out[path.stem.replace("m", "|") if path.stem.endswith("m") else path.stem] = tuple(map(int, line.split()[1:3]))
+    return out
+
+
 def apply_touchups(key, frames):
     """A rival's hand touch-ups (touchups/KEY/FRAME.txt) put in, each only over the auto picture it was drawn on:
-    one whose auto picture has changed since is left out, and said so (redo it: touchup.py)."""
+    one whose auto picture has changed since is left out, and said so (redo it: touchup.py) -- unless it's final,
+    baked: then it's the picture, whatever the NES's shrink now makes."""
     d = TOUCHUPS / key
     if not d.exists():
         return frames
@@ -1897,7 +2026,7 @@ def apply_touchups(key, frames):
             print(f"  touch-up {path.name}: no picture {k}")
             continue
         auto, rows = read_touchup(path)
-        if auto != frame_hash(frames[k]):
+        if auto != frame_hash(frames[k]) and not touchup_final(path):
             print(f"  touch-up {path.relative_to(HERE)} is stale (its auto picture changed): not applied -- redo it")
             continue
         out[k] = rows
@@ -1988,7 +2117,16 @@ def import_pictures(frames, palettes):
                     if px[i]:
                         pix[i] = near(px[i], palettes[bp])
                 kinds.append(KINDS[bp])
-        out[key] = {"pixels": "".join(map(str, pix)), "cells": "".join(kinds)}
+        light = lambda c: min(c) >= 26
+        red = lambda c: c[1] < 0.4 * c[0] and c[2] < 0.4 * c[0]
+        around = lambda i: [j for j in (i - 1, i + 1, i - RW, i + RW, i - RW - 1, i - RW + 1, i + RW - 1, i + RW + 1)
+                            if 0 <= j < RW * RH]
+        lost = [i for i in range(RW * RH) if px[i] and light(px[i])                      # (a white his tile can't
+                and not any(light(palettes[KINDS.index(kinds[(i // RW // 8) * FIGHT_W + (i % RW) // 8])][k]) for k in (1, 2, 3))
+                and not any(px[j] and red(px[j]) for j in around(i))]
+        out[key] = {"pixels": "".join(map(str, pix)), "cells": "".join(kinds)}   # show, not a glove's shine: an eye's,
+        if lost:                                                                  # a sprite's on Color)
+            out[key]["whites"] = lost
     return out
 
 
@@ -2226,6 +2364,11 @@ def rival_art(key, s, colors, pposes, max_share=24):
         drawn = frames_                                 # on screen where he was, the idle one's too)
         frames_, moved = align_pictures(frames_, pals)
         frames_ = apply_touchups(key, frames_)           # (hand touch-ups, over the very pictures they were drawn on)
+        for k, (dx, dy) in touchup_moved(key).items():   # (and any move of theirs, undone on screen like align's)
+            mx, my = moved.get(k, (0, 0))
+            moved[k] = (mx + dx, my + dy)
+        if key in DESPECKLE:
+            frames_ = despeckle(frames_)                 # (then the shrink's stray dots, the touch-ups' hashes kept)
         places = {k: [x - moved.get(k, (0, 0))[0], y - moved.get(k, (0, 0))[1]]
                   for k, (x, y) in {k: places.get(k, [0, 0]) for k in frames_}.items()}
         art["pictures"] = {"poses": import_pictures(frames_, pals), "places": {k: v for k, v in places.items() if v != [0, 0]}}
@@ -2233,6 +2376,13 @@ def rival_art(key, s, colors, pposes, max_share=24):
             gems = {k: _jewel({(x, y): c for y, row in enumerate(f) for x, c in enumerate(row) if c}) for k, f in drawn.items()}
             art["pictures"]["jewel"] = {k: [round(g[0]) + moved.get(k, (0, 0))[0], round(g[1]) + moved.get(k, (0, 0))[1]]
                                         for k, g in sorted(gems.items()) if g}     # (found as drawn, moved with it)
+            for k, f in frames_.items():                # (a picture drawn anew -- a touch-up, warp.py's -- its gem
+                if (TOUCHUPS / key / f"{touchup_name(k)}.txt").exists():   #  where that drawing has it)
+                    g = _jewel({(x, y): c for y, row in enumerate(f) for x, c in enumerate(row) if c})
+                    if g:
+                        art["pictures"]["jewel"][k] = [round(g[0]), round(g[1])]
+                    else:
+                        art["pictures"]["jewel"].pop(k, None)
         nxt = json.loads(PIC_NEXT.read_text()).get(key) if PIC_NEXT.exists() else None
         if nxt:                         # (the original: the picture likely next, loaded early: pic_next.py)
             art["pictures"]["next"] = {k: v for k, v in nxt.items() if k in frames_ and v[0] in frames_}
@@ -2586,13 +2736,113 @@ def write_example(strict=True):
     print("(" + msg.strip() + "; measuring against the last one)")
 
 
+DESPECKLE = set()                # (rivals whose shrink leaves stray dots: their pictures cleaned of them)
+LINE_REDRAW = set()                   # (opponents whose inner lines the shrink breaks to dashes: drawn whole again)
+
+
+def redraw_lines(img, small, s):
+    """The NES picture's inner lines (its dark pixels inside him, not the outline) drawn again at the small size,
+    whole: each pair of touching dark pixels a line between where they land, so a muscle's or a fold's line stays
+    a line, not dashes. The shrink's colors stay everywhere else."""
+    H, W = len(img), len(img[0])
+    dark = lambda c: c is not None and sum(c[:3]) < 160
+    inside = lambda x, y: all(0 <= x + dx < W and 0 <= y + dy < H and img[y + dy][x + dx] is not None
+                              for dy in (-1, 0, 1) for dx in (-1, 0, 1))
+    out = [list(row) for row in small]
+    h, w = len(out), len(out[0])
+    def put(x, y, c):
+        if 0 <= x < w and 0 <= y < h and out[y][x] is not None:
+            out[y][x] = c
+    for y in range(H):
+        for x in range(W):
+            c = img[y][x]
+            if not dark(c) or not inside(x, y):
+                continue
+            x0, y0 = int(x * s), int(y * s)
+            put(x0, y0, c)
+            for dx, dy in ((1, 0), (0, 1), (1, 1), (1, -1)):
+                q = (x + dx, y + dy)
+                if 0 <= q[0] < W and 0 <= q[1] < H and dark(img[q[1]][q[0]]) and inside(*q):
+                    x1, y1 = int(q[0] * s), int(q[1] * s)
+                    n = max(abs(x1 - x0), abs(y1 - y0))
+                    for t in range(1, n + 1):
+                        put(x0 + round((x1 - x0) * t / n), y0 + round((y1 - y0) * t / n), c)
+    return out
+
+
+def despeckle(frames):
+    """A shrink's stray dark pixel (a line of the NES's broken to a dot): alone, among one color all round (skin,
+    trunks), it takes that color. A line's pixels have a dark neighbour and stay; the outline (next to the mat,
+    nothing) too."""
+    out = {}
+    for k, f in frames.items():
+        g = [list(row) for row in f]
+        H, W = len(f), len(f[0])
+        lum = lambda c: sum(c[:3]) if c else None
+        for y in range(1, H - 1):
+            for x in range(1, W - 1):
+                c = f[y][x]
+                if not c or lum(c) > 150:
+                    continue
+                ring = [f[y + dy][x + dx] for dy in (-1, 0, 1) for dx in (-1, 0, 1) if dy or dx]
+                if any(n is None for n in ring) or any(lum(n) <= 150 for n in ring):
+                    continue
+                kinds = {tuple(n[:3]) for n in ring}
+                if len(kinds) == 1:
+                    g[y][x] = ring[0]
+        out[k] = g
+    return out
+
+
+def preview_only(key, s):
+    """One fighter's pictures (or the referee's looks) alone, for a look: from the captures already cached, his
+    pictures as the NES draws them (out/KEY-pictures.png) and as Color will show them, in his palettes
+    (out/KEY-preview-color.png). Nothing else is rebuilt, and the editor's art isn't touched."""
+    out = HERE / "out"
+    rgba = lambda c: tuple((v << 3) | (v >> 2) for v in c) + (255,)
+    if key == "referee":
+        looks = ref_from_nes()
+        ink = {v: k for k, v in REF_INK.items()}
+        frames = [[[tuple(ink[int(ch)]) + (255,) if ch != "0" else None for ch in px[y * 24:(y + 1) * 24]]
+                   for y in range(32)] for px in looks.values()]
+        write_sheet(out / "referee-preview.png", frames, 24, 32)
+        print("referee:", (out / "referee-preview.png").relative_to(ROOT))
+        return
+    r = NES_RIVALS[key]
+    shapes = joe_shapes(r["opp"])
+    sheet = out / f"{key}-from-nes.png"
+    write_sheet(sheet, joe_from_nes(s, shapes, r["opp"]), RW, RH)
+    _, pals, _ = import_rival(str(sheet), [26, 28, 31])
+    every = joe_shapes(r["opp"], everything=True)
+    frames_ = pictures_from_nes(s, every, r["opp"], blank_frames(r["opp"]))
+    frames_, _ = align_pictures(frames_, pals)
+    frames_ = apply_touchups(key, frames_)
+    if key in DESPECKLE:
+        frames_ = despeckle(frames_)
+    write_sheet(out / f"{key}-pictures.png", [frames_[k] for k in sorted(frames_)], RW, RH, cols=13)
+    pics = import_pictures(frames_, pals)
+    shown = []
+    for k in sorted(pics):
+        px, cells = pics[k]["pixels"], pics[k]["cells"]
+        pal = lambda i: pals[KINDS.index(cells[(i // RW // 8) * FIGHT_W + (i % RW) // 8])]
+        shown.append([[rgba(pal(y * RW + x)[int(px[y * RW + x])]) if px[y * RW + x] != "0" else None
+                       for x in range(RW)] for y in range(RH)])
+    write_sheet(out / f"{key}-preview-color.png", shown, RW, RH, cols=13)
+    print(f"{r['name']}: {len(pics)} pictures ->", (out / f"{key}-pictures.png").relative_to(ROOT), "and",
+          (out / f"{key}-preview-color.png").relative_to(ROOT))
+
+
 def main():
     a = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     a.add_argument("--joe", type=float, default=0.7, help="Joe's scale from NES size (default 0.7)")
     a.add_argument("--mac", type=float, default=0.7, help="Mac's scale from NES size (default 0.7, as Joe's: all of him, reaching punches too)")
     a.add_argument("--max-share", type=int, default=10, help="most pixels a tile may change to share another (default 10)")
     a.add_argument("--mac-sheet", type=Path, help="use this edited 24x48-frame sheet instead of the rip")
+    a.add_argument("--only", metavar="NAME", help="just one fighter's pictures (joe, kaiser, ... tyson) or 'referee', "
+                   "for a look: out/NAME-pictures.png and NAME-preview-color.png; nothing else rebuilt")
     args = a.parse_args()
+    if args.only:
+        return preview_only(args.only, args.joe)
     write_example(strict=False)         # from the current editor code, so the budget below measures what it builds
     out = HERE / "out"
     mac_sheet = args.mac_sheet

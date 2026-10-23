@@ -1,0 +1,8 @@
+# Little Mac, 3A: from the NES frame by treat_lines (0.7), baked
+final
+.....KKK.KKSSKSSS.....K.KGKK.....KKSSSK
+.....KG..KKSKKKSS.......GGK.....KSKSSSK
+.........KKKK.KSS.......GGK.....KK.KSSK
+.........KKKKKSSS.......GGKK....KG.KKSK
+KK.......GGKKGKSK........GGG....KG..KSK
+.KK........KK.KKK...............KG..KSK

@@ -46,6 +46,11 @@ npm start
 press **▶ Test** to play. The first build takes a few minutes. No Node? Double-click **Start.command** (Mac) or
 **Start.bat** (Windows) instead. You need Python 3.9 or newer.
 
+A plain clone builds and tests the game as it is, with no `.nes` file (that's what CI does):
+`python3 -m gbstage build examples/joe-vs-mac.gbstage.json`. Your `.nes` file is needed only to rebuild the art
+and run the checks against the NES. The disassembly submodule (`tools/punchout_art/disassembly`) is optional; it's
+another place the game's banks can come from (`git submodule update --init`).
+
 **Controls** (keyboard in **▶ Test**): **B** (Z) left punch, **A** (X) right punch, **Up** + punch to the face,
 **Left/Right** dodge, hold **Down** to block, **Start** (Enter) star punch.
 

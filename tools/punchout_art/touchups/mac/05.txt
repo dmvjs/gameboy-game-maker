@@ -1,0 +1,24 @@
+# Little Mac, 05: from the NES frame by treat_lines (0.7), baked
+final
+.KKKKKKKKK.
+.KKKKKGKKKK
+.KGGKKKKGGK
+.KKKKGGGGGK
+.KGGGGGGGGK
+.KGGGGGGGGK
+KGGGGGGGGGK
+KGGGGGGKGGK
+KGGGGGKKGKK
+KGGGGKGGGK.
+.KKKKKKKK..
+.KSSSKSKK..
+.KSKKKSSK..
+.KSSSKKGK..
+..KSSSKGK..
+..KKKKKGK..
+...KGKKGK..
+...KKK.....
+...KGG.....
+...KGG.....
+...KGG.....
+...GG......
