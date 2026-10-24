@@ -1135,6 +1135,15 @@ ENDC
     sub 144                 ; one's; a fade's palettes, say, went first)
     cp FT_VBL_LAST - 144
     ret nc
+IF DEF(FT_NES)
+    ldh a, [hIsCGB]         ; (the original: its pictures' rows leave room for one of these, the HUD first when
+    and a                   ;  it's waiting -- the crowd's turn the frame after; else the clock never moved)
+    jr nz, .crowd
+    ldh a, [hFtHudReady]
+    and a
+    jr nz, .lesser
+.crowd:
+ENDC
     call FtCrowdDraw
 IF DEF(FT_NES)
     call FtCrowdPulse
@@ -1143,6 +1152,7 @@ ENDC
     sub 144
     cp FT_VBL_LAST - 144
     ret nc
+.lesser:
 IF DEF(FT_NES)
     ld a, [wFtBankPics]     ; (Color with his pictures: drawn above, no poses; the original with its greys too)
     and a
@@ -6735,6 +6745,8 @@ ENDC
     inc e
     jr .next
 .skip2:
+    xor a                   ; (its y, written already, undone: past the list's end the slot stays hidden)
+    ld [de], a
     inc hl
     inc hl
 .next:

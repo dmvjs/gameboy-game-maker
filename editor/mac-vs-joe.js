@@ -259,7 +259,7 @@ const TYSON = {
 
 export const JOE_VS_MAC = {
   id: 'mac-vs-joe',
-  name: 'Joe vs Mac',
+  name: "Mike Tyson's Punch-Out!! rev 0.1",
   credit: '(C)2026 DMVJS',
   roundCard: true,                      // Punch-Out!!'s ROUND card before each round
   docLines: [['KEEP YOUR', 'GUARD UP!'], ['PUT HIM', 'AWAY!!'], ['STICK AND', 'MOVE,', 'STICK AND', 'MOVE!'],   // Doc
