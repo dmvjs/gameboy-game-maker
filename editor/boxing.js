@@ -229,6 +229,7 @@ export function boxingGame(pack) {
     line('THE W.V.B.A.', 8, 1); line(circuit, 16, 1);
     for (let x = 0; x < M.W; x += 8) fillRect(layer, x + 1, 27, 5, 1, 1);
     for (const [text, y, x] of lines) x === undefined ? line(text, y, 2) : M.drawText(layer, text, x, y, 2);
+    if (gloveAt === null) return;                        // (a title won: Mac and the trophy instead, as the NES's)
     const g = pack.loseGlove, gx = gloveX ?? (centered(gloveAt) >> 3 << 3) + 5 * 8, gy = 8 * 8;
     const lettered = new Set();                          // behind the letters, as the NES has it (its glove's
     for (let i = 0; i < g.w * g.h; i++) {               // sprites under the background): the tiles where they meet
@@ -245,6 +246,21 @@ export function boxingGame(pack) {
     }
   }
   const NEXT = [['ARE YOU READY', 104], ['FOR THE', 114], ['NEXT CHALLENGE ?', 124]];
+  // A title's art on whole tiles from cell (cx, cy): its pixels (0 its backdrop, as the screen's) and each tile's
+  // palette, its own (Color's colors, the original's greys).
+  function champArt(scene, layer, art, cx, cy) {
+    const pals = art.palettes.map((c, k) => addPal(`Title won ${k + 1}`, c, art.greys[k]));
+    const cw = art.w >> 3;
+    for (let i = 0; i < art.w * art.h; i++) {
+      const x = cx * 8 + i % art.w, y = cy * 8 + (i / art.w | 0);
+      if (x >= M.W || y >= M.H) continue;
+      layer.pixels[y * M.W + x] = +art.pixels[i];
+    }
+    art.cells.forEach((k, c) => {
+      const x = cx + c % cw, y = cy + (c / cw | 0);
+      if (x < M.CW && y < M.CH) scene.cellPal[y * M.CW + x] = pals[k];
+    });
+  }
 
   // Punch-Out!!'s round card: after Start on the challenger screen (and the corner) the screen scrolls up and
   // it comes up from below: ROUND (FINAL ROUND for the third) over the round's digit, lit dots on a dark grid.
@@ -787,7 +803,18 @@ export function boxingGame(pack) {
     // ---- After the fight ----
     if (pack.loseGlove) {                                  // Punch-Out!!'s: "GREAT FIGHTING", ranked up
       const ranked = rv.winRank || `RANKED UP TO #${(rv.rank.match(/\d+/) || ['1'])[0]}`;
+      const C = rv.winRank && pack.screens?.champion;      // a title won: the NES's Mac, its trophy, its words
       for (const [sc, how] of [[id.win, 'KO'], [id.winTko, 'TKO']]) {
+        if (C) {
+          const lines = C.lines.map(([t, y]) => [t, y, 84 - t.length * 4]);   // (between Mac and the trophy)
+          nesScreen(S[sc], layer(sc), [['"GREAT FIGHTING"', 38], [`YOU WON BY ${how}!`, 50], ...lines], null, null, circuitOf(rv));
+          const circuit = circuitOf(rv) || '', t = /MINOR/.test(circuit) ? 'minor' : /MAJOR/.test(circuit) ? 'major' : 'world';
+          champArt(S[sc], layer(sc), C.mac, 0, C.row);
+          champArt(S[sc], layer(sc), C.trophies[t], 17, C.row);
+          S[sc].texts = [{ label: 'TIME 0:00.00,R1', x: 3, y: 8, textSlot: 2, fightTime: true }];
+          S[sc].pressStart = { target: next, flashes: 3, area: null, quiet: true, prompt: { label: 'PUSH START!', x: 6, y: 17, textSlot: 1, blink: true } };
+          continue;
+        }
         const champ = rv.winRank ? [ranked, 80, M.W - 8 - ranked.length * 8] : [ranked, 80];   // a title: the glove
         nesScreen(S[sc], layer(sc), [['"GREAT FIGHTING"', 40], [`YOU WON BY ${how}!`, 56], champ, ...NEXT], ranked,
                   rv.winRank ? 8 : undefined, circuitOf(rv));                                                  // beside the line

@@ -54,6 +54,65 @@ def _frames():
     return got
 
 
+CHAMP_CACHE = HERE / "out" / "nes-champion.pkl"
+
+
+def _champ_frames():
+    """The NES's title-bout win screens (Mac, a trophy: the circuit's), settled: the Minor's, Major's and World's."""
+    if CHAMP_CACHE.exists():
+        return pickle.load(open(CHAMP_CACHE, "rb"))
+    import numpy as np
+    import nes_reference as R
+    got = {}
+    for opp, name in ((2, "minor"), (6, "major"), (12, "world")):
+        nes = R._start(opp)
+        for _ in range(4):
+            nes.controller = R.START
+            nes.step()
+        nes.controller = 0
+        t, tf, won = 0, None, None
+        while t < 6000:
+            f = nes.step()
+            t += 1
+            if nes[0x00] == 1 and tf is None:
+                tf = t
+            if tf is not None and won is None and t - tf == 200:
+                nes[0x00] = 0xFC
+            if tf is not None and won is None and nes[0x00] != 1 and t - tf > 210:
+                won = t
+            if won is not None and t - won == 600:
+                got[name] = np.asarray(f[:, :, :3]).copy()
+                break
+    CHAMP_CACHE.parent.mkdir(exist_ok=True)
+    pickle.dump(got, open(CHAMP_CACHE, "wb"))
+    return got
+
+
+def _celled(img, box, colors, pals, near):
+    """The box at 5/8 (it lands on whole tiles: its top-left on one), each 8x8 cell in whichever of pals (slot 1-3
+    colors, as indices into colors; 0 the backdrop) shows its pixels best, a color not in it its near one's."""
+    a = _scaled(img, box, colors)
+    w, h, px = a["w"], a["h"], [int(c) for c in a["pixels"]]
+    W, H = (w + 7) // 8 * 8, (h + 7) // 8 * 8
+    grid = [[px[y * w + x] if x < w and y < h else 0 for x in range(W)] for y in range(H)]
+    out, cells = [[0] * W for _ in range(H)], []
+    for cy in range(H // 8):
+        for cx in range(W // 8):
+            used = [grid[cy * 8 + y][cx * 8 + x] for y in range(8) for x in range(8)]
+            def slot(c, p):
+                c2 = c
+                while c2 and c2 not in p:
+                    c2 = near.get(c2, 0)
+                return 0 if not c2 else p.index(c2) + 1
+            cost = lambda p: sum(1 for c in used if c and (c not in p))
+            k = min(range(len(pals)), key=lambda k: cost(pals[k]))
+            cells.append(k)
+            for y in range(8):
+                for x in range(8):
+                    out[cy * 8 + y][cx * 8 + x] = slot(grid[cy * 8 + y][cx * 8 + x], pals[k])
+    return {"w": W, "h": H, "pixels": "".join(str(v) for r in out for v in r), "cells": cells}
+
+
 def _scaled(img, box, colors, ink=False):
     """The box of the frame at 5/8, each pixel the color covering most of its area (one of colors -> its index); ink:
     the darkest (the last of colors) wherever it covers a third, so lettering's thin strokes hold."""
@@ -95,6 +154,31 @@ def _cycle(seq):
     return {"after": runs[0][1], "every": runs[1][1], "colors": colors, "loops": loops, "hold": held}
 
 
+def _champion(s5, navy):
+    """A title bout won: Mac on the left, the circuit's trophy on the right (the NES's art at 5/8, on whole tiles:
+    Mac from tile row 9 at the left edge, the trophy's tiles at columns 17-19), each tile in one of their palettes."""
+    f = _champ_frames()
+    black, skin, blue, red, white = (0, 0, 0), (236, 180, 176), (76, 154, 236), (152, 34, 32), (236, 238, 236)
+    gold, brown, cream = (212, 136, 32), (60, 24, 0), (228, 196, 144)
+    mac_colors = [navy, skin, red, blue, white, black]          # (indices: 1 skin, 2 red, 3 blue, 4 white, 5 black)
+    mac_pals = [[1, 2, 5], [1, 3, 5], [4, 1, 5]]
+    y0 = 24 + (72 - 8) / SCALE                                  # (tile row 9: the NES's y there, its header at 8)
+    mac = _celled(f["major"], (20, round(y0), 72, round(y0) + 112), mac_colors, mac_pals, {4: 1, 3: 2, 2: 3})
+    mac["palettes"] = [[s5(navy)] + [s5(mac_colors[c]) for c in p] for p in mac_pals]
+    mac["greys"] = [[3, 0, 1, 2], [3, 0, 1, 2], [3, 0, 0, 2]]   # (the original, light on black: his black dark grey)
+    tro_colors = [navy, cream, gold, brown, white, black]
+    tro_pals = [[1, 2, 5], [2, 3, 5]]
+    trophies = {}
+    for k in ("minor", "major", "world"):
+        x0 = 203                                                # (from 5 left of the World's: on tile column 17, its 3)
+        t = _celled(f[k], (x0, round(y0), x0 + 38, round(y0) + 112), tro_colors, tro_pals, {4: 1, 3: 5})
+        t["palettes"] = [[s5(navy)] + [s5(tro_colors[c]) for c in p] for p in tro_pals]
+        t["greys"] = [[3, 0, 1, 2], [3, 1, 2, 2]]
+        trophies[k] = t
+    return {"mac": mac, "trophies": trophies, "row": 9,
+            "lines": [["LADIES AND", 80], ["GENTLEMEN!", 89], ["WE HAVE A NEW", 104], ["CHAMPION!!", 113]]}
+
+
 def screens():
     import build
     f = _frames()
@@ -114,6 +198,7 @@ def screens():
                        **{k: dcy[k] for k in ("after", "every", "loops", "hold")},
                        "lines": ["LADIES", "AND", "GENTLEMEN !", "KID DYNAMITE,", "MIKE TYSON"]},
         "cycleColors": [s5(c) for c in tcy["colors"]],
+        "champion": _champion(s5, navy),
         "news": {"colors": [s5(white), s5(paper), s5(dark), s5(black)], "music": 0x04,
                  "from": 32, "every": 8,                       # (the page 32 lines low, a line up every 8 frames)
                  "masthead": piece((0, 0, 240, 34), True), "headline": piece((116, 48, 230, 72), True),

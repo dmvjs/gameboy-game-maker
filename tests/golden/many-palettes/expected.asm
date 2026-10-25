@@ -185,9 +185,22 @@ VBlankDone:                 ; everything that must happen during VBlank is done
     ldh [hPadNew], a        ; pressed this frame
     ld a, b
     ldh [hPad], a           ; held
+    and $0F                 ; A, B, Select and Start together: start over (the soft reset every game has)
+    cp $0F
+    jp z, SoftReset
     call hUpdateJump
     call SfxUpdate
     jp MainLoop
+
+SoftReset:                  ; as from power on: the hardware's A again (Color: $11), interrupts off
+    di
+    ldh a, [hIsCGB]
+    and a
+    ld a, $11
+    jr nz, .go
+    ld a, $01
+.go:
+    jp Start
 
 SECTION "Code: Scenes", ROM0
 ; Load scene A with the screen off. Tiles, map and palette map go by DMA on Game Boy Color.

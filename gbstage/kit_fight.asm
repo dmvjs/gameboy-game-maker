@@ -217,6 +217,7 @@ wFtHearts0: db              ; Mac's hearts as the fight starts (the NES's, by op
 wFtFightEnd:
 wRvNesX: db                 ; NES rival: his offset from his place (pixels right, down)
 wRvNesY: db
+wFtRiseCap: db              ; (how far up his band may go: the picture showing's pose's)
 wFtHeadX: db                ; (his top rows' sprites: OAM x of his area's left, this frame)
 wFtHeadIn: db               ; (and in this frame's yet)
 wFtHeadTile: db             ; (added to its tiles: his pictures' second copy)
@@ -2452,8 +2453,6 @@ ENDC
     ld a, [wRvPlaceY]
     sub b
     ld b, a
-    or c
-    jr z, .out
     ld a, [wRvNesX]
     add c
     ld [wRvNesX], a
@@ -2462,6 +2461,9 @@ ENDC
     ld [wRvNesY], a
     pop af
     ld [$2000], a
+    ld a, [wRvPicSwitch]    ; (one going up: his band worked out again for it -- its place, how far up it may go)
+    and a
+    ret z
     jp FtAnimate
 .out:
     pop af
@@ -2521,12 +2523,22 @@ IF DEF(FT_ROPE)
     ; his picture all in this late, the frame not yet over: up at this VBlank, not the next -- his top rows'
     ; sprites built again for it, his band where it sits (not when his gem or a star's sparkle, in the lower
     ; list built for the one up now, would be a frame off)
-    ld a, [wRvPicSwitch]
-    and a
-    ret nz                  ; (going up already)
     ldh a, [rLY]
     cp FT_LATE_LAST
     ret nc
+    ld a, [wRvPicSwitch]
+    and a
+    jr z, .notYet
+    ldh a, [hFtBandY]       ; (going up already -- its last tiles in just now: his band worked out again for it, how
+    ld b, a                 ;  far up it may go, and his top rows' sprites with it if that moved him)
+    push bc
+    call FtAnimate
+    pop bc
+    ldh a, [hFtBandY]
+    cp b
+    ret z
+    jp FtBuildOAM.upper
+.notYet:
     ld a, [RivalJewel]
     and a
     ret nz
@@ -2588,16 +2600,13 @@ IF DEF(FT_ROPE)
     ld a, [wRvPlaceY]
     sub b
     ld b, a
-    or c
-    jr z, .placed
     ld a, [wRvNesX]
     add c
     ld [wRvNesX], a
     ld a, [wRvNesY]
     add b
     ld [wRvNesY], a
-    call FtAnimate
-.placed:
+    call FtAnimate          ; (its place, how far up it may go)
     jp FtBuildOAM.upper
 ENDC
     ret
@@ -3559,11 +3568,13 @@ ENDC
 
 ; How far up he's shown standing, per pixel up the NES puts him (0-63): one for one for his bobbing, then
 ; easing to FT_STAND_UP over a step back (the NES walks him up to 37 pixels away; his band can't follow).
+IF !DEF(FT_ROPE)
 FtStandUp:
     db $00, $FF, $FE, $FD, $FD, $FD, $FD, $FD, $FD, $FD, $FC, $FC, $FC, $FC, $FC, $FC
     db $FC, $FC, $FC, $FC, $FC, $FC, $FB, $FB, $FB, $FB, $FB, $FB, $FB, $FB, $FB, $FB
     db $FB, $FB, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA
     db $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA
+ENDC
 
 ; The rival's motion as a pixel offset: B = x (right), C = y (down). Small, drawn from his state.
 FtAnimate:
@@ -3583,6 +3594,16 @@ IF DEF(FT_NES)
 .up:
 IF DEF(FT_ROPE)
     ld c, a                 ; as far up as the NES puts him (over the ropes and crowd: his top rows are sprites),
+    ld hl, wRvPicShown      ; (his new pose's limit only once its picture is up -- or going up at this VBlank: till
+    ld a, [wRvPicSwitch]    ;  then the one showing's, kept)
+    and a
+    jr z, .capPic
+    ld hl, wRvPicLoad
+.capPic:
+    ld a, [wRvPic]
+    cp [hl]
+    ld a, [wFtRiseCap]
+    jr nz, .capKept
     ld a, [wRvPose]         ; his top no higher than the crowd's (a tall pose's head would go over the HUD)
     ld e, a
     ld d, 0
@@ -3590,6 +3611,15 @@ IF DEF(FT_ROPE)
     add hl, de
     ld a, [hl]
     add FT_HEAD_ROOM
+    ld e, a
+    ld a, [wNes + $90]      ; (his walk in before the bell, $00/$40: his head up over the HUD too, as the NES's)
+    and $3F
+    ld a, e
+    jr nz, .walked
+    add 16
+.walked:
+    ld [wFtRiseCap], a
+.capKept:
     cp FT_NES_UP_MAX
     jr c, .room
     ld a, FT_NES_UP_MAX
@@ -3602,7 +3632,7 @@ IF DEF(FT_ROPE)
     jr nc, .y
     ld a, e
     jr .y
-ENDC
+ELSE                        ; (no ropes: his band alone, eased)
     ld c, a                 ; standing, as far as his band rises (his head's at the top of the frame);
     ld a, [wRvPose]         ; down, his low poses can rise inside it too (either way down: the second's last)
     cp RP_KD2_STAGGER
@@ -3642,6 +3672,7 @@ ENDC
     ld hl, FtStandUp
     add hl, de
     ld a, [hl]
+ENDC
 .y:
     ld c, a
     jp .done

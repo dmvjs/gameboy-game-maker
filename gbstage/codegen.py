@@ -2642,7 +2642,7 @@ FtRopeAttr:
         rope_defs = (f"DEF FT_ROPE EQU 1\nDEF FT_ROPE_ROW EQU 30                              ; its map row (off screen)\n"
                      f"DEF FT_ROPE_LINE EQU {ft['y'] * 8 - 1}                ; LY where it shows, over his area's first row\n"
                      f"DEF FT_ROPE_SCY EQU ((30 - {ft['y']}) * 8) & $FF\n"
-                     f"DEF FT_HEAD_ROOM EQU {ft['y'] * 8 - crowd_y * 8 + 16}           ; lines his head may rise over his area: past the crowd's top, over the HUD (as the NES's at the bell)\n"
+                     f"DEF FT_HEAD_ROOM EQU {ft['y'] * 8 - crowd_y * 8}                ; lines from the crowd's top to his area's (his walk in: 16 more, over the HUD, as the NES's)\n"
                      f"DEF FT_HEAD_X0 EQU {ft['x'] * 8 + 8}                ; OAM x, y of his area's top left (unscrolled)\n"
                      f"DEF FT_HEAD_Y0 EQU {ft['y'] * 8 + 16}\n"
                      f"DEF FT_HEAD_LIMIT EQU {(ft['y'] + 1) * 8 + 16}             ; OAM y from which his band draws him\n"
@@ -4561,7 +4561,7 @@ Start:
 .waitVBlankDone:            ; labels named .waitX/.waitXDone mark idle loops for the profiler
     xor a
     ldh [rLCDC], a
-{"    ldh a, [hIsCGB]         ; Color: double speed (the CPU twice as fast; the screen's and sound's timing as ever)" + nl + "    and a" + nl + "    jr z, .single" + nl + "    ld a, $30" + nl + "    ldh [rP1], a" + nl + "    xor a" + nl + "    ldh [rIE], a" + nl + "    ld a, 1" + nl + "    ldh [$FF4D], a          ; (KEY1: the switch armed, STOP makes it)" + nl + "    stop" + nl + ".single:" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}    ldh [rSCY], a
+{"    ldh a, [hIsCGB]         ; Color: double speed (the CPU twice as fast; the screen's and sound's timing as ever)" + nl + "    and a" + nl + "    jr z, .single" + nl + "    ldh a, [$FF4D]          ; (double speed already: a soft reset's -- the switch would undo it)" + nl + "    rlca" + nl + "    jr c, .single" + nl + "    ld a, $30" + nl + "    ldh [rP1], a" + nl + "    xor a" + nl + "    ldh [rIE], a" + nl + "    ld a, 1" + nl + "    ldh [$FF4D], a          ; (KEY1: the switch armed, STOP makes it)" + nl + "    stop" + nl + ".single:" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}    ldh [rSCY], a
     ldh [rSCX], a
 {nl.join(boot)}
 {"    xor a                   ; (WRAM is random at power-on: Doc's corner state clear, nothing for VBlank)" + nl + "    ld [wDocDirty], a" + nl + "    ld [wDocN], a" + nl if any(sc.get("doc_patch") for sc in scenes) else ""}{"    xor a                   ; (the recorded crowd: not playing, not copied yet)" + nl + "    ld [wPcmOn], a" + nl + "    ld [wPcmLoaded], a" + nl + "    ld [wPcmMix], a" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}{"    xor a                   ; (no ring's greys: HRAM's random at power-on)" + nl + "    ldh [hFtRingBgp], a" + nl if fights else ""}    ld a, 1                 ; VBlank wakes HALT; no interrupt handler ever runs
@@ -4605,9 +4605,22 @@ VBlankDone:                 ; everything that must happen during VBlank is done
     ldh [hPadNew], a        ; pressed this frame
     ld a, b
     ldh [hPad], a           ; held
+    and $0F                 ; A, B, Select and Start together: start over (the soft reset every game has)
+    cp $0F
+    jp z, SoftReset
 {REPEAT_CODE if repeat else ""}{(CARD_HOLD_CHECK if cards else "") + (SLIDE_SLOW_CODE if slow_slides else SLIDE_STEP_CODE) if slides else ""}{"    ld a, [wPcmMix]         ; (and first, in VBlank's spare lines and the screen's first few: drained since)" + nl + "    and a" + nl + "    ld a, 20" + nl + "    call nz, PcmProduce" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}    call hUpdateJump
 {"    ldh a, [hCutOn]         ; (a cutscene runs the sound itself, before its mid-frame scroll splits)" + nl + "    and a" + nl + "    jp nz, MainLoop" + nl if cutscenes else ""}    call SfxUpdate
 {"    ldh a, [hFtActive]      ; a fight on the original: the CPU's free till VBlank, his coming picture's tiles in it" + nl + "    and a" + nl + "    call nz, FtDmgStream" + nl if nes_any else ""}{"    ld a, [wPcmMix]         ; (a fight on Color with the crowd recorded: its mixed buffers topped up, till line 130)" + nl + "    and a" + nl + "    ld a, 130" + nl + "    call nz, PcmProduce" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}    jp MainLoop
+
+SoftReset:                  ; as from power on: the hardware's A again (Color: $11), interrupts off
+    di
+    ldh a, [hIsCGB]
+    and a
+    ld a, $11
+    jr nz, .go
+    ld a, $01
+.go:
+    jp Start
 
 SECTION "Code: Scenes", ROM0
 ; Load scene A with the screen off. Tiles, map and palette map go by DMA on Game Boy Color.
