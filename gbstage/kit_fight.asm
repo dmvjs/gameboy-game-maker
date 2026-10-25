@@ -6841,10 +6841,7 @@ IF DEF(FT_ROPE)
     ld d, 0
     ld hl, RivalPoseRise
 IF DEF(FT_NES)
-    ldh a, [hIsCGB]         ; (Color with his pictures: the picture showing's own rows -- its head is its own)
-    and a
-    jr z, .rise
-    ld a, [wFtBankPics]
+    ld a, [wFtBankPics]     ; (his pictures, Color's and the original's alike: the picture showing's own rows)
     and a
     jr z, .rise
     ld a, [wRvPicShown]
