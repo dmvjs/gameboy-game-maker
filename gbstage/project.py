@@ -2593,6 +2593,14 @@ def _grey_shades(scene, beta=3.0, mat=0):
     return best[1] if best else {}
 
 
+GREY_FIX = {                            # the original: a fighter's greys set by eye against the NES where the
+    #  automatic choice reads wrong (Von Kaiser: his dark brown hair, moustache and trunks dark, as the NES's;
+    #  his red gloves light grey, one look in every picture, the black outline round them)
+    "Fight: Kaiser": {(7, 3, 0): 3, (18, 4, 4): 1},
+    "Fight: Tiger": {(0, 4, 14): 3},    # (Great Tiger: his dark blue trousers and boots dark, as the NES's -- not white)
+}
+
+
 def _dmg_poses(ft, name=None):
     """The original's pictures: Color's, full size (its streaming quick enough for them: kit_fight.asm's caches of
     the sprite lists, a picture all in late in the frame up at its VBlank)."""
@@ -2609,7 +2617,7 @@ def _fight_pics_dmg(scene):
     pics = _dmg_poses(ft, scene["name"])
     order = scene["fight_pics"]["order"]
     mat = _mat_grey(scene)
-    grey = _grey_shades(scene, mat=mat)
+    grey = {**_grey_shades(scene, mat=mat), **GREY_FIX.get(scene["name"], {})}
     ring = [mat] + [g for g in (0, 1, 2, 3) if g != mat]    # (his ring's BGP: 0 the mat, 1-3 his greys light to dark)
     idx = {g: k for k, g in enumerate(ring)}
     color = {(kind, slot): tuple(scene["_palettes"][idx][slot]) for kind, idx in ft["palettes"].items() for slot in (1, 2, 3)}

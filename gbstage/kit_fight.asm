@@ -238,6 +238,8 @@ wFtFreeze: db               ; hit stop: frames both fighters hold still after a 
 wFtExcite: db               ; frames the crowd's cameras keep flashing
 wFtRand: db
 wFtCue: db                  ; the Bull Charge camera's cell: its tile now (FtCrowdDraw puts it)
+wFtCueHold: db              ; (the original: frames his dodge cue stays shown after the NES's ends -- its LCD smears a
+                            ;  frame or two away)
 wFtBulbs: ds 4 * 2          ; per flash: map address, the tile it covers, state (0 free, frames left, $FF restore)
 wFtOAMEnd: ds 3             ; per sprite list (wFtOAM, wFtOAM2, wFtOAM3): where it ended last time (slots past it hidden)
 wRvPicPrev: db              ; (the original: the picture shown before the shown one)
@@ -642,6 +644,7 @@ ENDC
     ldh [hFtFlashShown], a
     ldh [hFtCueSrc], a      ; (nor his cue's greys up: HRAM's random at power-on)
     ldh [hFtCueOn], a
+    ld [wFtCueHold], a
     ld a, FT_BAND_BOTTOM
     ldh [hFtBandBottom], a
     ldh [hFtShowBottom], a
@@ -774,11 +777,6 @@ ENDC
     reti
 .top:
 IF DEF(FT_ROPE)
-IF DEF(FT_NES)
-    ldh a, [hFtCueSrc]      ; (the original, his dodge cue: his top rows' sprites too, till they're drawn)
-    and a
-    call nz, .cueObj
-ENDC
     ldh a, [hFtScx]         ; the bottom rope's row (its own map row) over his area's first, his band after
     ldh [rSCX], a
     ld a, FT_ROPE_SCY
@@ -1027,13 +1025,23 @@ FtCueGrey:
     ldh a, [hIsCGB]
     and a
     ret nz
+    ld hl, wFtCueHold       ; (up 4 frames at the least: a frame or two of it the LCD would barely show)
     ld a, [wNesCue]
     and a
+    jr z, .held
+    ld [hl], 3
+    jr .up
+.held:
+    or [hl]
     jr z, .set
+    dec [hl]
+.up:
     ld a, [RivalCueSrc]
 .set:
     ldh [hFtCueSrc], a
-    ret
+    and a                   ; (his top rows' sprites in it from the frame's top: over the crowd too, not only below
+    ret z                   ;  the ropes)
+    jp FtStat.cueObj
 
 ; (FtStat, interrupts) his cue's greys taken down, if up. Keeps BC, DE, HL.
 FtCueOff:
@@ -1073,8 +1081,10 @@ FtCueMap:
 
 ; A = 2 while his dodge cue is up (the NES's $C440: his outline in its color, wNesCue), else 0.
 FtTellShown:
+    ld a, [wFtCueHold]      ; (the original's: held as its greys are -- Color's never held)
+    ld b, a
     ld a, [wNesCue]
-    and a
+    or b
     ret z
     ld a, 2
     ret
@@ -6878,7 +6888,14 @@ ENDC
     ret z
     bit 7, a
     ret nz
-    and 4                   ; on 4 frames, off 4 (the NES's turns between its sparkles)
+    ld c, a
+    ldh a, [hIsCGB]
+    and a
+    ld a, 4                 ; on 4 frames, off 4 (the NES's turns between its sparkles)
+    jr nz, .mask
+    ld a, 6                 ; (the original: on 6, off 2 -- its LCD's smear would all but hide 4 and 4)
+.mask:
+    and c
     ret z
     ld a, [wFtTwinkleY]
     ld [hl+], a
