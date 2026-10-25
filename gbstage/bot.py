@@ -5,7 +5,7 @@ before it commits, it plays the moment forward on a copy (the way a player who k
 pattern sees what's coming): if Mac stands still, when does his punch land; which of dodge, block or duck
 stops it; will a punch of Mac's land, and land before he can answer. Then it presses the buttons for real.
 
-  play(rom, scene) -> {"won", "result", "frames", "round", "mac_knockdowns", "his_knockdowns"}"""
+  play(rom, scene) -> {"won", "result", "frames", "round", "mac_knockdowns", "his_knockdowns", "dropped"}"""
 import io
 
 STOPPED = (1, 2, 4)                     # his punch's outcome ($98): 1 blocked, 2 ducked, 3 landed, 4 dodged
@@ -54,6 +54,14 @@ class Game:
             if self.pb.register_file.A == 2:
                 self.pb.register_file.A = scene
         self.pb.hook_register(B["LoadScene"], self.S["LoadScene"], jump, None)
+        self.dropped = 0                    # fight frames whose VBlank work never ran (the frame's work ran past
+        self.vblank_done = False            #  the next VBlank, or waited one out: a frame the screen held)
+        if "VBlankDone" in self.S:
+            self.pb.hook_register(B["VBlankDone"], self.S["VBlankDone"], self._vblank, None)
+
+    def _vblank(self, _):
+        self.vblank_done = True
+        self.vblank_n = getattr(self, "vblank_n", 0) + 1
 
     def nes(self, a):
         return self.m[self.w + a]
@@ -70,7 +78,19 @@ class Game:
         self.held = buttons
 
     def tick(self, render=True):
+        live = render and self.hram("hScene") == self.scene and self.hram("hFtActive") == 1
+        n0 = getattr(self, "vblank_n", 0)
         self.pb.tick(1, render, self.sound and render)     # (look-aheads: neither drawn nor heard)
+        if live and self.hram("hScene") == self.scene and self.hram("hFtActive") == 1:
+            hits = getattr(self, "vblank_n", 0) - n0     # (frames vs VBlank work done, a running count from each
+            if getattr(self, "counting", False) or hits:  #  round's first: one's work can land either side of a
+                self.counting = True                      #  frame's edge, so per frame it may read 0 then 2)
+                self.owed = getattr(self, "owed", 0) + 1 - hits
+                self.recent = (getattr(self, "recent", []) + [self.owed])[-8:]   # (a frame's work drifting over the
+                self.dropped = getattr(self, "drop_done", 0) + max(0, min(self.recent))   # edge a while: not owed)
+        elif render and getattr(self, "counting", False):  # (off the fight, the corner between rounds: the next
+            self.drop_done = self.dropped                  #  round's count starts afresh)
+            self.counting, self.owed, self.recent = False, 0, []
 
     def save(self):
         f = io.BytesIO()
@@ -408,7 +428,7 @@ def play(rom, scene, frames=60 * 60 * 15, log=None, cgb=True, sound=False):
         if log and f % 1200 == 0:
             log(f"{f}: round {rnd} Mac {g.nes(0x391)} him {g.nes(0x398)} kd {mac_kd}/{his_kd}")
     out = {"won": result in WIN, "result": result, "frames": f, "round": rnd_prev,
-           "mac_knockdowns": mac_kd, "his_knockdowns": his_kd, "events": events}
+           "mac_knockdowns": mac_kd, "his_knockdowns": his_kd, "events": events, "dropped": g.dropped}
     g.stop()
     return out
 

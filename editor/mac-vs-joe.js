@@ -57,7 +57,7 @@ const HONDA = {
   cgbPoses: HONDA_POSES_CGB,
   crowdColor: CROWD_COLORS.honda,
   portrait: PORTRAITS.honda,
-  nes: { ...NES_GAME, ...HONDA_NES },
+  nes: { ...NES_GAME, ...HONDA_NES, cueFrames: { CE: '0A' } },   // (his fists' roll: frame $CE is $0A in his cue's red)
   titleBout: true,                      // TITLE BOUT under the circuit
   tip: [['CATCH HIM', 'OFF-GUARD', 'TO STUN', 'HIM!'], ['THEN', 'UNLOAD', 'ON HIM!']],
   quotes: [['YOU SHOULD', 'WEAR A', 'HELMET', 'WHEN YOU', 'FIGHT ME!'],
@@ -151,7 +151,7 @@ const HONDA2 = {                        // the World Circuit's first: Honda agai
   lines: ['26-2 18KO', 'FROM TOKYO,', 'JAPAN', 'AGE: 28', 'WEIGHT:174'],
   playerRank: 'RANKED NO.6',
   playerLines: ['"MAJOR"', '"MINOR"', 'TITLE-', 'HOLDER', '7-0 7KO'],
-  nes: { ...NES_GAME, ...HONDA_NES, offset: 0x20 },
+  nes: { ...NES_GAME, ...HONDA_NES, cueFrames: { CE: '0A' }, offset: 0x20 },
   quotes: [['I STILL', 'REMEMBER', 'OUR FIRST', 'FIGHT.', '', "NOW I'M", 'GONNA PAY', 'YOU BACK.', 'BANZAI!!'],
            ['YOU SHOULD', 'WEAR A', 'HELMET', 'WHEN YOU', 'FIGHT ME!'],
            ["I'LL GIVE", 'YOU A TKO', 'FROM', 'TOKYO!']],

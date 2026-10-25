@@ -18,7 +18,7 @@ import re
 
 from . import sfx
 from .build import build_rom
-from .project import CH, CW, FADE_STEPS, ProjectError, dmg_fade, fade_palettes, validate  # noqa: F401
+from .project import CH, CW, FADE_STEPS, MAC_LOW_SCALE, PIC_BASE, ProjectError, dmg_fade, fade_palettes, validate  # noqa: F401
 
 STACK_SIZE = 64
 # Read once with the rest of the engine, so a running server never pairs new kit code with old Python.
@@ -2277,7 +2277,103 @@ def _fight_entry(i, s, index_of, suffix, all_pics=False, career=None):
             f"    db {f'BANK(PicHeaderDmg{suffix})' if s.get('fight_pics_dmg') and s.get('fight_pics') else '0'}\n"
             f"    db {', '.join(str(v) for v in (career or (0, 255, 255, 255, 255, 0, 255, 255)))}\n"
             f"    db {s['fight_cue'][1] if s.get('fight_cue') else 0}, {s['fight_cue_old'] if s.get('fight_cue') else 0}, "
-            f"{s['fight_cue'][0] if s.get('fight_cue') else 0}")
+            f"{s['fight_cue'][0] if s.get('fight_cue') else 0}\n"
+            f"    db {NES_START_HEARTS.get(s['name'], 'FT_HEARTS') if ft.get('nes') else 'FT_HEARTS'}")
+
+
+NES_START_HEARTS = {                    # Mac's hearts as each fight starts, the NES's (BCD tens/ones as one number)
+    "Fight": 20, "Fight: Kaiser": 20, "Fight: Honda": 50, "Fight: Don": 10, "Fight: Hippo": 9, "Fight: Tiger": 77,
+    "Fight: Bull": 15, "Fight: Honda2": 20, "Fight: Soda": 8, "Fight: Bull2": 15, "Fight: Don2": 15,
+    "Fight: Sandman": 40, "Fight: Macho": 15, "Fight: Tyson": 15}
+
+
+def _ring_obp(s):
+    """The original with a grey mat: OBP0 and OBP1 below the mat's line as raw greys (BGP's at full: the fade maps
+    them): each grey the mat's moved a step off it (to white on a light mat, light grey on a dark one); the
+    referee's shirt and words (OBP1's 2) white, as the NES's over its mat."""
+    d = s.get("fight_pics_dmg") or {}
+    mat = d.get("mat", 0)
+    off = lambda g: (0 if mat == 1 else 1) if mat and g == mat else g
+    pack = lambda gs: sum(g << (2 * k) for k, g in enumerate(gs))
+    return f"{pack([0, off(1), off(2), off(3)])}, {pack([0, off(1), 0, off(3)])}"
+
+
+ROPE_DMG_ROOM = 24                  # (the original, a grey mat: the rope row's tiles in his ring's greys, room for)
+OUTSIDE_CELLS = [(3, 0), (3, 1), (3, 18), (3, 19), (4, 0), (4, 1), (4, 18), (4, 19)]   # (outside the ring, by the
+                                                                                        #  crowd: the NES's black)
+
+
+def _rope_dmg(s):
+    """The original with a grey mat (fight_pics_dmg's ring_bgp): the bottom rope's row is shown in his ring's greys,
+    so its tiles in those (their greys put to the ring's indices), as copies from the scene's last tile on (the
+    crowd above shares the originals); the crowd tell's cell's two tiles too. On a dark mat, outside the ring black
+    (one step past the mat: the corners read): the crowd rows' outside cells' copies, the rope row's edges'. Fixed
+    sizes: every fight's data alike."""
+    d = s.get("fight_pics_dmg") or {}
+    ring = [(d.get("ring_bgp", 0) >> (2 * k)) & 3 for k in range(4)]
+    rope = s.get("fight_rope_tiles") or []
+    cue = s.get("fight_cue")
+    first = len(s["tiles"])
+    black = d.get("mat") == 2
+    copies, slot = [], {}
+    edge_cols = {0, 1, 18, 19}
+    if d.get("mat"):
+        inv = {g: k for k, g in enumerate(ring)}
+        want = [(t, black and c in edge_cols) for c, t in enumerate(rope)]
+        want += [(cue[1], False), (s["fight_cue_old"], False)] if cue else []
+        for key in want:
+            if key not in slot:
+                t, out = key
+                slot[key] = first + len(copies)
+                copies.append([inv[3] if out and v == 2 else inv[v] for v in s["tiles"][t]])
+        if len(copies) > ROPE_DMG_ROOM:
+            raise ValueError(f"the rope row's grey-mat copies: {len(copies)} tiles, room for {ROPE_DMG_ROOM}")
+    data = [b for t in copies for b in encode_tile(t)] + [0] * (16 * (ROPE_DMG_ROOM - len(copies)))
+    row = [slot.get((t, black and c in edge_cols), t) for c, t in enumerate(rope)] if copies else list(rope)
+    cue_at = lambda t: slot.get((t, False), t)
+    out_first = first + ROPE_DMG_ROOM
+    out_tiles, out_slot = [], {}
+    if black:                           # (above the mat's line: the base greys, the outside's 2 made 3)
+        for r, c in OUTSIDE_CELLS:
+            t = s["cell_tiles"][r * 20 + c]
+            if t not in out_slot:
+                out_slot[t] = out_first + len(out_tiles)
+                out_tiles.append([3 if v == 2 else v for v in s["tiles"][t]])
+        if out_first + len(out_tiles) > 128:
+            raise ValueError("the outside cells' copies: no room")
+    out_cells = [out_slot.get(s["cell_tiles"][r * 20 + c], s["cell_tiles"][r * 20 + c]) for r, c in OUTSIDE_CELLS]
+    out_data = [b for t in out_tiles for b in encode_tile(t)] + [0] * (16 * (len(OUTSIDE_CELLS) - len(out_tiles)))
+    return (f"FtRopeTilesDmg:             ; (the original, a grey mat: the row's own copies, in his ring's greys)\n"
+            f"{_db(_pad_rows(row, True), 32)}\n"
+            f"FtRopeDmgAt:\n    dw ${0x9000 + 16 * first:04X}\n    db {len(copies)}, "
+            f"{cue_at(cue[1]) if cue else 0}, {cue_at(s['fight_cue_old']) if cue else 0}\n"
+            f"FtRopeDmgData:\n{_db(data, 16)}\n"
+            f"FtOutsideDmg:               ; (a dark mat: the outside cells' black copies -- count, address, cells' tiles)\n"
+            f"    db {len(out_tiles)}\n    dw ${0x9000 + 16 * out_first:04X}\n    db {', '.join(map(str, out_cells))}\n"
+            f"FtOutsideDmgData:\n{_db(out_data, 16)}\n"
+            f"FtSideTilesDmg:             ; (the side ropes' ends' two tiles: the original's copy, Color's being in bank 1)\n"
+            f"{_db(_side_dmg(s), 16)}\n"
+            "FtRingSetupDmg:             ; (setup, screen off; this fight's data bank in) DE: the bottom rope's row's map row;\n    ld de, FtRopeTiles      ; the original with a grey mat: its copies in his ring's greys, the tell's, outside\n    ldh a, [hFtRingBgp]     ; (the original, a grey mat: its copies in his ring's greys, and the tell's)\n    and a\n    ret z\n    ld a, [FtRopeDmgAt + 2]\n    and a\n    ret z\n    ld hl, FtRopeDmgAt\n    ld a, [hl+]\n    ld h, [hl]\n    ld l, a\n    ld a, [FtRopeDmgAt + 2]\n    swap a                  ; (16 bytes a tile: count * 16, at most 20 tiles)\n    ld c, a\n    and $0F\n    ld b, a\n    ld a, c\n    and $F0\n    ld c, a\n    ld de, FtRopeDmgData\n    call FtCopy\n    ld a, [wFtCueTile]\n    and a\n    jr z, .noCue\n    ld a, [FtRopeDmgAt + 3]\n    ld [wFtCueTile], a\n    ld a, [FtRopeDmgAt + 4]\n    ld [wFtCueOld], a\n.noCue:\n    ld a, [FtOutsideDmg]    ; (a dark mat: outside the ring black, its cells by the crowd)\n    and a\n    jr z, .noOutside\n    ld a, [FtOutsideDmg + 1]\n    ld l, a\n    ld a, [FtOutsideDmg + 2]\n    ld h, a\n    ld a, [FtOutsideDmg]\n    swap a\n    ld c, a\n    and $0F\n    ld b, a\n    ld a, c\n    and $F0\n    ld c, a\n    ld de, FtOutsideDmgData\n    call FtCopy\n    ld de, FtOutsideDmg + 3\n    ld hl, $9800 + 3 * 32\n    call .outsideRow\n    ld hl, $9800 + 4 * 32\n    call .outsideRow\n.noOutside:\nIF DEF(FT_SIDE_TILE)\n    ld de, FtSideTilesDmg   ; (and the side ropes' ends' tiles: the original's own copy)\n    ld hl, $8000 + FT_SIDE_TILE_DMG * 16\n    ld bc, 32\n    call FtCopy\nENDC\n    ld de, FtRopeTilesDmg\n    ret\n; (screen off) HL = a map row: its cells 0, 1, 18, 19 the next four tiles at DE (DE on past them).\n.outsideRow:\n    ld a, [de]\n    inc de\n    ld [hl+], a\n    ld a, [de]\n    inc de\n    ld [hl], a\n    ld bc, 17\n    add hl, bc\n    ld a, [de]\n    inc de\n    ld [hl+], a\n    ld a, [de]\n    inc de\n    ld [hl], a\n    ret\n\n")
+
+
+def _side_dmg(s):
+    t = s.get("fight_side_tile")
+    tiles = (s.get("fight_pl_cgb") or {}).get("tiles") or []
+    pair = tiles[t:t + 2] if t is not None and len(tiles) >= t + 2 else []
+    if not pair:
+        return [0] * 32
+    d = s.get("fight_pics_dmg") or {}
+    ring = [(d.get("ring_bgp", 0) >> (2 * k)) & 3 for k in range(4)]
+    outside = 3 if d.get("mat") == 2 else 2     # (outside the ring: the NES's black; a step past a dark mat)
+    fill = ring.index(outside) if d.get("mat") and d["mat"] != outside else 0
+    px = [v for x in pair for v in x]   # (the left end, 8x16: its rope the shirt's white, 2)
+    out = []
+    for y in range(16):
+        row = px[y * 8:(y + 1) * 8]
+        last = max((x for x, v in enumerate(row) if v == 2), default=None)     # (the innermost rope: outside it,
+        out += [ring.index(0) if v == 2 else (fill if last is not None and x < last else v) for x, v in enumerate(row)]   # between the ropes too)
+    return [b for k in (0, 1) for b in encode_tile(out[k * 64:(k + 1) * 64])]   # (OBP0, his ring's greys above: the
+                                                                               #  rope white, outside it his ring's outside)
 
 
 def _heads_data(s, suffix):
@@ -2362,11 +2458,11 @@ def _fight_asm(i, s, index_of, project, banked=False, suffix="", shared=True, pa
     pp_ids = "\n".join(f"DEF PP_{p.upper()} EQU {k}" for k, p in enumerate(kit.PLAYER_POSES))
     tuning = "\n".join(f"DEF FT_{k} EQU {v}" for k, v in kit.TUNING.items())
 
-    def rows(values_for_pose, static):
-        """The rival's map rows in full (32 wide, as DMA writes them), with the pose in his area."""
+    def rows(values_for_pose, static, n=kit.REGION_H):
+        """The rival's map rows in full (32 wide, as DMA writes them), with the pose in his area (n rows of it)."""
         padded = _pad_rows(static, True)
         out = []
-        for r in range(kit.REGION_H):
+        for r in range(n):
             row = list(padded[(ft["y"] + r) * 32:(ft["y"] + r + 1) * 32])
             row[ft["x"]:ft["x"] + kit.REGION_W] = values_for_pose[r * kit.REGION_W:(r + 1) * kit.REGION_W]
             out += row
@@ -2396,8 +2492,9 @@ def _fight_asm(i, s, index_of, project, banked=False, suffix="", shared=True, pa
         pl_cgb_def = f"DEF FT_PL_CGB EQU 1\nDEF FT_PL_CGB_TILES EQU {len(pc['tiles'])}"
         if s.get("fight_side_tile") is not None:   # (the side ropes' ends: Color's, in the referee's shirt's colors)
             shirt = ft["referee"].get("shirt_palette")
-            pl_cgb_def += (f"\nDEF FT_SIDE_TILE EQU {s['fight_side_tile']}\nDEF FT_SIDE_ATTR EQU {(shirt if shirt is not None else ft['referee']['palette']) | 0x08}"
-                           f"\nDEF FT_SIDE_Y EQU {(ft['y'] + 1) * 8 + 16}")
+            pl_cgb_def += (f"\nDEF FT_SIDE_TILE EQU {s['fight_side_tile']}\nDEF FT_SIDE_ATTR EQU {(shirt if shirt is not None else ft['referee']['palette']) | 0x08 | 0x10}"
+                           f"\nDEF FT_SIDE_Y EQU {(ft['y'] + 1) * 8 + 16}"
+                           f"\nDEF FT_SIDE_TILE_DMG EQU {s['fight_slots']['ref'] - 2}   ; (the original's copy: below the referee's)")
     ref_sprites = []
     for p in kit.REF_POSES:
         sp = s["fight_ref_sprites"][p]
@@ -2422,11 +2519,14 @@ def _fight_asm(i, s, index_of, project, banked=False, suffix="", shared=True, pa
         parts = _nes_parts()
         hx, hy = nes["home"]
         off = lambda v, home: max(-127, min(127, round((((v - home + 128) & 0xFF) - 128) * nes["scale"])))
+        ease_x = lambda d: d if abs(d) <= 32 else (1 if d > 0 else -1) * (32 + (abs(d) - 32) // 2)   # (far out -- a
+        #  walk in from his corner -- eased: drawn larger than the NES draws him, he'd go past the screen's edge)
         sound_head, _, sound_code = KIT_NES_SOUND.partition(";;PART sound")
         nes_defs = (f"DEF FT_NES EQU 1\nDEF FT_NES_OFFSET EQU {nes['offset']}   ; the fighter's entry in its bank\n"
                     "DEF FT_NES_DOWN_MAX EQU 8       ; pixels he may move down (his band moves over the floor)\n"
                     "DEF FT_NES_UP_MAX EQU 48        ; and up (his band rises to the HUD; inside it, over the tail rows)\n"
                     "DEF FT_NES_END EQU 72           ; frames from the winner's call to the fade (the NES's is black 90 frames on)\n"
+                    f"DEF FT_MAC_START_Y EQU {nes['mac_places'][0x48] & 0x7F}   ; Mac's height before the round's first pose (his walk in's)\n"
                     )
         set_of = {p: k for k, (name, ps) in enumerate(kit.POSE_SETS.items()) for p in ps}
         gem = (ft.get("nes") or {}).get("jewel") or {}
@@ -2441,7 +2541,7 @@ NesFighter::                ; Punch-Out!!'s fighter bank, as it was at $8000 (se
 NesPoseMap:                 ; NES frame number -> our pose; then the same drawn mirrored
 {_db(nes["frames"])}
 NesOffsetX:                 ; NES X -> pixels right of his place
-{_db([off(v, hx) & 0xFF for v in range(256)])}
+{_db([ease_x(off(v, hx)) & 0xFF for v in range(256)])}
 NesOffsetY:                 ; NES Y -> pixels down
 {_db([off(v, hy) & 0xFF for v in range(256)])}
 NesPlaceX:                  ; per frame (then mirrored): our pose's offset to sit where the NES draws that frame
@@ -2460,8 +2560,12 @@ MacPoseMap:                 ; NES Mac frame number -> our player pose
 {_db(nes["mac_frames"])}
 MacPlaceY:                  ; and where it sits: pixels down (bit 7: in his knocked-down colors)
 {_db(nes["mac_places"])}
+MacWalkY:                   ; his walks down and up (frames $80-$97): pixels down by the NES's $70, 72 (low) to 84
+{_db([min(63, round((84 - v) * 4 * MAC_LOW_SCALE)) for v in range(72, 85)])}
 MacOffsetX:                 ; NES $15 -> pixels right of his place ($15 scrolls the NES background, Mac in it: up is left)
 {_db([max(-127, min(127, round((((nes["mac_home"] - v + 128) & 0xFF) - 128) * nes["mac_scale"]))) & 0xFF for v in range(256)])}
+NesCrowdData:               ; the crowd's script and tables: PRG bank 7's $8A00-$8E3F (NesCrowd)
+{_db(list(nes["crowd"]))}
 {parts["mac"]}
 
 {parts["head"]}
@@ -2507,7 +2611,8 @@ NesSndFix:                  ; and its tables in the fixed bank, NES $F400-$F8FF
 """
     # his band's last two rows without him: the scene's own tiles, his columns filled from the one beside them
     tail_t, tail_p = [], []
-    for row in range(ft["y"] + kit.REGION_H - 6, ft["y"] + kit.REGION_H):
+    band_h = kit.PIC_H if s.get("fight_pics") else kit.REGION_H      # (his band's rows: a picture's, or his area's)
+    for row in range(ft["y"] + band_h - 6, ft["y"] + band_h):
         side = ft["x"] - 1 if ft["x"] > 0 else ft["x"] + kit.REGION_W
         cols = [side if ft["x"] <= c < ft["x"] + kit.REGION_W else c for c in range(CW)]
         tail_t += [s["cell_tiles"][row * CW + c] for c in cols]
@@ -2532,11 +2637,12 @@ FtTailAttr:
 FtRopeTiles:                ; the bottom rope's row: shown over his area's first row (its own map row)
 {_db(_pad_rows(s['fight_rope_tiles'], True), 32)}
 FtRopeAttr:
-{_db(_pad_rows(rope_p, True), 32)}"""
+{_db(_pad_rows(rope_p, True), 32)}
+{_rope_dmg(s)}"""
         rope_defs = (f"DEF FT_ROPE EQU 1\nDEF FT_ROPE_ROW EQU 30                              ; its map row (off screen)\n"
                      f"DEF FT_ROPE_LINE EQU {ft['y'] * 8 - 1}                ; LY where it shows, over his area's first row\n"
                      f"DEF FT_ROPE_SCY EQU ((30 - {ft['y']}) * 8) & $FF\n"
-                     f"DEF FT_HEAD_ROOM EQU {ft['y'] * 8 - crowd_y * 8}                ; lines from the crowd's top to his area's\n"
+                     f"DEF FT_HEAD_ROOM EQU {ft['y'] * 8 - crowd_y * 8 + 16}           ; lines his head may rise over his area: past the crowd's top, over the HUD (as the NES's at the bell)\n"
                      f"DEF FT_HEAD_X0 EQU {ft['x'] * 8 + 8}                ; OAM x, y of his area's top left (unscrolled)\n"
                      f"DEF FT_HEAD_Y0 EQU {ft['y'] * 8 + 16}\n"
                      f"DEF FT_HEAD_LIMIT EQU {(ft['y'] + 1) * 8 + 16}             ; OAM y from which his band draws him\n"
@@ -2562,6 +2668,8 @@ DEF FT_CORNER_RESULT EQU 2
 DEF CAREER_TITLE EQU 0                            ; wFtCareer (bit 7: circuits): a title bout,
 DEF CAREER_FIRST EQU 1                            ; a circuit's first fight,
 DEF CAREER_FINAL EQU 2                            ; the last fight
+PUSHS
+SECTION "Data: Fight rows", ROMX   ; (FightLoad reads them in their own bank)
 FtFights:                   ; per fight scene: its number, then the kit's wFtFight
 {table}
 DEF FT_REGION_X EQU {ft['x']}
@@ -2573,14 +2681,17 @@ DEF FT_CROWD_W EQU {CW}
 DEF FT_FLASH_TILE EQU {s['fight_flash_tile']}
 DEF FT_BAND_TOP EQU {(ft['y'] + (1 if rope else 0)) * 8 - 1}               ; LY where his band's scroll starts (a line early: the change lands in time)
 {rope_defs}
-DEF FT_BAND_BOTTOM EQU {(ft['y'] + kit.REGION_H) * 8 - 1}
+DEF FT_BAND_BOTTOM EQU {(ft['y'] + band_h) * 8 - 1}
 DEF FT_TAIL_ROWS EQU 6                              ; off-screen map rows: the background of his band's last rows,
 DEF FT_TAIL_ROW EQU 24                              ; without him, for when he's shown higher in it
-DEF FT_TAIL_SCY EQU (FT_TAIL_ROW - {ft['y'] + kit.REGION_H} + FT_TAIL_ROWS) * 8 & $FF
+DEF FT_TAIL_SCY EQU (FT_TAIL_ROW - {ft['y'] + band_h} + FT_TAIL_ROWS) * 8 & $FF
 DEF FT_HEADROOM EQU 0                               ; his band never rises over the crowd and ropes
 DEF FT_GAP_SCY EQU ({CH - 1} * 8 - FT_BAND_TOP - 1) & $FF   ; (the lines his band has left: the screen's last row, plain)
 DEF FT_STAND_UP EQU 6                               ; standing, he shifts up into his frame's empty top only
 DEF FT_POSE_BYTES EQU {kit.REGION_H * 32}          ; map rows per pose; the same again for palettes
+DEF FT_PIC_ROWS EQU {kit.PIC_H}                    ; an NES picture's rows: his area's and two below (his feet)
+DEF FT_DPIC_ROWS EQU {max([(sc.get("fight_pics_dmg") or {}).get("rows", kit.PIC_H) for sc in project["scenes"] if sc.get("fight_pics_dmg")] or [kit.PIC_H])}                   ; the original's: the rows a picture puts up (the rest the mat, set once)
+DEF FT_PIC_BYTES EQU {kit.PIC_H * 32}             ; its map rows; the same again for palettes
 DEF FT_HUD_CELLS EQU {len(s['fight_hud_cells'])}
 DEF FT_SWAP_COUNT EQU {sw['count']}                 ; tiles in the shared area (one pose set at a time)
 DEF SET_ATTACK EQU 0
@@ -2692,7 +2803,9 @@ RivalPalSlots:              ; his palettes' hardware slots, as BCPS writes ($80:
 {"" if _all_pics(project) else "RivalMaps:" + nl + "    dw " + ", ".join(f"RivalMap_{p}" for p in kit.RIVAL_POSES) + nl + "RivalMapBanks:              ; (each pose's rows' bank)" + nl + "    db " + ", ".join(f"BANK(RivalMap_{p})" for p in kit.RIVAL_POSES)}
 RivalPoseRise:              ; per pose: how far it can rise in his band and stay whole (its blank rows on top)
     db {", ".join(str(_blank_top(ft["poses"][p]["pixels"])) for p in kit.RIVAL_POSES)}
-{_pic_rise(s, ft)}CrowdMap:                   ; the crowd row's tiles, put back after each camera flash
+{_pic_rise(s, ft)}RivalRingBgp:               ; (the original, his grey pictures: BGP from the mat's line, 0 none; then OBP0, OBP1 below
+    db {(s.get("fight_pics_dmg") or {}).get("ring_bgp", 0)}, {_ring_obp(s)}    ; it, raw greys: Mac's, the referee's, none the mat's)
+CrowdMap:                   ; the crowd row's tiles, put back after each camera flash
     db {", ".join(f"${t:02X}" for t in s['cell_tiles'][crowd_y * CW:(crowd_y + 1) * CW])}
 CrowdPulse:                 ; Color, his KO: the crowd's color through the NES's brightnesses (its slot's BCPS, 4 steps)
 {_crowd_pulse(s, project)}
@@ -2814,9 +2927,9 @@ ASSERT (CgbMap{suffix}_idle | CgbSwap{suffix}.set0) & 15 == 0, "GDMA copies from
         body = []
         for k in range(n):
             tb = [b for t in pics["tiles"][k] for b in encode_tile(list(t))] or [0] * 16
-            maprow = rows(pics["maps"][k], tiles)
-            attrow = rows([a | 1 << 3 | f << 5 for a, f in zip(pics["attrs"][k], pics["flips"][k])], s["cell_pal"])
-            maprow2 = rows([t + 64 for t in pics["maps"][k]], tiles)     # (for its tiles' second copy, 64 on)
+            maprow = rows(pics["maps"][k], tiles, kit.PIC_H)
+            attrow = rows([a | 1 << 3 | f << 5 for a, f in zip(pics["attrs"][k], pics["flips"][k])], s["cell_pal"], kit.PIC_H)
+            maprow2 = rows([t + 64 for t in pics["maps"][k]], tiles, kit.PIC_H)     # (for its tiles' second copy, 64 on)
             body.append(f'SECTION "Data: Rival picture {pics["order"][k]}{suffix}", ROMX, ALIGN[4]\n{lab(k)}:\n'
                         + _db(tb) + "\n" + _db(maprow, 32) + "\n" + _db(attrow, 32) + "\n" + _db(maprow2, 32))
         gem = (f"PicJewel{suffix}:                ; (his gem: per picture where it shows, its middle in his area; $FF not)\n"
@@ -2824,9 +2937,9 @@ ASSERT (CgbMap{suffix}_idle | CgbSwap{suffix}.set0) & 15 == 0, "GDMA copies from
                f"ASSERT PicJewel{suffix} == FT_PIC_JEWEL\n") if pics.get("jewel") else ""
         pics_data = f"""
 SECTION "Data: Rival pictures{suffix}", ROMX[$4000]
-PicHeader{suffix}:              ; his NES pictures: count, the idle one's; per NES frame (then mirrored) its picture,
-    db {n}, {pics["idle"]}       ; its place's x, y; per picture its tiles (address, bank, count), its top rows' sprites
-    ds 14
+PicHeader{suffix}:              ; his NES pictures: count, the idle one's; per NES frame (then mirrored) its picture (bit 7:
+    db {n}, {pics["idle"]}       ; drawn in his dodge cue's colors), its place's x, y; per picture its tiles (address, bank,
+    ds 14                       ; count), its top rows' sprites
 {_db(pics["frame_map"])}
 {_db([dx & 0xFF for dx, _ in pics["places"]])}
 {_db([dy & 0xFF for _, dy in pics["places"]])}
@@ -2850,7 +2963,7 @@ ASSERT PicHeader{suffix} == $4000
         for k in range(n):
             tb = [b for t in dpics["tiles"][k] for b in encode_tile(list(t))] or [0] * 16
             body.append(f'SECTION "Data: Rival grey picture {k}{suffix}", ROMX, ALIGN[4]\n{lab(k)}:\n' + _db(tb) + "\n"
-                        + _db(dpics["maps"][k], kit.REGION_W) + "\n" + _db([t + 64 for t in dpics["maps"][k]], kit.REGION_W))
+                        + _db(dpics["maps"][k], kit.REGION_W) + "\n" + _db([t + 64 if t >= PIC_BASE else t for t in dpics["maps"][k]], kit.REGION_W))   # (his tiles' second copy; the mat's as is)
         pics_data += f"""
 SECTION "Data: Rival grey pictures{suffix}", ROMX[$4000]
 PicHeaderDmg{suffix}:           ; his pictures in greys: count; per picture its tiles (address, bank, count), his top rows'
@@ -2860,9 +2973,13 @@ PicHeaderDmg{suffix}:           ; his pictures in greys: count; per picture its 
     ds {6 * (128 - n)}
 PicNextDmg{suffix}:             ; per picture: the one likely next, then (the picture before it this one) the one then
 {_db(_pic_next(s, pics))}
+PicPlaceDmg{suffix}:            ; per NES frame (then mirrored): where its grey picture sits, x; then y
+{_db([dx & 0xFF for dx, _ in dpics["places"]])}
+{_db([dy & 0xFF for _, dy in dpics["places"]])}
 {heads}
 ASSERT PicHeaderDmg{suffix} == $4000
 ASSERT PicNextDmg{suffix} == $4310
+ASSERT PicPlaceDmg{suffix} == $4490
 {nl.join(body)}
 """
     if not shared:                      # a later fight: its scene's update, its own data under its own labels
@@ -4093,12 +4210,15 @@ def generate_asm(project):
     if gloves:
         hram += ["hGloveY: db             ; the menu's gloves: OAM y (0: away)", "hGloveOn: db"]
     if fights:
-        hram += ["hFtActive: db", "hFtHudReady: db", "hFtScx: db", "hFtBandX: db", "hFtBandY: db", "hFtBandTop: db", "hFtBandGap: db", "hFtBandBottom: db", "hFtBandOn: db", "hFtShowX: db", "hFtShowY: db", "hFtShowBottom: db", "hFtOamBuild: db", "hFtOamShown: db", "hFtFlash: db",
+        hram += ["hFtActive: db", "hVblank: db", "hFtHudReady: db", "hFtScx: db", "hFtBandX: db", "hFtBandY: db", "hFtBandTop: db", "hFtBandGap: db", "hFtBandBottom: db", "hFtBandOn: db", "hFtShowX: db", "hFtShowY: db", "hFtShowBottom: db", "hFtOamBuild: db", "hFtOamShown: db", "hFtFlash: db",
                  "hFtFlashShown: db", "hFtPalLate: db          ; (his palettes missed VBlank: the next frame's top lines, above him)", "hFtHeadN: db            ; (his top rows' sprites to go)",
                  "hFtPlY: db              ; (Mac's sprites: y, x, tiles' copy)", "hFtPlX: db", "hFtPlTile: db",
                  "hFtCueSrc: db           ; (the original) his dodge cue: 0 none, else 2/4, the shade his black takes (1's, 2's)",
                  "hFtCueOn: db            ; (its BGP up in his band: bit 0; OBP0 over his top rows: bit 1)", "hFtBgp: db", "hFtObp: db",
                  "hFtObp1: db             ; (the original) OBP1 below his top rows, as the fade has it",
+                 "hFtRingBgp: db          ; (the original, a grey mat) his ring's BGP from the mat's line on: 0 none",
+                 "hFtRingNow: db          ; (it through the fade as it stands)", "hFtBgpBase: db          ; (BGP above it, as the fade has it)",
+                 "hFtObpRaw: ds 2         ; (a grey mat: OBP0, OBP1 below it, raw greys: none of them the mat's)", "hFtObpLow: ds 2         ; (them through the fade)",
                  "hOAMDMA: ds 8           ; OAM DMA routine (runs from HRAM)"]
         if any((scenes[i]["fight"].get("nes") or {}).get("sound") for i in fights):
             hram += ["hNesSound: db           ; nonzero: the NES's sound engine has the sound hardware"]
@@ -4312,7 +4432,8 @@ def generate_asm(project):
                 scenes[index_of[scenes[f]["fight"][key]]]["_rec_next"] = True
     fight_table = "\n".join(_fight_entry(f, scenes[f], index_of, "" if k == 0 else f"_F{k}", _all_pics(project),
                                          (career or {}).get(f)) for k, f in enumerate(fights))
-    fight_table += ("\nPwStarts::                  ; a pass key's starts: Major, World, the World title bout, Tyson, the"
+    fight_table += ("\nPOPS                        ; (back in ROM0: the pass keys read these from their own bank)"
+                    "\nPwStarts::                  ; a pass key's starts: Major, World, the World title bout, Tyson, the"
                     "\n    db " + ", ".join(map(str, pw_starts)) + "      ; ending, Another World ($FF: none)")
     scene_code = []
     in_bank = {i: [] for i in range(len(scenes))}   # a banked game: a press-start screen's code and patches go in
@@ -4443,16 +4564,16 @@ Start:
 {"    ldh a, [hIsCGB]         ; Color: double speed (the CPU twice as fast; the screen's and sound's timing as ever)" + nl + "    and a" + nl + "    jr z, .single" + nl + "    ld a, $30" + nl + "    ldh [rP1], a" + nl + "    xor a" + nl + "    ldh [rIE], a" + nl + "    ld a, 1" + nl + "    ldh [$FF4D], a          ; (KEY1: the switch armed, STOP makes it)" + nl + "    stop" + nl + ".single:" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}    ldh [rSCY], a
     ldh [rSCX], a
 {nl.join(boot)}
-{"    xor a                   ; (WRAM is random at power-on: Doc's corner state clear, nothing for VBlank)" + nl + "    ld [wDocDirty], a" + nl + "    ld [wDocN], a" + nl if any(sc.get("doc_patch") for sc in scenes) else ""}{"    xor a                   ; (the recorded crowd: not playing, not copied yet)" + nl + "    ld [wPcmOn], a" + nl + "    ld [wPcmLoaded], a" + nl + "    ld [wPcmMix], a" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}    ld a, 1                 ; VBlank wakes HALT; no interrupt handler ever runs
+{"    xor a                   ; (WRAM is random at power-on: Doc's corner state clear, nothing for VBlank)" + nl + "    ld [wDocDirty], a" + nl + "    ld [wDocN], a" + nl if any(sc.get("doc_patch") for sc in scenes) else ""}{"    xor a                   ; (the recorded crowd: not playing, not copied yet)" + nl + "    ld [wPcmOn], a" + nl + "    ld [wPcmLoaded], a" + nl + "    ld [wPcmMix], a" + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}{"    xor a                   ; (no ring's greys: HRAM's random at power-on)" + nl + "    ldh [hFtRingBgp], a" + nl if fights else ""}    ld a, 1                 ; VBlank wakes HALT; no interrupt handler ever runs
     ldh [rIE], a
     ld a, {index_of[project['start']]}
     call LoadScene
 MainLoop:
 {"    ldh a, [hFtActive]      ; a fight: interrupts on, each clears its own flag (clearing them here could drop" + nl + "    and a                   ; a mid-frame split just raised, leaving its scroll on to the bottom)" + nl + "    jr nz, .sleep" + nl if fights else ""}    xor a
     ldh [rIF], a
-{".sleep:" + nl if fights else ""}    halt                    ; sleep until VBlank
+    halt                    ; sleep until VBlank
     nop                     ; HALT may run the next byte twice if VBlank arrives just before it
-{"    ldh a, [rLY]            ; a fight's mid-frame scroll interrupt also wakes HALT: sleep on until VBlank" + nl + "    cp 144" + nl + "    jr c, MainLoop" + nl if fights else ""}{"    cp 147                  ; a frame that ran long: its VBlank work waits for the next VBlank's start (a lag frame," + nl + "    jr c, .onTime           ; never half of it done as the screen draws)" + nl + ".late:" + nl + "    ldh a, [rLY]" + nl + "    cp 144" + nl + "    jr nc, .late" + nl + "    jr MainLoop" + nl + ".onTime:" + nl if fights else ""}{nl.join(vblank_work)}
+{"    jr .woken" + nl + ".sleep:                     ; a fight: asleep till VBlank, never through it -- interrupts held from the look at" + nl + "    di                      ;  the line to HALT (one serviced between them, VBlank's, would leave HALT sleeping" + nl + "    ldh a, [rLY]            ;  past it: the frame lost); in VBlank already, the work run on into it, on at once" + nl + "    cp 144" + nl + "    jr nc, .awake" + nl + "    halt                    ; (held, an interrupt still wakes it; serviced at EI)" + nl + "    nop" + nl + ".awake:" + nl + "    ei" + nl + ".woken:" + nl + "    ldh a, [rLY]            ; a fight's mid-frame scroll interrupt also wakes HALT: sleep on until VBlank" + nl + "    cp 144" + nl + "    jr c, MainLoop" + nl if fights else ""}{"    cp 147                  ; a frame that ran long: its VBlank work waits for the next VBlank's start (a lag frame," + nl + "    jr c, .onTime           ; never half of it done as the screen draws)" + nl + ".late:" + nl + "    ldh a, [rLY]" + nl + "    cp 144" + nl + "    jr nc, .late" + nl + "    jr MainLoop" + nl + ".onTime:" + nl if fights else ""}{"    ldh a, [hFtRingBgp]     ; (the original, a grey mat: above it the base greys again, his top rows' sprites in his)" + nl + "    and a" + nl + "    jr z, .noRing" + nl + "    ldh a, [hFtBgpBase]" + nl + "    ldh [rBGP], a" + nl + "    ldh a, [hFtRingNow]" + nl + "    ldh [rOBP0], a" + nl + ".noRing:" + nl if fights else ""}{nl.join(vblank_work)}
 VBlankDone:                 ; everything that must happen during VBlank is done
     ld hl, hFrame
     inc [hl]
@@ -4641,7 +4762,7 @@ UploadPalettes:
     ld h, a
     ld a, [hl]
     ldh [rBGP], a
-{'    ldh [rOBP0], a' + nl if sprites else ''}{_obp1(scenes, fights=True) if fights else ''}    ret
+{'    call FtRingBase' + nl if fights else ''}{'    ldh [rOBP0], a' + nl if sprites else ''}{_obp1(scenes, fights=True) if fights else ''}    ret
 
 {'SECTION "Data: Palettes", ROMX' + nl if banked else ""}ScenePalettes:
     dw {", ".join(f"Scene{i}Palettes" for i in range(len(scenes)))}
@@ -4864,6 +4985,9 @@ ConfirmBuild:               ; the step's sprites into wFtOAM (free outside a fig
     ld c, $17               ; attributes: Color palette 7, OBP1, behind the background...
     bit 1, a
     jr nz, .front
+    ldh a, [hIsCGB]         ; (the original: always in front -- its title's black is the logo's own grey, not
+    and a                   ; the see-through 0 behind it)
+    jr z, .front
     set 7, c
 .front:
     ld a, [wConfirmOAM]
@@ -4910,6 +5034,9 @@ ConfirmApply:               ; (VBlank) the step: its sprites (shown or not, in f
     ld c, $17               ; attributes: Color palette 7, OBP1, behind the background...
     bit 1, a
     jr nz, .front
+    ldh a, [hIsCGB]         ; (the original: always in front -- its title's black is the logo's own grey, not
+    and a                   ; the see-through 0 behind it)
+    jr z, .front
     set 7, c
 .front:
     ld a, [wConfirmOAM]

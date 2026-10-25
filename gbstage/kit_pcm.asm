@@ -53,27 +53,7 @@ PcmMaybeFar::
     inc a
     ld [wPcmMix], a
 .off:
-    ld a, [wPcmLoaded]
-    and a
-    jr nz, .loaded
-    ld a, BANK(CrowdPcm)    ; (its first time: into WRAMX, the caller's bank back after)
-    ld [$2100], a
-    ld hl, CrowdPcm
-    ld de, wPcm
-    ld bc, CROWD_PCM_SIZE
-.copy:
-    ld a, [hl+]
-    ld [de], a
-    inc de
-    dec bc
-    ld a, b
-    or c
-    jr nz, .copy
-    ldh a, [hBank]
-    ld [$2100], a
-    ld a, 1
-    ld [wPcmLoaded], a
-.loaded:
+    call PcmLoad
     ld hl, wPcm
     ld a, l
     ld [wPcmPtr], a
@@ -114,6 +94,31 @@ PcmMaybeFar::
     or %100
     ldh [rIE], a
     ei                      ; (off the fight no handler runs, VBlank only waking HALT: the timer's must)
+    ret
+
+; The crowd's recording into WRAMX, its first time (the fight's load does it, screen dark: not mid-fight, where
+; it ran past a frame); the caller's bank (hBank) back after.
+PcmLoad::
+    ld a, [wPcmLoaded]
+    and a
+    ret nz
+    ld a, BANK(CrowdPcm)
+    ld [$2100], a
+    ld hl, CrowdPcm
+    ld de, wPcm
+    ld bc, CROWD_PCM_SIZE
+.copy:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec bc
+    ld a, b
+    or c
+    jr nz, .copy
+    ldh a, [hBank]
+    ld [$2100], a
+    ld a, 1
+    ld [wPcmLoaded], a
     ret
 
 ; A fight starting with the crowd's sample under way: its recording from where the sample's got to (its frame,
@@ -305,6 +310,19 @@ SECTION FRAGMENT "Screens far", ROMX
 ; blocks) with the triangle mixed in at its pitch (the NES's: its 32-step wave, CPU / (period + 1) steps a second),
 ; through MixTable; written back rotated, as the wave channel's restart wants.
 PcmProduceIn:
+    ld a, [wMixStop]        ; (144, "fill it, whatever the line": the crowd just started, its ring empty; mid-frame,
+    cp 144                  ;  a few buffers now -- the first at once -- and the rest at the frame's usual top-ups,
+    jr nz, .more            ;  not all nine in one go: that ran a hundred lines on and dropped the frame)
+    ldh a, [rLY]
+    cp 144
+    jr nc, .more
+    add 24
+    cp 144
+    jr c, .limit
+    ld a, 143
+.limit:
+    ld [wMixStop], a
+    jr .go
 .more:
     ld a, [wMixStop]
     ld c, a

@@ -56,7 +56,7 @@ DEF STAT_FINISHED EQU $83
 
 SECTION "NES RAM", WRAM0, ALIGN[8]
 wNes:: ds $800                      ; the NES's 2 KB of RAM, at its own addresses
-wNesRand: db                        ; random source (the NES rotates $18 through the carry)
+wNesD0Prev: db                      ; $D0 as the last frame left it (the NES builds $18 before it reads the pad)
 wNesCue: db                         ; 1: his outline in the dodge cue's color
 wNesAnim: db                        ; his sprite changes ($A0) the GB hasn't shown yet
 wNesClockBy: db                     ; whose script stopped the clock: bit 0 Mac's, bit 1 his (NesClockOwners)
@@ -70,18 +70,17 @@ NesPtr:
     ld h, a
     ret
 
-; A = a random byte (an LFSR; the NES's $18 is rotated through whatever carry was left).
+; $AEF1: A = $18 as it was (the NES's LDA $18 first), then $18 rotated right three times through the carry
+; (carry in: the 6502's at the call -- each caller sets it as the NES's code leaves it). After: carry and
+; bit 7 of $18 (the NES's N) as its third ROR leaves them. Keeps HL.
 NesRandom:
-    ld a, [wNesRand]
-    and a
-    jp nz, .go
-    inc a
-.go:
-    add a
-    jp nc, .done
-    xor $1D
-.done:
-    ld [wNesRand], a
+    push hl
+    ld hl, wNes + $18
+    ld a, [hl]
+    rr [hl]
+    rr [hl]
+    rr [hl]
+    pop hl
     ret
 
 ; $AEAB: A = chance (0-15). Carry set (it happens) with chance A/16: when A > a random 0-15 (A = 15:
@@ -98,6 +97,7 @@ NesChanceMask:
     cp e
     jp z, .yes
     ld d, a
+    ccf                     ; (the 6502's carry from its CMP: A >= the mask)
     call NesRandom
     and e
     ld e, a
@@ -988,6 +988,7 @@ AiSkip:                     ; $B1DC
 AiRandom:                   ; $B1DF: one of the next 8 states, at random
     ld a, d
     ld [wNes + $39], a
+    and a                   ; (carry clear: IndFuncJump's ASL of a small index)
     call NesRandom
     and 7
     ld hl, wNes + $3A
@@ -1013,8 +1014,10 @@ AiHigh:                     ; $B1F4
     ld [wNes + $39], a
     ret
 .either:                    ; $81: one of the next two bytes, at random (the NES tests N after three RORs
-    call NesRandom          ; of $18 ($AEF1): the random's bit 1)
-    bit 1, a
+    scf                     ; of $18 ($AEF1), carry in set: its CMP #$01 was equal)
+    call NesRandom
+    ld a, [wNes + $18]
+    bit 7, a
     jp nz, .first
     inc c
     call AiByte
@@ -1562,6 +1565,7 @@ NesRoundStart::             ; A = round (1-3)
     ld [hl+], a
     dec b
     jp nz, .zp
+    ld [wNesD0Prev], a      ; (A zero: $D0 with the rest, as the next frame's random byte reads it)
     pop af
     ld [wNes + nRoundNumber], a
     ld a, $C0               ; ($ABB3) the timeline's seconds; fresh state for the round
@@ -1874,6 +1878,7 @@ MacChance:
     cp $0F
     jp z, .yes
     ld d, a
+    ccf                     ; (the 6502's carry from its CMP)
     call NesRandom
     and $0F
     inc a
@@ -2465,6 +2470,404 @@ MacFinished:                ; $85CA
     ld [wNes + $51], a
     ret
 
+; $85E9 (bank 7, from the NMI after its frame count): $18, the random byte, built anew each frame from the
+; count ($1E), the pad as last read ($D0 before this frame's poll: wNesD0Prev) and a running sum ($19), bit
+; by bit as the NES's rotations take them -- their carry running on from one to the next (in: bit 7 of $21,
+; its scroll's ASL just before). Scratch as the NES's ($E0-$ED).
+NesRandBuild::
+    ld a, [wNes + $21]
+    rla
+    ld a, [wNes + $1E]
+    rra
+    ld [wNes + $E8], a
+    rra
+    ld [wNes + $E9], a
+    rra
+    ld [wNes + $EA], a
+    rra
+    ld [wNes + $E0], a
+    ld a, [wNes + $1E]
+    rla
+    ld [wNes + $E1], a
+    rla
+    rla
+    rla
+    ld [wNes + $E2], a
+    ld a, [wNesD0Prev]
+    rra
+    ld [wNes + $E3], a
+    rra
+    ld [wNes + $E4], a
+    rra
+    ld [wNes + $E5], a
+    ld a, [wNesD0Prev]
+    rla
+    ld [wNes + $E6], a
+    rla
+    and $20                 ; (the carries done: the bits gathered)
+    ld b, a
+    ld a, [wNes + $E5]
+    and $98
+    or b
+    ld b, a
+    ld a, [wNesD0Prev]
+    and 1
+    or b
+    ld b, a
+    ld a, [wNes + $E3]
+    and 2
+    or b
+    ld b, a
+    ld a, [wNes + $E4]
+    and 4
+    or b
+    ld b, a
+    ld a, [wNes + $E6]
+    and $40
+    or b
+    ld b, a                 ; ($EC)
+    ld a, [wNes + $E0]
+    and 8
+    ld c, a
+    ld a, [wNes + $E8]
+    and 1
+    or c
+    ld c, a
+    ld a, [wNes + $E9]
+    and $92
+    or c
+    ld c, a
+    ld a, [wNes + $EA]
+    and 4
+    or c
+    ld c, a
+    ld a, [wNes + $E2]
+    and $40
+    or c
+    ld c, a
+    ld a, [wNes + $E1]
+    and $20
+    or c
+    ld [wNes + $ED], a
+    ld a, b                 ; $19 += $EC, its carry into the next rotations
+    ld hl, wNes + $19
+    add [hl]
+    ld [hl], a
+    rra
+    ld [wNes + $E8], a
+    rra
+    ld [wNes + $E9], a
+    rra
+    ld [wNes + $E0], a
+    ld a, [hl]
+    rla
+    ld [wNes + $E1], a
+    rla
+    ld [wNes + $E2], a
+    rla
+    and $40
+    ld b, a
+    ld a, [wNes + $E0]
+    and 2
+    or b
+    ld b, a
+    ld a, [wNes + $E8]
+    and $20
+    or b
+    ld b, a
+    ld a, [wNes + $E9]
+    and 8
+    or b
+    ld b, a
+    ld a, [wNes + $E1]
+    and 4
+    or b
+    ld b, a
+    ld a, [wNes + $E2]
+    and $10
+    or b
+    ld b, a
+    ld a, [hl]
+    and $81
+    or b
+    ld b, a
+    ld a, [wNes + $ED]
+    add b
+    ld [wNes + $18], a
+    ld a, [wNes + nJoy1Buttons]     ; (the pad this frame: the next frame's build reads it)
+    ld [wNesD0Prev], a
+    ret
+
+; $8A6F (bank 7): the crowd -- the NES's spectators' script ($40 its mode, $41-$45 its timer, place and
+; script, $0400-$0415 the spectators and the words it sends). The GB draws its own crowd; this runs for the
+; random byte: its commands draw from it, and what comes after them this frame draws next. Its data: bank
+; 7's $8A00 on (NesCrowdData, NES addresses + CROWD).
+DEF CROWD EQU NesCrowdData - $8A00
+NesCrowd::
+    ld a, [wNes + $40]
+    bit 7, a
+    jp nz, .new
+    and a
+    jp z, .finish
+    ld b, a
+    ld a, [wNes + $46]
+    and a
+    jp nz, .tell
+    ld a, b
+    dec a
+    jp z, .step
+    dec a
+    jp z, .glow
+    dec a
+    jp nz, .step
+    ld a, [wNes + $1E]
+    and $0F
+    jp nz, .glow
+    ld a, 4
+    ld [wNes + $40], a
+.glow:                      ; $8A8D
+    ld a, [wNes + $1E]
+    and $0F
+    ld e, a
+    ld d, 0
+    ld hl, CROWD + $8B8B
+    add hl, de
+    ld a, [wNes + $048A]
+    and $0F
+    or [hl]
+    ld [wNes + $048A], a
+    ld a, $81
+    ld [wNes + $04A0], a
+.step:                      ; $8AA2
+    ld a, [wNes + $0410]
+    bit 7, a
+    ret nz
+    ld hl, wNes + $42
+    dec [hl]
+    jp nz, .finish
+    ld [hl], 1
+    ld a, [wNes + $43]
+    ld c, a                 ; (C: the script's Y)
+.cmd:                       ; $8AB1
+    call .byte
+    ld b, a
+    and $1F
+    ld e, a                 ; (E: the NES's X)
+    ld hl, wNes + $43
+    inc [hl]
+    inc c
+    ld a, b
+    swap a
+    srl a
+    and 7
+    jp z, .chance
+    cp 2
+    jp z, .pick0
+    cp 3
+    jp z, .pick1
+    cp 4
+    jp z, .wait
+    cp 6
+    jp z, .say0
+    cp 7
+    jp z, .say1
+    ret                     ; (1, 5: none in its scripts)
+.finish:                    ; $8AD2: words to send, flagged
+    ld hl, wNes + $0410
+    ld a, [hl]
+    and a
+    ret z
+    or $80
+    ld [hl], a
+    ret
+.chance:                    ; $8ADD: by chance, on at the next byte's place; else past it
+    ld a, e
+    and $0F
+    call NesChance15
+    jp nc, .skip
+    call .byte
+    ld c, a
+.at:
+    ld a, c
+    ld [wNes + $43], a
+    jp .cmd
+.skip:
+    inc c
+    jp .at
+.pick1:                     ; $8B19: the second spectator
+    ld a, e
+    ld e, 2
+    jp .pickX
+.pick0:                     ; $8AF0: the first
+    ld a, e
+    ld e, 0
+.pickX:                     ; $8AF3: one of eight looks for him, at random
+    and $0F
+    cp $0B
+    jr c, .lo
+    sub 5
+.lo:
+    add a
+    add a
+    add a
+    ld [wNes + $E0], a
+    and a                   ; (carry clear: its ASLs of a value under 11)
+    call NesRandom
+    and 7
+    ld hl, wNes + $E0
+    or [hl]
+    add a
+    push bc
+    ld c, a
+    ld b, 0
+    ld hl, CROWD + $8B9B
+    add hl, bc
+    ld a, [hl+]
+    ld b, a
+    ld c, [hl]
+    ld hl, wNes + $0400
+    ld d, 0
+    add hl, de
+    ld [hl], b
+    inc hl
+    ld [hl], c
+    ld a, c
+    pop bc
+    and a
+    jp nz, .finish
+    ld a, e                 ; (zero: on into the second's, as the NES falls through)
+    ld e, 2
+    jp .pickX
+.wait:                      ; $8B1E: his next wait, by chance the byte's low nibble, else its high
+    ld a, e
+    and $0F
+    push af
+    call .byte
+    ld b, a
+    pop af
+    call NesChance15
+    ld a, b
+    jr c, .low
+    swap a
+.low:
+    and $0F
+    ld hl, wNes + $43
+    inc [hl]
+    ld [wNes + $42], a
+    jp .finish
+.say1:                      ; $8B50
+    ld a, 2
+    jr .say
+.say0:                      ; $8B39
+    xor a
+.say:                       ; $8B3B: a spectator's words (E: which), at his place
+    push bc
+    ld c, a
+    ld b, 0
+    ld hl, wNes + $0400
+    add hl, bc
+    ld a, [hl+]
+    ld [wNes + $0412], a
+    ld a, [hl]
+    ld [wNes + $0411], a
+    ld a, e                 ; $8B54: its string, from the table at $8C4B
+    ld [wNes + $E2], a
+    add a
+    ld c, a
+    ld b, 0
+    ld hl, CROWD + $8C4B
+    add hl, bc
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    ld bc, CROWD
+    add hl, bc              ; (HL: the string)
+    ld de, wNes + $0413
+.copy:                      ; (pieces, each ending 0; two 0s end it)
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    and a
+    jr nz, .copy
+    ld a, [hl]
+    and a
+    jr nz, .copy
+    ld [de], a
+    ld hl, wNes + $0410
+    inc [hl]
+    pop bc
+    jp .finish
+.tell:                      ; $8A2A: the crowd's tell, its words
+    ld hl, CROWD + $8A12
+    ld de, wNes + $0410
+    ld b, 6
+.t6:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    dec b
+    jr nz, .t6
+    ld a, [wNes + $46]
+    ld e, a
+    ld d, 0
+    ld hl, wNes + $05BD
+    add hl, de
+    ld a, [hl]
+    ld b, a
+    srl a
+    add b
+    ld e, a                 ; (Y)
+    ld hl, wNes + $0413
+    ld b, 3
+.t3:
+    push hl
+    ld hl, CROWD + $8A17
+    add hl, de
+    ld a, [hl]
+    pop hl
+    ld [hl-], a
+    dec e
+    dec b
+    jr nz, .t3
+    ret
+.new:                       ; $8A4B: a new mode, on the count's turn: its script from the start
+    and $7F
+    ld b, a
+    ld a, [wNes + $1E]
+    and $0F
+    jp nz, .finish
+    ld a, b
+    ld [wNes + $40], a
+    ld a, $80
+    ld [wNes + $41], a
+    ld a, 1
+    ld [wNes + $42], a
+    xor a
+    ld [wNes + $43], a
+    ld a, b
+    add a
+    ld e, a
+    ld d, 0
+    ld hl, CROWD + $8CD2
+    add hl, de
+    ld a, [hl+]
+    ld [wNes + $44], a
+    ld a, [hl]
+    ld [wNes + $45], a
+    jp NesCrowd
+.byte:                      ; A = the script's byte Y (C): ($44),Y
+    ld a, [wNes + $44]
+    ld l, a
+    ld a, [wNes + $45]
+    ld h, a
+    ld de, CROWD
+    add hl, de
+    ld e, c
+    ld d, 0
+    add hl, de
+    ld a, [hl]
+    ret
+
 ;;PART common
 ; ==== Bank 7's bookkeeping each frame: HP, hearts, stars (their logic; the GB draws its own HUD) =====
 
@@ -2566,123 +2969,9 @@ NesHearts::
     ld b, 2
     jp .clear
 
-; $8974: stars. $0340 bit 7: none; $0341 is a change ($FF: all gone); $0343 the star-earned moment
-; (when it's over: one more star and 100 points).
-NesStars::
-    ld a, [wNes + $0340]
-    and a
-    ret z
-    bit 7, a
-    jp z, .live
-    xor a                   ; $894F
-    ld [wNes + $0341], a
-    ld [wNes + $0342], a
-    ld [wNes + $0343], a
-    inc a
-    ld [wNes + $0340], a
-    ld a, $80               ; $8999: to be drawn
-    ld [wNes + $0349], a
-    ret
-.live:
-    ld a, [wNes + $0341]
-    and a
-    jp z, .earning
-    ld b, a
-    xor a
-    ld [wNes + $0341], a
-    ld a, [wNes + $0342]
-    add b
-    bit 7, a
-    jp z, .some
-    xor a
-    jp .set
-.some:                      ; $8961: three at most
-    cp 3
-    jp c, .set
-    ld a, [wNes + $0348]
-    and a
-    ld a, 3
-    jp nz, .set
-    ld a, [wNes + $05B3]
-    ld [wNes + $0348], a
-    ld a, 3
-.set:
-    ld [wNes + $0342], a
-    ld a, $80               ; $8999: to be drawn
-    ld [wNes + $0349], a
-.earning:                   ; $899E
-    ld a, [wNes + $0343]
-    and a
-    ret z
-    bit 7, a
-    jp z, .count
-    ld a, [wNes + $0344]    ; $89BE: it starts
-    and a
-    ret z
-    ld a, $14               ; $89D7: the count, its first step this frame ($89AB)
-    ld [wNes + $0343], a
-    jp .flash
-.count:
-    ld hl, wNes + $0343
-    dec [hl]
-    jp z, .earned
-    ld a, [hl]              ; $89B1: a step in, its sound
-    cp $10
-    jp nz, .flash
-    ld a, 3
-    ld [wNes + $F1], a
-.flash:
-    ld a, $81               ; $89B9: the star flashes (a sprite transfer)
-    ld [wNes + $17], a
-    ret
-.earned:
-    ld a, [wNes + $03E0]    ; $89DE: earned (points first, if others are pending)
-    and a
-    jp nz, .wait
-    ld [wNes + $0344], a
-    inc a
-    ld [wNes + $0341], a
-    ld [wNes + $03E4], a
-    ld [wNes + $03E0], a
-    jp .flash               ; ($89F8)
-.wait:
-    inc [hl]
-    ret
-
 ; Bank 7 $8A6F: the crowd's cheering, as far as the fight follows it: $40 (bit 7: a new mode, taken on
 ; the frame counter's 16-frame beat; mode 3 turns to 4 on the beat). Mac's scripts wait on it. Its script
 ; only flashes palettes and writes to the screen (the GB's own crowd does that).
-NesCrowd:
-    ld a, [wNes + $40]
-    bit 7, a
-    jr nz, .new
-    cp 3
-    ret nz
-    ld a, [wNes + $46]
-    and a
-    ret nz
-    ld a, [wNes + $1E]
-    and $0F
-    ret nz
-    ld a, 4
-    ld [wNes + $40], a
-    ret
-.new:                       ; $8A4B
-    and $7F
-    ld b, a
-    ld a, [wNes + $1E]
-    and $0F
-    ret nz
-    ld a, b
-    ld [wNes + $40], a
-    ld a, $80
-    ld [wNes + $41], a
-    ld a, 1
-    ld [wNes + $42], a
-    xor a
-    ld [wNes + $43], a
-    ret
-
 ; The NMI's part before the engine ($A5C3): two transfers a vblank. Sprites ($17) and Mac's new pose
 ; ($60 = 1) come first; with one left, the HUD part the frame count's turn names goes out ($A61A).
 ; Each clears the flag the bookkeeping waits on. Then the count ($1E).
@@ -2705,6 +2994,17 @@ NesVblank:
     ld a, b
     and a
     jr z, .count
+    ld hl, wNes + $04A0     ; (the palettes, $A5F0: sent)
+    ld a, [hl]
+    and a
+    jr z, .words
+    ld [hl], 0
+.words:
+    ld hl, wNes + $0410     ; ($A606: the words buffer, if flagged, sent: $C24A clears it)
+    bit 7, [hl]
+    jr z, .turn
+    ld [hl], 0
+.turn:
     ld a, [wNes + $1E]
     and 3
     jr z, .hearts
@@ -2845,6 +3145,10 @@ ENDC
 ; new pose drawn: $60 = 1); where they meet; Mac getting up; the phase machine.
 NesEngineFrame::
     call NesVblank
+    ld a, BANK(NesMac)      ; ($A64F) bank 7's random byte for the frame
+    ld [$2000], a
+    call NesRandBuild
+.built:                     ; (the frame's random byte, built: the tests look here)
     ld a, [wFtBankNes]
     ld [$2000], a
     call NesClock
@@ -2894,6 +3198,7 @@ ENDC
     call NesOutline
     jp NesPhase
 
+;;PART fighter
 ; $C440: his outline: the dodge cue's color ($05EC) when his script sets the timer with bit 7, back to
 ; normal ($05ED) when it runs out. wNesCue says which, for the GB's palettes.
 NesOutline:
@@ -2915,7 +3220,6 @@ NesOutline:
     ld [wNesCue], a
     ret
 
-;;PART fighter
 ; ==== The exchange: PRG bank 7's $805D, the moment punches meet ====================================
 ; His punch out ($98 active) meets Mac's defense ($76/$77: $FF dodged, $80 ducked, 8 blocked, else it
 ; lands, or trades with Mac's punch if that's out too); otherwise Mac's punch arriving ($58) meets his
@@ -3890,6 +4194,7 @@ NesKnockdownStart:
     ld a, [wNes + nMacStatus]
     cp $0D                  ; a star punch put him down
     jp z, .next
+    ccf                     ; (the 6502's carry from its CPX: status >= the star punch's)
     jp .random
 .entry:
     bit 7, a
@@ -3906,7 +4211,9 @@ NesKnockdownStart:
     ld hl, wNes + $0391
     cp [hl]
     jp z, .next
-    jp nc, .random
+    jp c, .next
+    scf                     ; (the NES's BCS here: carry set going in)
+    jp .random
 .next:                      ; $B33F
     inc c
     jp .pick
@@ -3956,6 +4263,9 @@ NesKnockdownStart:
     add $99                 ; the count he gets up at ($9A = 1)
     jp .getUp
 .anyCount:                  ; $B37A: one of his random get-up counts
+    ld a, b                 ; (carry in: bit 3 of the entry, its Div16's last LSR)
+    and $08
+    add $F8
     call NesRandom
     swap a
     and $0F
@@ -4593,4 +4903,88 @@ NesDecision::
     ld a, 1
     ret nc
     inc a
+    ret
+
+; (out of ROM0: run with the fighter's bank mapped -- NesEngineFrame's -- so in it)
+; $8974: stars. $0340 bit 7: none; $0341 is a change ($FF: all gone); $0343 the star-earned moment
+; (when it's over: one more star and 100 points).
+NesStars::
+    ld a, [wNes + $0340]
+    and a
+    ret z
+    bit 7, a
+    jp z, .live
+    xor a                   ; $894F
+    ld [wNes + $0341], a
+    ld [wNes + $0342], a
+    ld [wNes + $0343], a
+    inc a
+    ld [wNes + $0340], a
+    ld a, $80               ; $8999: to be drawn
+    ld [wNes + $0349], a
+    ret
+.live:
+    ld a, [wNes + $0341]
+    and a
+    jp z, .earning
+    ld b, a
+    xor a
+    ld [wNes + $0341], a
+    ld a, [wNes + $0342]
+    add b
+    bit 7, a
+    jp z, .some
+    xor a
+    jp .set
+.some:                      ; $8961: three at most
+    cp 3
+    jp c, .set
+    ld a, [wNes + $0348]
+    and a
+    ld a, 3
+    jp nz, .set
+    ld a, [wNes + $05B3]
+    ld [wNes + $0348], a
+    ld a, 3
+.set:
+    ld [wNes + $0342], a
+    ld a, $80               ; $8999: to be drawn
+    ld [wNes + $0349], a
+.earning:                   ; $899E
+    ld a, [wNes + $0343]
+    and a
+    ret z
+    bit 7, a
+    jp z, .count
+    ld a, [wNes + $0344]    ; $89BE: it starts
+    and a
+    ret z
+    ld a, $14               ; $89D7: the count, its first step this frame ($89AB)
+    ld [wNes + $0343], a
+    jp .flash
+.count:
+    ld hl, wNes + $0343
+    dec [hl]
+    jp z, .earned
+    ld a, [hl]              ; $89B1: a step in, its sound
+    cp $10
+    jp nz, .flash
+    ld a, 3
+    ld [wNes + $F1], a
+.flash:
+    ld a, $81               ; $89B9: the star flashes (a sprite transfer)
+    ld [wNes + $17], a
+    ret
+.earned:
+    ld a, [wNes + $03E0]    ; $89DE: earned (points first, if others are pending)
+    and a
+    jp nz, .wait
+    ld [wNes + $0344], a
+    inc a
+    ld [wNes + $0341], a
+    ld [wNes + $03E4], a
+    ld [wNes + $03E0], a
+    jp .flash               ; ($89F8)
+.wait:
+    inc [hl]
     ret

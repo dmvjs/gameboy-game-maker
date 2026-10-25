@@ -95,6 +95,7 @@ wFtPicGo: db                ; (blocks this time)
 wFtPicDrew: db              ; (this VBlank spent on his picture)
 wFtStreamN: db              ; (the original: the coming picture's tiles)
 wRvPicHidden: db            ; (the original: the picture whole in the copy not shown, $FF none: the last one shown)
+wRvPicLoadWanted: db        ; (the original: the one coming in was wanted, not a guess at the next)
 wPlPicLoad: db              ; (the original, Mac: the picture coming into his copy not shown, its tiles in, the one
 wPlPicDone: db              ; whole in that copy)
 wPlPicHidden: db
@@ -212,12 +213,21 @@ wFtAwDrop: db
 wFtCueTile: db              ; Punch-Out!!'s crowd tell: its tile moving (0: none), at rest, its column in the rope row
 wFtCueOld: db
 wFtCueCol: db
+wFtHearts0: db              ; Mac's hearts as the fight starts (the NES's, by opponent)
 wFtFightEnd:
 wRvNesX: db                 ; NES rival: his offset from his place (pixels right, down)
 wRvNesY: db
 wFtHeadX: db                ; (his top rows' sprites: OAM x of his area's left, this frame)
 wFtHeadIn: db               ; (and in this frame's yet)
 wFtHeadTile: db             ; (added to its tiles: his pictures' second copy)
+wFtHeadKey: ds 5            ; his top rows' sprites as last built: their picture, its copy, his band's x and y, where
+wFtHeadEnd: db              ; they began (the upper list's low byte; $FF none) -- and where they ended
+wFtMacKey: ds 16            ; per lower list (wFtOAM2, wFtOAM3): Mac's sprites as last built there -- where they
+                            ; began ($FF none), his picture, its tiles' copy, his y and x, his palette's mask and
+                            ; bits -- and where they ended
+wFtMacPath: db              ; (his sprites built from the key this frame)
+wFtRefKey: ds 16            ; per list: the referee's sprites and words as last built -- where they began ($FF none),
+                            ; his pose shown, his x, his tiles' slot, what he says, his count -- and where they ended
 wFtTwinkleX: db             ; a star just earned: where it twinkles (OAM x, y), from the NES's ($0344, $0345)
 wFtTwinkleY: db
 wPlNesY: db                 ; NES Mac: pixels down his frame sits (bit 7: knocked-down colors)
@@ -381,6 +391,8 @@ ENDC
     inc e
     dec b
     jr nz, .dma
+    ld a, BANK(FtFights)    ; (their bank: read only here)
+    ld [$2000], a
     ldh a, [hScene]         ; this fight's own values (FtFights: scene, then wFtFight's)
     ld hl, FtFights
 .find:
@@ -400,6 +412,8 @@ ENDC
     inc de
     dec b
     jr nz, .fight
+    ld a, [wFtBankData]     ; (its data bank, as before)
+    ld [$2000], a
     ld a, [wFtCueOld]       ; (the Bull Charge camera: unlit)
     ld [wFtCue], a
     call FtSwapSetup
@@ -428,8 +442,31 @@ IF DEF(FT_PL_CGB)
 ENDC
 IF DEF(FT_NES)
     call FtDmgPicsStart     ; (the original: his first grey picture)
+    ld a, $FF               ; (his top rows' sprites, Mac's: none built yet)
+    ld [wFtHeadKey + 4], a
+    ld [wFtMacKey], a
+    ld [wFtMacKey + 8], a
+    ld [wFtRefKey], a
+    ld [wFtRefKey + 8], a
     ld a, [wFtBankData]
     ld [$2000], a
+    xor a                   ; (the original with his grey pictures: his ring's greys from the mat's line)
+    ldh [hFtRingBgp], a
+    ldh a, [hIsCGB]
+    and a
+    jr nz, .ringDone
+    ld a, [wFtBankPicsDmg]
+    and a
+    jr z, .ringDone
+    ld a, [RivalRingBgp + 1]
+    ldh [hFtObpRaw], a
+    ld a, [RivalRingBgp + 2]
+    ldh [hFtObpRaw + 1], a
+    ld a, [RivalRingBgp]
+    ldh [hFtRingBgp], a
+    ldh a, [rBGP]
+    call FtRingBase
+.ringDone:
 ENDC
 IF DEF(FT_MAC_PICS)
     call FtPlPicsStart      ; (Color: Mac's first picture)
@@ -476,7 +513,7 @@ ENDC
     ld a, FT_HEALTH
     ld [wPlHealth], a
     ld [wRvHealth], a
-    ld a, FT_HEARTS
+    ld a, [wFtHearts0]
     ld [wPlHearts], a
 IF DEF(FT_NES)
     ld a, [wFtBankNes]  ; his fight data and AI, as the NES game starts a fight
@@ -497,7 +534,9 @@ ENDC
 .ready:
 IF DEF(FT_NES)
 IF DEF(FT_ROPE)
-    ld de, FtRopeTiles      ; the bottom rope's row, in its own map row (shown over his area's first row)
+    call FtRingSetupDmg     ; the bottom rope's row (DE: its map row; the original with a grey mat: its copies,
+                            ; outside the ring, the side ropes' tiles -- the fight's data bank's own code)
+.ropeRow:
     ld hl, $9800 + FT_ROPE_ROW * 32
     ld bc, 32
     call FtCopy
@@ -530,13 +569,13 @@ ENDC
     xor a
     ldh [rVBK], a
 .tailDone:
-    call FtOffColumns       ; and his rows' columns off the right edge: the mat, for when he's far to one side
+    call FtOffColumnsFar    ; and his rows' columns off the right edge: the mat, for when he's far to one side
     ldh a, [hIsCGB]
     and a
     jr z, .offDone
     ld a, 1
     ldh [rVBK], a
-    call FtOffColumns
+    call FtOffColumnsFar
     xor a
     ldh [rVBK], a
 .offDone:
@@ -549,6 +588,7 @@ IF DEF(FT_NES_SOUND)
     ld [$2000], a
     call ApuInit
 .soundOn:
+    call PcmLoad            ; (the crowd's recording in now, while it loads: not when it first cheers)
     ld a, 1
     ldh [hNesSound], a
 ENDC
@@ -558,6 +598,7 @@ IF DEF(FT_NES)
     ld [wPlFlip], a
     ld [wRvPlaceX], a
     ld [wRvPlaceY], a
+    ld a, FT_MAC_START_Y    ; (low, as the NES has him before his walk up: the round's first frames too)
     ld [wPlNesY], a
     ld a, [wFtBankNes]  ; the round, as the NES game starts one
     ld [$2000], a
@@ -565,6 +606,14 @@ IF DEF(FT_NES)
     call NesRoundStart
     ld a, [wFtBankData]
     ld [$2000], a
+    call FtNesHud           ; (the HUD as the NES's round starts it, not the last fight's, from its first frame)
+    ld a, [wNes + $0302]
+    ld [wFtMin], a
+    ld a, [wNes + $0304]
+    swap a
+    ld hl, wNes + $0305
+    or [hl]
+    ld [wFtSec], a
 ENDC
     call FtHudCompute
     FT_VWAIT FT_ROOM_ALL
@@ -633,19 +682,30 @@ ENDC
     xor a
     ldh [rIF], a
     ei
+    ldh [hVblank], a        ; (no VBlank noted yet: the setup's own run into one isn't the fight's first)
     ret
 
 IF DEF(FT_NES)
+FtOffColumnsFar:            ; (setup, his data bank in: FtOffColumns from its own bank, his data back after)
+    ld a, BANK(FtOffColumns)
+    ld [$2000], a
+    call FtOffColumns
+    ld a, [wFtBankData]
+    ld [$2000], a
+    ret
+
+PUSHS
+SECTION "Code: Fight setup, far", ROMX
 ; His map rows' 12 columns past the screen's right edge, each the row's first (the mat): his band scrolls
 ; sideways with him, and far over (his corner, as the round opens) it brings them in. (Color: VBK picks tiles
 ; or their attributes.)
 FtOffColumns:
-    FT_VWAIT FT_REGION_H / 2 * 13 + FT_ROOM_OVER   ; (in halves, loading with the display on: a row's 100 cycles)
+    FT_VWAIT FT_PIC_ROWS / 2 * 13 + FT_ROOM_OVER   ; (in halves, loading with the display on: a row's 100 cycles)
     ld hl, FT_REGION_ROW
-    ld c, FT_REGION_H / 2
+    ld c, FT_PIC_ROWS / 2
     call .rows
-    FT_VWAIT (FT_REGION_H + 1) / 2 * 13 + FT_ROOM_OVER
-    ld c, FT_REGION_H - FT_REGION_H / 2
+    FT_VWAIT (FT_PIC_ROWS + 1) / 2 * 13 + FT_ROOM_OVER
+    ld c, FT_PIC_ROWS - FT_PIC_ROWS / 2
 .rows:
     ld a, [hl]
     push hl
@@ -662,6 +722,7 @@ FtOffColumns:
     dec c
     jr nz, .rows
     ret
+POPS
 ENDC
 
 ; Mid-frame: at the band's top line, scroll by the rival's offset; at its bottom line, back to normal.
@@ -670,9 +731,9 @@ ENDC
 ; there without him (two map rows kept off screen, FT_TAIL_ROW).
 FtStat:
     push af
-.drawing:                   ; the line before is still being drawn: change the scroll once it's done
-    ldh a, [rSTAT]
-    and 3
+.drawing:                   ; the line before is still being drawn: change the scroll once it's done (or VBlank's
+    ldh a, [rSTAT]          ; begun: a split at the screen's last line, his band moved down to it, mustn't wait out
+    and 2                   ; VBlank for an HBlank and miss it)
     jr nz, .drawing
     ldh a, [hFtBandOn]
     and a
@@ -721,6 +782,14 @@ ENDC
     ldh [rSCX], a
     ld a, FT_ROPE_SCY
     ldh [rSCY], a
+IF DEF(FT_NES)
+    ldh a, [hFtRingBgp]     ; (the original, a grey mat: the ring's greys from here down, the frame's top lines'
+    and a                   ;  back at its next)
+    jr z, .ringOff
+    ldh a, [hFtRingNow]
+    ldh [rBGP], a
+.ringOff:
+ENDC
     ld a, FT_BAND_TOP
     ldh [rLYC], a
     ld a, 3
@@ -770,6 +839,14 @@ IF DEF(FT_NES)
     ldh a, [hFtCueOn]       ; (his cue's OBP0 back: Mac's and the referee's below)
     and 2
     call nz, .cueObjOff
+    ldh a, [hFtRingBgp]     ; (a grey mat: OBP0 his top rows' greys above; Mac's and the referee's, the base, below)
+    and a
+    jr z, .ringObj
+    ldh a, [hFtObpLow]
+    ldh [rOBP0], a
+    ldh a, [hFtObpLow + 1]
+    ldh [rOBP1], a
+.ringObj:
 ENDC
     ldh a, [hFtOamShown]
     call hOAMDMA
@@ -1017,8 +1094,9 @@ DEF FT_VBL_LAST EQU 149        ; the last line VBlank's lesser work (a HUD redra
 DEF FT_MAC_PIC_ROOM EQU 32     ; Mac's: each copy's tiles (bank 1's sprite tiles, 0 on)
 DEF FT_DMG_MAC_ROOM EQU 18     ; the original's: each copy's (sprite tiles FT_OBJ_FIRST on)
 DEF FT_DPIC_NEXT EQU $4310     ; (and per picture its likely next: PicNextDmg)
+DEF FT_DPIC_PLACEX EQU $4490   ; (and per NES frame, then mirrored, where its grey picture sits: x, then y 512 on)
 DEF FT_DPIC_TABLE EQU $4010    ; the original's grey pictures: per picture its tiles (address, bank, count), sprites
-DEF FT_PIC_WHOLE EQU 44        ; a picture of up to this many tiles goes up in one VBlank, its tiles and all
+DEF FT_PIC_WHOLE EQU 60        ; a picture of up to this many tiles goes up in one VBlank, its tiles and all
 
 FtVBlank:
 IF DEF(FT_NES)
@@ -1499,10 +1577,27 @@ FtPicVBlank:
     ld hl, wRvPicShown
     cp [hl]
     jr nz, .want
-    ld [wRvPicLoad], a      ; (the one shown: none to load)
+    ld a, [wRvPicLoad]      ; the one shown: but one left coming in (a frame gone by): its tiles on in, so a frame
+    cp [hl]                 ; that flickers back to it finds it whole (wRvPicHidden)
+    jr z, .idle
+    inc a
+    jr z, .idle
+    dec a
+    ld hl, wRvPicHidden
+    cp [hl]
+    jr nz, .going
+.idle:
+    ld a, [wRvPicShown]
+    ld [wRvPicLoad], a      ; (none to load)
     xor a
     ret
 .want:
+    ld hl, wRvPicHidden      ; (whole in the copy not shown: FtPicDecide puts it up, nothing to load)
+    cp [hl]
+    jr nz, .notSpare
+    xor a
+    ret
+.notSpare:
     ld hl, wRvPicLoad
     cp [hl]
     jr z, .going
@@ -1518,7 +1613,7 @@ FtPicVBlank:
     call FtPicEntry
     ld a, [wRvPicDone]
     cp e
-    jr nc, .none            ; (all in)
+    jp nc, .none            ; (all in)
     cpl
     inc a
     add e
@@ -1529,9 +1624,9 @@ FtPicVBlank:
     jr nc, .room
     ldh a, [rLY]
     sub 144
-    jr c, .none             ; (VBlank's over: the next one's)
+    jp c, .none             ; (VBlank's over: the next one's)
     cp 9
-    jr nc, .none            ; (too late: the next VBlank)
+    jp nc, .none            ; (too late: the next VBlank)
     ld l, a
     ld a, 9
     sub l                   ; lines left before 153 (its last: done in it)
@@ -1542,7 +1637,7 @@ FtPicVBlank:
     sub l
     sub l
     sub 4
-    jr c, .none
+    jp c, .none
     ld l, a
 .room:                      ; L = blocks of room
     ld a, e
@@ -1551,8 +1646,10 @@ FtPicVBlank:
     ld a, l
 .some:
     and a
-    jr z, .none
+    jp z, .none
     ld [wFtPicGo], a        ; this time's
+    ld a, $FF               ; (the copy not shown written over: its last picture gone)
+    ld [wRvPicHidden], a
     ld a, d
     ld [$2000], a
     ld a, [wRvPicDone]      ; from its tile wRvPicDone, into the copy not shown
@@ -1588,6 +1685,12 @@ FtPicVBlank:
     xor a
     ldh [rVBK], a
     ld a, [wFtPicGo]
+    cp e
+    jr nz, .part
+    ld a, [wRvPicLoad]      ; (its last: whole in the copy not shown)
+    ld [wRvPicHidden], a
+    ld a, [wFtPicGo]
+.part:
     ld hl, wRvPicDone
     add [hl]
     ld [hl], a
@@ -1615,14 +1718,17 @@ FtPicDecide:
     ld a, [wRvPic]          ; a new one, small enough: all of it next VBlank (its tiles, rows, then the sprites)
     ld hl, wRvPicShown
     cp [hl]
-    jr z, .keep
+    jp z, .keep
+    ld hl, wRvPicHidden      ; the one shown before, whole still in the copy not shown: straight back up (a frame
+    cp [hl]                 ; that flickers between two, as the NES's do, keeps up)
+    jp z, .spare
     ld hl, wRvPicLoad
     cp [hl]
-    jr z, .loading
+    jp z, .loading
     call FtPicEntry
     ld a, e
     cp FT_PIC_WHOLE + 1
-    jr nc, .loaded          ; (too many: a VBlank's room at a time, FtPicVBlank)
+    jp nc, .loaded          ; (too many: a VBlank's room at a time, FtPicVBlank)
 IF DEF(FT_MAC_PICS)
     ld a, [wPlPicGo]        ; Mac's tiles going up in that VBlank too, and no room for both: his wait a frame
     add e                   ; (his rival's on time: his are few, and up the VBlank after)
@@ -1637,17 +1743,41 @@ ENDC
     ld [wRvPicLoadX], a
     ld a, [wRvPicWantY]
     ld [wRvPicLoadY], a
-    jr .up
-.loading:
-.loaded:                    ; the one coming in: up once its tiles are
+    jp .up
+.spare:
+    ld [wRvPicLoad], a
+    call FtPicEntry
+    ld a, e
+    ld [wRvPicDone], a
+    ld a, [wRvPicWantX]
+    ld [wRvPicLoadX], a
+    ld a, [wRvPicWantY]
+    ld [wRvPicLoadY], a
+    jp .up
+.loading:                   ; the one wanted, coming in: up with the rest of its tiles, once they fit a VBlank
+    call FtPicEntry         ; (FtPicSwitch's: a frame sooner than once they're all in)
+    ld a, [wRvPicDone]
+    cpl
+    inc a
+    add e
+    cp FT_PIC_WHOLE + 1
+    jp nc, .keep
+IF DEF(FT_MAC_PICS)
+    ld hl, wPlPicGo         ; (Mac's going up then too, and no room for both: his wait a frame)
+    add [hl]
+    cp FT_PIC_WHOLE + 1
+    call nc, FtPlPicWait
+ENDC
+    jp .up
+.loaded:                    ; the one coming in, not wanted now: up once its tiles are
     ld a, [wRvPicLoad]
     ld hl, wRvPicShown
     cp [hl]
-    jr z, .keep
+    jp z, .keep
     call FtPicEntry
     ld a, [wRvPicDone]
     cp e
-    jr c, .keep
+    jp c, .keep
 .up:
     call FtPicReady
     ld a, 1
@@ -1661,7 +1791,7 @@ ENDC
     ld [wRvPlaceX], a
     ld a, [wRvPicLoadY]
     ld [wRvPlaceY], a
-    jr .out
+    jp .out
 .keep:
     ld a, [wRvPicShown]
     ld [wRvPicHeads], a
@@ -1713,6 +1843,8 @@ FtPicSwitch:
     ld a, [wRvPicBuf]
     xor 1
     ld [wRvPicBuf], a
+    ld a, [wRvPicShown]     ; (the one going down: whole in the copy now not shown)
+    ld [wRvPicHidden], a
     ld a, [wRvPicLoad]
     ld [wRvPicShown], a
     ld a, [wFtBankData]
@@ -1728,7 +1860,7 @@ FtPicSwitch:
     ldh [rHDMA3], a
     ld a, LOW(FT_REGION_ROW)
     ldh [rHDMA4], a
-    ld a, FT_POSE_BYTES / 16 - 1
+    ld a, FT_PIC_BYTES / 16 - 1
     ldh [rHDMA5], a
     ret
 
@@ -1779,7 +1911,7 @@ FtPicReady:
     add hl, hl
     add hl, bc
     push hl
-    ld bc, FT_POSE_BYTES
+    ld bc, FT_PIC_BYTES
     add hl, bc
     ld a, l
     ld [wRvSwAttr], a
@@ -1789,7 +1921,7 @@ FtPicReady:
     ld a, [wRvPicBuf]
     and a
     jr nz, .rowsSet         ; (shown: the second copy; going up: the first)
-    ld bc, 2 * FT_POSE_BYTES
+    ld bc, 2 * FT_PIC_BYTES
     add hl, bc
 .rowsSet:
     ld a, l
@@ -1813,6 +1945,7 @@ FtPicsStart:
     ld a, $FF               ; (none shown, none loading: the second copy's the one not shown)
     ld [wRvPicShown], a
     ld [wRvPicLoad], a
+    ld [wRvPicHidden], a
     ld a, 1
     ld [wRvPicBuf], a
 .tiles:
@@ -1855,13 +1988,31 @@ FtNesPic:
     ld a, [hl]
     cp $FF
     jr z, .keep             ; (a frame he has no picture for: the one up stays)
+    ld d, a                 ; (bit 7: drawn in his dodge cue's colors, as another's picture: wNesCue's bit 1 while
+    and $7F                 ; it's up, the cue's palettes and greys with it)
     ld [wRvPic], a
-    ld hl, FT_PIC_PLACEX
+    ld a, d
+    rlca
+    and 1
+    add a
+    ld d, a
+    ld a, [wNesCue]
+    and 1
+    or d
+    ld [wNesCue], a
+    ld hl, FT_PIC_PLACEX    ; and where it sits (the original: its grey picture's own place, FT_DPIC_PLACEX)
+    ldh a, [hIsCGB]
+    and a
+    jr nz, .place
+    ld a, [wFtBankPicsDmg]
+    ld [$2000], a
+    ld hl, FT_DPIC_PLACEX
+.place:
     add hl, bc
     ld a, [hl]
     ld [wRvPicWantX], a
-    ld hl, FT_PIC_PLACEY
-    add hl, bc
+    inc h                   ; (y: 512 on, in both)
+    inc h
     ld a, [hl]
     ld [wRvPicWantY], a
 .keep:
@@ -1910,11 +2061,22 @@ FtDmgDecide:
     ld a, [wRvPic]
     ld hl, wRvPicShown
     cp [hl]
-    jr z, .shown
+    jp z, .shown
     ld hl, wRvPicLoad
     cp [hl]
-    jr z, .wanted
+    jp z, .wanted
+    ld b, a
+    ld a, [wRvPicHidden]    ; (whole already: straight to it)
+    cp b
+    jp z, .another
+    ld a, [wRvPicLoadWanted] ; one the game drew still coming in: it first, up late, not lost (a frame it shows
+    and a                   ; for two, his fists' roll; then the two flicker from the copies, whole)
+    jp nz, .loading
+.another:
+    ld a, b
     ld [hl], a              ; another: from its first tile (the copy not shown), and where it'll sit
+    ld a, 1
+    ld [wRvPicLoadWanted], a
     ld a, [wRvPicWantX]
     ld [wRvPicLoadX], a
     ld a, [wRvPicWantY]
@@ -1923,18 +2085,20 @@ FtDmgDecide:
     ld b, a
     ld a, [hl]
     cp b
-    jr z, .whole
+    jp z, .whole
     xor a
     ld [wRvPicDone], a
     dec a
     ld [wRvPicHidden], a    ; (that copy's being written over)
-    jr .keep
+    jp .keep
 .whole:
     call FtDmgEntry
     ld a, e
     ld [wRvPicDone], a
-    jr .loading
+    jp .loading
 .wanted:                    ; (the one coming in, perhaps early: where it sits now it's wanted)
+    ld a, 1
+    ld [wRvPicLoadWanted], a
     ld a, [wRvPicWantX]
     ld [wRvPicLoadX], a
     ld a, [wRvPicWantY]
@@ -1944,8 +2108,10 @@ FtDmgDecide:
     call FtDmgEntry
     ld a, [wRvPicDone]
     cp e
-    jr c, .keep             ; (not all in yet)
-    ld a, 1
+    jp c, .keep             ; (not all in yet)
+    xor a
+    ld [wRvPicLoadWanted], a
+    inc a
     ld [wRvPicSwitch], a
     ld a, [wRvPicLoad]
     ld [wRvPicHeads], a
@@ -1956,7 +2122,7 @@ FtDmgDecide:
     ld [wRvPlaceX], a
     ld a, [wRvPicLoadY]
     ld [wRvPlaceY], a
-    jr .out
+    jp .out
 .shown:
     call FtDmgPrefetch
 .keep:
@@ -2007,11 +2173,12 @@ FtDmgPrefetch:
     ld [wRvPicLoad], a
     xor a
     ld [wRvPicDone], a
+    ld [wRvPicLoadWanted], a
     dec a
     ld [wRvPicHidden], a
     ret
 
-; VBlank's first: the picture readied onto the map (his area's 10 rows of 8, from its tiles' copy's rows).
+; VBlank's first: the picture readied onto the map (its 12 rows of 8, from its tiles' copy's rows).
 FtDmgSwitch:
     ldh a, [hIsCGB]         ; (the original only: Color's is FtPicSwitch)
     and a
@@ -2035,7 +2202,7 @@ FtDmgSwitch:
     ld a, [wRvPicBuf]
     and a
     jr nz, .rows            ; (shown: the second copy; going up: the first)
-    ld bc, FT_REGION_W * FT_REGION_H
+    ld bc, FT_REGION_W * FT_PIC_ROWS
     add hl, bc
 .rows:
     call FtDmgRows
@@ -2051,10 +2218,10 @@ FtDmgSwitch:
     ld [$2000], a
     ret
 
-; His area's 10 rows of 8 from HL onto the map.
+; A picture's 12 rows of 8 from HL onto the map.
 FtDmgRows:
     ld de, FT_REGION_ROW + FT_REGION_X
-    ld b, FT_REGION_H
+    ld b, FT_DPIC_ROWS
 .row:
     REPT FT_REGION_W
         ld a, [hl+]
@@ -2090,6 +2257,7 @@ FtDmgPicsStart:
     ld [wRvPicBuf], a
     ld [wRvPicHeadsBuf], a
     ld [wRvPicSwitch], a
+    ld [wRvPicLoadWanted], a
     dec a
     ld [wRvPicHidden], a
     ld a, [wRvPicLoad]
@@ -2247,7 +2415,7 @@ FtDmgTileIn:
 ; Before the frame's sprites are built (the original): the pictures just wanted streamed in now, while the lines
 ; to the sprites' last (FT_EARLY_LAST: their building and the frame's rest, 34 lines at the most) allow; all in,
 ; their decides again: up at the next VBlank, the sprites built for them, as on Color. Otherwise on after the sprites.
-DEF FT_EARLY_LAST EQU 96
+DEF FT_EARLY_LAST EQU 100
 FtDmgEarly:
     ldh a, [hIsCGB]
     and a
@@ -2271,7 +2439,30 @@ FtDmgEarly:
 IF DEF(FT_MAC_PICS)
     call FtPlPicDecideDmg
 ENDC
+    ld a, [wRvPlaceY]       ; (his place before: one going up now sits at its own, and his band, already
+    ld b, a                 ; worked out from the last's, moves with it -- not a frame late)
+    ld a, [wRvPlaceX]
+    ld c, a
+    push bc
     call FtDmgDecide
+    pop bc
+    ld a, [wRvPlaceX]
+    sub c
+    ld c, a
+    ld a, [wRvPlaceY]
+    sub b
+    ld b, a
+    or c
+    jr z, .out
+    ld a, [wRvNesX]
+    add c
+    ld [wRvNesX], a
+    ld a, [wRvNesY]
+    add b
+    ld [wRvNesY], a
+    pop af
+    ld [$2000], a
+    jp FtAnimate
 .out:
     pop af
     ld [$2000], a
@@ -2326,7 +2517,92 @@ FtDmgStream:
 .stop:
     ld a, [wFtBankData]
     ld [$2000], a
+IF DEF(FT_ROPE)
+    ; his picture all in this late, the frame not yet over: up at this VBlank, not the next -- his top rows'
+    ; sprites built again for it, his band where it sits (not when his gem or a star's sparkle, in the lower
+    ; list built for the one up now, would be a frame off)
+    ld a, [wRvPicSwitch]
+    and a
+    ret nz                  ; (going up already)
+    ldh a, [rLY]
+    cp FT_LATE_LAST
+    ret nc
+    ld a, [RivalJewel]
+    and a
+    ret nz
+    ld a, [wNes + $0343]
+    and a
+    ret nz
+    ld a, [wRvPic]
+    ld hl, wRvPicShown
+    cp [hl]
+    ret z
+    ld a, [wRvPlaceY]       ; (what deciding changes, in case it's too late after all: put back)
+    ld b, a
+    ld a, [wRvPlaceX]
+    ld c, a
+    push bc
+    ld a, [wRvPicHeads]
+    ld b, a
+    ld a, [wRvPicHeadsBuf]
+    ld c, a
+    push bc
+    ld a, [wRvPicLoadWanted]
+    push af
+    call FtDmgDecide
+    ld a, [wFtBankData]
+    ld [$2000], a
+    ld a, [wRvPicSwitch]
+    and a
+    jr z, .notUp            ; (not all in after all)
+    ldh a, [rLY]            ; (decided too late to build his top rows' sprites again before VBlank's work is due:
+    cp FT_LATE_UNDO         ;  as it was, up next frame)
+    jr c, .lateUp
+    pop af
+    ld [wRvPicLoadWanted], a
+    pop bc
+    ld a, b
+    ld [wRvPicHeads], a
+    ld a, c
+    ld [wRvPicHeadsBuf], a
+    pop bc
+    ld a, b
+    ld [wRvPlaceY], a
+    ld a, c
+    ld [wRvPlaceX], a
+    xor a
+    ld [wRvPicSwitch], a
     ret
+.notUp:
+    pop af
+    pop bc
+    pop bc
+    ret
+.lateUp:
+    pop af
+    pop bc
+    pop bc
+    ld a, [wRvPlaceX]
+    sub c
+    ld c, a
+    ld a, [wRvPlaceY]
+    sub b
+    ld b, a
+    or c
+    jr z, .placed
+    ld a, [wRvNesX]
+    add c
+    ld [wRvNesX], a
+    ld a, [wRvNesY]
+    add b
+    ld [wRvNesY], a
+    call FtAnimate
+.placed:
+    jp FtBuildOAM.upper
+ENDC
+    ret
+DEF FT_LATE_LAST EQU 127       ; (his top rows' sprites built again: 10 to 14 lines, 18 at the most -- an
+DEF FT_LATE_UNDO EQU 128       ;  interrupt or two among them -- so begun by 127: done by 145, VBlank's work due by 147)
 
 ; A tile's 16 bytes HL -> DE, a line's quiet part at a time: 6 bytes once its drawing's done (30 cycles: the
 ; line's HBlank and the next's OAM scan are 41 at the least, a line of 10 sprites; finding HBlank's start takes up
@@ -2460,7 +2736,7 @@ FtDrawPose:
     and a
     jr z, .dmg
     call .gdma
-    ld hl, FT_POSE_BYTES    ; the palettes follow the map rows
+    ld hl, FT_PIC_BYTES     ; the palettes follow the map rows
     add hl, bc
     ld a, 1
     ldh [rVBK], a
@@ -2479,14 +2755,14 @@ FtDrawPose:
     ldh [rHDMA3], a
     ld a, LOW(FT_REGION_ROW)
     ldh [rHDMA4], a
-    ld a, FT_POSE_BYTES / 16 - 1
+    ld a, FT_PIC_BYTES / 16 - 1
     ldh [rHDMA5], a
     ret
 .dmg:
     ld de, FT_REGION_X
     add hl, de
     ld de, FT_REGION_ROW + FT_REGION_X
-    ld b, FT_REGION_H
+    ld b, FT_PIC_ROWS
 .dmgRow:
     REPT FT_REGION_W
         ld a, [hl+]
@@ -3487,6 +3763,14 @@ ENDC
     ldh [hFtBandY], a
     ld a, FT_BAND_BOTTOM    ; the band goes with him: down, all of it; up, its top only as far as
     add c                   ; FT_HEADROOM, its end where the background below him takes over
+IF DEF(FT_NES_DOWN_MAX)
+IF FT_BAND_BOTTOM + FT_NES_DOWN_MAX > 141
+    cp 142                  ; (its end no later than line 141: a split at the screen's last lines would race
+    jr c, .ends             ;  VBlank, and the frame could sleep through it)
+    ld a, 141
+.ends:
+ENDC
+ENDC
     ldh [hFtBandBottom], a
 IF DEF(FT_ROPE)
     ret                     ; (a rope row: his band's top stays put; what's above it of him is sprites)
@@ -5896,6 +6180,62 @@ ENDC                        ; (the kit's own fight: none of it when the NES game
 ; A = scene to go to after a pause.
 ; The fight's display ends: back to VBlank-only, no scroll split. LoadScene calls it, the screen faded out
 ; (till then his band stays where he is, not back to the middle).
+; The original with a grey mat: A = BGP as the fade has it (kept), its own above the mat's line; hFtRingNow his
+; ring's greys (hFtRingBgp) through it, the mat's line on. Keeps everything.
+FtRingBase::
+    ldh [hFtBgpBase], a
+    push af
+    push bc
+    push de
+    push hl
+    ld b, a
+    ldh a, [hFtRingBgp]
+    and a
+    jr z, .done
+    call .map
+    ldh [hFtRingNow], a
+    ldh a, [hFtObpRaw]
+    call .map
+    ldh [hFtObpLow], a
+    ldh a, [hFtObpRaw + 1]
+    call .map
+    ldh [hFtObpLow + 1], a
+.done:
+    pop hl
+    pop de
+    pop bc
+    pop af
+    ret
+.map:                       ; A = four raw greys -> each as the fade shows it (B: BGP)
+    ld c, a
+    ld e, 0
+    ld d, 4
+.k:
+    ld a, c
+    and 3
+    ld l, b
+    jr z, .got
+.shift:
+    srl l
+    srl l
+    dec a
+    jr nz, .shift
+.got:
+    ld a, l
+    and 3
+    rrca
+    rrca
+    srl e
+    srl e
+    or e
+    ld e, a
+    srl c
+    srl c
+    dec d
+    jr nz, .k
+    ld a, e
+    ret
+
 FtStop::
     di
     ld a, 1
@@ -5903,6 +6243,7 @@ FtStop::
     xor a
     ldh [rSTAT], a
     ldh [hFtActive], a
+    ldh [hFtRingBgp], a     ; (the ring's greys: the fight's own)
     ldh [rSCX], a
     ldh [rSCY], a
     ret
@@ -6488,6 +6829,10 @@ ENDC
     inc a
     add FT_HEAD_Y0 - TWINKLE_OVER
     add d
+    cp 16 + 24              ; (no higher than the crowd's top: a tall one leaning up would put it in the HUD)
+    jr nc, .twinkleY
+    ld a, 16 + 24
+.twinkleY:
     ld [wFtTwinkleY], a
     ld a, [wFtTwinkleY]     ; which list: the upper if it ends before FT_DMA_LINE, the lower if it starts after
     cp FT_DMA_LINE + 16 - 8 + 1
@@ -6640,6 +6985,8 @@ IF DEF(FT_NES)
     ld a, [wFtBankPicsDmg]  ; (the original with its greys: that picture's list, in its tiles' copy)
     and a
     jr z, .poses
+    call .same
+    jr z, .kept
     ld a, [wRvPicHeadsBuf]
     rrca
     rrca
@@ -6647,6 +6994,11 @@ IF DEF(FT_NES)
     ld a, [wRvPicHeads]
     call FtDmgEntry         ; (HL: its sprites' address)
     jr .read
+.kept:                      ; (as last frame's: the same picture, copy, place and start -- left as they are)
+    pop hl
+    ld a, [wFtHeadEnd]
+    ld l, a
+    jp .done
 .cgbPics:
     ld a, [wRvPicHeadsBuf]  ; (its tiles' copy: the second, 64 on)
     rrca
@@ -6689,7 +7041,7 @@ ENDC
     ld a, [de]
     inc de
     and a
-    jr z, .done
+    jp z, .done
     ldh [hFtHeadN], a
     ldh a, [hFtBandX]       ; his area's left, top on screen (as OAM x, y): scrolled with his band
     cpl
@@ -6707,6 +7059,45 @@ ENDC
     ld h, d
     ld l, e
     pop de
+    ldh a, [hIsCGB]         ; (the original: its own loop, no eyes' whites to keep)
+    and a
+    jr nz, .sprite
+.dmg:
+    ld a, e
+    cp 160
+    jr nc, .full
+    ld a, [hl+]             ; y: his band shows this row on (the rest too: top row first)
+    add c
+    cp FT_HEAD_LIMIT
+    jr nc, .full
+    ld [de], a
+    ld a, [hl+]             ; x: off the right edge, no sprite spent on it
+    add b
+    cp 168
+    jr nc, .dmgSkip
+    inc e
+    ld [de], a
+    inc e
+    ldh a, [hFtPlTile]
+    add [hl]
+    inc hl
+    ld [de], a
+    inc e
+    ld a, [hl+]
+    ld [de], a
+    inc e
+.dmgNext:
+    ldh a, [hFtHeadN]
+    dec a
+    ldh [hFtHeadN], a
+    jr nz, .dmg
+    jr .full
+.dmgSkip:
+    xor a
+    ld [de], a
+    inc hl
+    inc hl
+    jr .dmgNext
 .sprite:
     ld a, e
     cp 160
@@ -6761,9 +7152,48 @@ ENDC
     ld h, d
     ld l, e
 .done:
+    ld a, l                 ; (where they ended: for next frame's, if the same)
+    ld [wFtHeadEnd], a
     ld a, [wFtBankData]
     ld [$2000], a
     ret
+IF DEF(FT_NES)
+; Z: his top rows' sprites as last built -- the same picture, its copy, his band's x and y, from the same place in
+; the list (its next entry's low byte at [SP + 2]): there still. Either way, these noted for next frame's.
+.same:
+    ld hl, sp + 2
+    ld a, [hl]
+    ld hl, wFtHeadKey + 4
+    ld b, [hl]
+    ld [hl], a
+    xor b
+    ld e, a
+    ld hl, wFtHeadKey
+    ld a, [wRvPicHeads]
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    or e
+    ld e, a
+    ld a, [wRvPicHeadsBuf]
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    or e
+    ld e, a
+    ldh a, [hFtBandX]
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    or e
+    ld e, a
+    ldh a, [hFtBandY]
+    ld b, [hl]
+    ld [hl], a
+    xor b
+    or e
+    ret
+ENDC
 ENDC
 
 IF DEF(FT_SIDE_TILE)
@@ -6771,6 +7201,11 @@ IF DEF(FT_SIDE_TILE)
 ; lines there scroll with his band). HL = the next OAM entry.
 FtSideRopes:
     ld de, FtSideRopeOAM
+    ldh a, [hIsCGB]
+    and a
+    jr nz, .cgb
+    ld de, FtSideRopeOAMDmg
+.cgb:
     ld b, 4 * 4
 .copy:
     ld a, [de]
@@ -6784,6 +7219,11 @@ FtSideRopeOAM:
     db FT_SIDE_Y + 8, 8, FT_SIDE_TILE + 1, FT_SIDE_ATTR | $80
     db FT_SIDE_Y, 160, FT_SIDE_TILE, FT_SIDE_ATTR | $A0
     db FT_SIDE_Y + 8, 160, FT_SIDE_TILE + 1, FT_SIDE_ATTR | $A0
+FtSideRopeOAMDmg:           ; (the original: its own copy of the tiles, OBP0 -- his ring's greys up there)
+    db FT_SIDE_Y, 8, FT_SIDE_TILE_DMG, $80
+    db FT_SIDE_Y + 8, 8, FT_SIDE_TILE_DMG + 1, $80
+    db FT_SIDE_Y, 160, FT_SIDE_TILE_DMG, $A0
+    db FT_SIDE_Y + 8, 160, FT_SIDE_TILE_DMG + 1, $A0
 ENDC
 
 StarOrbit:                  ; an ellipse: dx, dy in 16 steps
@@ -6792,18 +7232,13 @@ StarOrbit:                  ; an ellipse: dx, dy in 16 steps
 StarHeadY:                  ; head top, per knockdown pose
     db 8, 16, 24, 8, 8
 
-PunchRise:                  ; per frame of a body punch: y offset (a leap up into it)
-    db 0, -6, -11, -14, -16, -16, -16, -14, -11, -8, -5, -3, -1, 0, 0
-PunchRiseHigh:              ; to the face: right up to his chin
-    db 0, -10, -19, -26, -31, -32, -32, -29, -23, -16, -10, -5, -2, 0, 0
-
 ; The player's vertical motion: A = y offset (down). Bobbing, lunging, recoiling, crouching.
 FtPlayerMotion:
 IF DEF(FT_NES)
     ld a, [wPlNesY]         ; Mac's scripts move him sideways ($15); his knockdown frames sit lower
     and $7F
     ret
-ENDC
+ELSE                        ; (the rest: the kit's own Mac, none of it the NES's)
     ld a, [wPlState]
     and a
     jr z, .idle
@@ -6854,12 +7289,135 @@ ENDC
     ret nc
     ld a, -5
     ret
-.zero:
-    xor a
+
+PunchRise:                  ; per frame of a body punch: y offset (a leap up into it)
+    db 0, -6, -11, -14, -16, -16, -16, -14, -11, -8, -5, -3, -1, 0, 0
+PunchRiseHigh:              ; to the face: right up to his chin
+    db 0, -10, -19, -26, -31, -32, -32, -29, -23, -16, -10, -5, -2, 0, 0
+ENDC
+
+
+; The referee's sprites and words, about to be built at HL: Z if they're as last built in this list (D: where they
+; ended); NZ otherwise (this key noted, for these). Keeps HL.
+FtRefSame:
+    push hl
+    ld a, h
+    and 1
+    add a
+    add a
+    add a
+    add LOW(wFtRefKey)
+    ld e, a
+    adc HIGH(wFtRefKey)
+    sub e
+    ld d, a
+    ld a, l                 ; where they begin
+    ld h, d
+    ld l, e
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    ld e, a
+    ld a, [wFtRefShown]
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    or e
+    ld e, a
+    ld a, [wFtRefX]
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    or e
+    ld e, a
+    ld a, [wFtRefSlot]
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    or e
+    ld e, a
+    ld a, [wFtSay]
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    or e
+    ld e, a
+    ld a, [wFtCount]
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    or e
+    ld d, [hl]
+    pop hl
     ret
 
+IF DEF(FT_MAC_PICS) && DEF(FT_NES)
+; Mac's sprites, his pictures', about to be built at DE (its list's page in D) from his picture wPlPicHeads with
+; hFtPlY/X/Tile, BC his palette's mask and bits: Z if they're as last built in this list (HL: where they ended);
+; NZ otherwise (this key noted, for these). Either way, the path noted.
+FtMacSame:
+    ld a, 1
+    ld [wFtMacPath], a
+    ld a, d
+    and 1
+    add a
+    add a
+    add a
+    add LOW(wFtMacKey)
+    ld l, a
+    adc HIGH(wFtMacKey)
+    sub l
+    ld h, a
+    push bc
+    ld a, e                 ; where they begin
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    ld e, a
+    ld a, [wPlPicHeads]
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    or e
+    ld e, a
+    ldh a, [hFtPlTile]
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    or e
+    ld e, a
+    ldh a, [hFtPlY]
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    or e
+    ld e, a
+    ldh a, [hFtPlX]
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    or e
+    pop bc
+    ld e, a
+    ld a, b
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    or e
+    ld e, a
+    ld a, c
+    ld b, [hl]
+    ld [hl+], a
+    xor b
+    or e
+    ret
+ENDC
 
 FtBuildOAM:
+IF DEF(FT_MAC_PICS) && DEF(FT_NES)
+    xor a
+    ld [wFtMacPath], a
+ENDC
 IF DEF(FT_ROPE)
     ldh a, [hFtOamBuild]    ; (Mac, the referee: the screen's lower part's list, the one not being shown)
     ld h, a
@@ -6971,10 +7529,60 @@ IF DEF(FT_MAC_PICS) && DEF(FT_NES)
 .macDown:
     ld bc, $F800 | FT_DOWN_PAL
 .macGo:
+    ldh a, [hIsCGB]         ; (Color: built every time, as it was)
+    and a
+    jr nz, .macBuild
+    push bc                 ; (as last built in this list: left as they are)
+    push de
+    push hl
+    ld d, h
+    ld e, l
+    call FtMacSame
+    jr nz, .macMiss
+    ld a, [hl]              ; (where they ended)
+    pop hl
+    ld l, a
+    pop de
+    pop bc
+    jp .refStart
+.macMiss:
+    pop hl
+    pop de
+    pop bc
+.macBuild:
     push hl                 ; (HL his sprites, DE the list being built)
     ld h, d
     ld l, e
     pop de
+    ldh a, [hIsCGB]         ; (the original: its own loop -- y, x in B, C, his attributes as they are, its palette
+    and a                   ;  bits unused)
+    jr nz, .mac
+    ldh a, [hFtPlY]
+    ld b, a
+    ldh a, [hFtPlX]
+    ld c, a
+.macDmg:
+    ld a, [hl+]
+    add b
+    ld [de], a
+    inc e
+    ld a, [hl+]
+    add c
+    ld [de], a
+    inc e
+    ldh a, [hFtPlTile]
+    add [hl]
+    inc hl
+    ld [de], a
+    inc e
+    ld a, [hl+]
+    ld [de], a
+    inc e
+    ldh a, [hFtHeadN]
+    dec a
+    ldh [hFtHeadN], a
+    jr nz, .macDmg
+    jr .macEnd
 .mac:
     ldh a, [hFtPlY]
     add [hl]
@@ -7000,8 +7608,24 @@ IF DEF(FT_MAC_PICS) && DEF(FT_NES)
     dec a
     ldh [hFtHeadN], a
     jr nz, .mac
+.macEnd:
     ld h, d
     ld l, e
+    ldh a, [hIsCGB]         ; (Color: built every time, as it was)
+    and a
+    jp nz, .refStart
+    ld a, h                 ; (where they ended, for next time in this list)
+    and 1
+    add a
+    add a
+    add a
+    add LOW(wFtMacKey + 7)
+    ld e, a
+    adc HIGH(wFtMacKey + 7)
+    sub e
+    ld d, a
+    ld a, l
+    ld [de], a
     jp .refStart
 ENDC
 .dmgSprites:
@@ -7126,6 +7750,28 @@ IF DEF(FT_MAC_PICS)
     ld a, [wFtBankData]     ; (his pictures' bank was mapped)
     ld [$2000], a
 ENDC
+IF DEF(FT_MAC_PICS) && DEF(FT_NES)
+    ldh a, [hIsCGB]         ; (Color: built every time, as it was)
+    and a
+    jr nz, .macKeyed
+    ld a, [wFtMacPath]      ; (built some other way, or none: this list's key no longer his sprites')
+    and a
+    jr nz, .macKeyed
+    push hl
+    ld a, h
+    and 1
+    add a
+    add a
+    add a
+    add LOW(wFtMacKey)
+    ld l, a
+    adc HIGH(wFtMacKey)
+    sub l
+    ld h, a
+    ld [hl], $FF
+    pop hl
+.macKeyed:
+ENDC
 IF FT_FX_STARS
     call FtStars
 ENDC
@@ -7146,6 +7792,14 @@ IF FT_FX_SPARK
     call FtSparkSprites
 ENDC
     ; the referee, and what he's saying
+    ldh a, [hIsCGB]         ; (Color: built every time, as it was)
+    and a
+    jr nz, .refBuild
+    call FtRefSame          ; (as last built in this list, from here: left as they are)
+    jr nz, .refBuild
+    ld l, d
+    jp .clear
+.refBuild:
     ld a, [wFtRefX]         ; off screen, his sprites land past the right edge, which hides them
     add 8
     ld c, a                 ; C = OAM x of his left edge
@@ -7322,8 +7976,27 @@ ENDC
     ld b, FT_BUBBLE_RIGHT
     call .put
 .clear:                     ; hide the rest
+    ldh a, [hIsCGB]         ; (Color: built every time, as it was)
+    and a
+    jr nz, .refKeyed
+    push hl                 ; (where the referee's ended, for next time in this list)
+    ld a, h
+    and 1
+    add a
+    add a
+    add a
+    add LOW(wFtRefKey + 6)
+    ld e, a
+    adc HIGH(wFtRefKey + 6)
+    sub e
+    ld d, a
+    ld a, l
+    ld [de], a
+    pop hl
+.refKeyed:
 IF DEF(FT_ROPE)
     call .hideRest          ; the lower list done; the upper: his top rows over the ropes (and the star if there)
+.upper:
     ld hl, wFtOAM
 IF DEF(FT_NES)
     xor a                   ; (his turban's gem first: in front of his top rows' sprites)
@@ -7331,8 +8004,12 @@ IF DEF(FT_NES)
 ENDC
     call FtHeadSprites
 IF DEF(FT_SIDE_TILE)
-    ldh a, [hIsCGB]         ; Color: the ring's side ropes' ends, past the crowd's rows, behind him (on the
-    and a                   ; original the mat under them is the ropes' own shade)
+    ldh a, [hIsCGB]         ; the ring's side ropes' ends, past the crowd's rows, behind him (the original: OBP1,
+    and a                   ; the referee's, its white; over a white mat only they'd not show)
+    jr nz, .sideRopes
+    ldh a, [hFtRingBgp]
+    and a
+.sideRopes:
     call nz, FtSideRopes
 ENDC
 IF DEF(FT_TWINKLE_TILE)
@@ -7735,6 +8412,12 @@ FtNesShow:
     ld [wRvNesY], a
 IF DEF(FT_TWINKLE_TILE)
     ld a, [wNes + $0344]    ; a star just earned: the NES's spot for it (beside his head), as ours
+    dec a                   ; (1: no spot of its own -- the NES's sparkle is in his picture, over his head: his
+    jr nz, .spot            ;  place, 3 pixels right of it)
+    ld a, [wNes + nOppBaseX]
+    add 3 - 1
+.spot:
+    inc a
     ld l, a
     ld h, 0
     ld de, NesOffsetX
@@ -7787,6 +8470,25 @@ ENDC
     ld de, MacPlaceY
     add hl, de
     ld a, [hl]
+    ld [wPlNesY], a
+    ld a, [wNes + $61]      ; (his walks, $80-$97: as low as the NES's $70 says -- the frame alone doesn't: the
+    sub $80                 ;  same ones walk him up after a getup and stand him low through a count)
+    cp $18
+    jr nc, .place
+    ld a, [wNes + $70]
+    sub 72
+    cp 13
+    ld b, FT_MAC_START_Y
+    jr nc, .walkY
+    ld l, a
+    ld h, 0
+    ld de, MacWalkY
+    add hl, de
+    ld b, [hl]
+.walkY:
+    ld a, [wPlNesY]
+    and $80
+    or b
     ld [wPlNesY], a
 .place:
     ld a, [wNes + $048E]    ; worn out: the NES turns his skin purple ($14) till he has his breath back
@@ -7844,8 +8546,6 @@ FtPlPicFrame:
     xor a
     ld [wPlFlip], a
     ld a, [wNes + $61]
-    cp 128
-    ret nc
     ld l, a
     ld h, 0
     ld a, BANK(MacPicFrames)
@@ -8103,6 +8803,12 @@ FtNesHud:
     ld [wFtHudDirty], a
 .hearts:
 .show:
+    ld a, [wNes + $0320]    ; (none set yet this fight -- its first frames, before the NES's round start: the
+    ld hl, wNes + $0323     ; ones it starts with stay up, not its 00)
+    or [hl]
+    inc hl
+    or [hl]
+    jr z, .stars
     ld a, [wNes + $0323]
     ld b, a
     add a

@@ -254,7 +254,60 @@ def clock_stops():
     return out
 
 
+RANDOM_OPPS = {0: "joe", 1: "kaiser", 2: "honda", 3: "don", 5: "tiger", 6: "bull", 7: "honda2", 8: "soda", 9: "bull2", 10: "don2", 12: "macho"}
+
+
+def randoms(frames=1200, after=30):
+    """The random byte ($18) as the NES has it: TASVideos' clock-stop run (as clock_stops), one stretch per opponent
+    (RANDOM_OPPS) a while into his fight, mid-round, no one down: the NES's RAM at its start, the run's inputs from
+    there, and each frame's $18 and $19 (its running sum), Mac's and his states ($50, $90), and what $18 is built from
+    ($1E, $D0, $21) -- the port, given the RAM and the inputs, must build the same random bytes frame by frame."""
+    import io, urllib.request, zipfile
+    data = urllib.request.urlopen(urllib.request.Request(TAS_CLOCK_STOP, headers={"User-Agent": "Mozilla/5.0"})).read()
+    bk2 = zipfile.ZipFile(io.BytesIO(data))
+    movie = zipfile.ZipFile(io.BytesIO(bk2.read(bk2.namelist()[0])))
+    lines = [l for l in movie.read("Input Log.txt").decode().splitlines() if l.startswith("|..|")]
+    bits = [0x08, 0x04, 0x02, 0x01, START, SEL, B, A]
+    inputs = [sum(b for b, c in zip(bits, l.split("|")[2]) if c != ".") for l in lines][1:]
+    nes, run, starts = _nes(), {}, {}
+    for t, b in enumerate(inputs):
+        nes.controller = b
+        nes.step()
+        o = nes[0x01]
+        live = nes[0x00] == 1 and nes[0x05] == 0 and nes[0x301] & 1
+        run[o] = run.get(o, 0) + 1 if live else 0
+        if o in RANDOM_OPPS and o not in starts and run[o] >= after:
+            starts[o] = t
+        if len(starts) == len(RANDOM_OPPS):
+            break
+    out = []
+    for o, start in sorted(starts.items()):
+        nes = _nes()
+        for t in range(start + 1):
+            nes.controller = inputs[t]
+            nes.step()
+        ram = bytes(nes[a] for a in range(0x800))
+        trace = []
+        for t in range(start + 1, start + 1 + frames):
+            nes.controller = inputs[t]
+            nes.step()
+            trace.append([nes[0x18], nes[0x19], nes[0x50], nes[0x90] & 0x7F, nes[0x1E], nes[0xD0], nes[0x21]])
+        out.append({"opponent": RANDOM_OPPS[o], "ram": ram.hex(), "inputs": inputs[start + 1:start + 2 + frames],
+                    "trace": trace})
+        print(" ", RANDOM_OPPS[o], "from", start, flush=True)
+    return out
+
+
 def main():
+    if sys.argv[1:] == ["randoms"]:
+        ref = json.loads(OUT.read_text())
+        ref["randoms"] = randoms()
+        ref["randoms_note"] = (
+            "The random byte on the NES (cynes, TASVideos submission 6742's inputs): per opponent, the NES's RAM a while "
+            "into his fight, the run's inputs from there, and each frame after: $18, $19, Mac's state, his state, $1E, $D0, $21.")
+        OUT.write_text(json.dumps(ref, indent=1) + "\n")
+        print("wrote", OUT, len(ref["randoms"]), "stretches")
+        return
     if sys.argv[1:] == ["dodge_tells"]:             # (just these, into the reference as it stands)
         ref = json.loads(OUT.read_text())
         ref["dodge_tells"] = dodge_tells()

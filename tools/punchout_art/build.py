@@ -2104,10 +2104,11 @@ def import_pictures(frames, palettes):
         return min((1, 2, 3), key=lambda k: dist(c, pal[k]))
     out = {}
     for key, fr in frames.items():
+        RH = max(globals()["RH"], len(fr))   # (a picture taller than his frame, his feet below it: all its rows)
         small = {y * RW + x for x, y in _small_whites(fr)}   # (an eye's white the palette lacks: dear -- white to pink
-        px = [from8(fr[y][x][:3]) if fr[y][x] else None for y in range(RH) for x in range(RW)]   # (as the sheets':
+        px = [from8(fr[y][x][:3]) if y < len(fr) and fr[y][x] else None for y in range(RH) for x in range(RW)]   # (as the sheets':
         pix = [0] * (RW * RH); kinds = []                                                         # Color's 5 bits)
-        for cy in range(FIGHT_H):
+        for cy in range(RH // 8):
             for cx in range(FIGHT_W):
                 cell = [(cy * 8 + y) * RW + cx * 8 + x for y in range(8) for x in range(8)]
                 errs = [sum(min(dist(px[i], pal[k]) for k in (1, 2, 3)) * (WHITE_DEAR if i in small else 1)
@@ -2367,6 +2368,7 @@ def rival_art(key, s, colors, pposes, max_share=24):
         places = picture_places(frames_, s, every)      # (found as drawn, then each picture's move undone: he's
         drawn = frames_                                 # on screen where he was, the idle one's too)
         frames_, moved = align_pictures(frames_, pals)
+        dmg_moved = dict(moved)                          # (the original's own pictures: as aligned, before touch-ups)
         frames_ = apply_touchups(key, frames_)           # (hand touch-ups, over the very pictures they were drawn on)
         for k, (dx, dy) in touchup_moved(key).items():   # (and any move of theirs, undone on screen like align's)
             mx, my = moved.get(k, (0, 0))
@@ -2376,6 +2378,18 @@ def rival_art(key, s, colors, pposes, max_share=24):
         places = {k: [x - moved.get(k, (0, 0))[0], y - moved.get(k, (0, 0))[1]]
                   for k, (x, y) in {k: places.get(k, [0, 0]) for k in frames_}.items()}
         art["pictures"] = {"poses": import_pictures(frames_, pals), "places": {k: v for k, v in places.items() if v != [0, 0]}}
+        dmg = sorted((TOUCHUPS / key / "dmg").glob("*.txt")) if (TOUCHUPS / key / "dmg").exists() else []
+        if dmg:                         # (the original Game Boy: its own picture where full size streams too slow there
+            dframes, dplaces = {}, dict(places)   #  -- the one drawn before, touchups/KEY/dmg -- and where it sits)
+            for path in dmg:
+                k = path.stem[:-1] + "|" if path.stem.endswith("m") else path.stem
+                dframes[k] = read_touchup(path)[1]
+                dx, dy = next((tuple(map(int, l.split()[1:3])) for l in path.read_text().splitlines() if l.startswith("moved ")), (0, 0))
+                mx, my = dmg_moved.get(k, (0, 0))
+                x, y = places[k][0] + moved.get(k, (0, 0))[0], places[k][1] + moved.get(k, (0, 0))[1]
+                dplaces[k] = [x - mx - dx, y - my - dy]
+            art["pictures"]["dmgPoses"] = import_pictures(dframes, pals)
+            art["pictures"]["dmgPlaces"] = {k: v for k, v in dplaces.items() if v != [0, 0]}
         if r.get("jewel"):              # (Great Tiger's gem: where each picture shows it, not its pose's)
             gems = {k: _jewel({(x, y): c for y, row in enumerate(f) for x, c in enumerate(row) if c}) for k, f in drawn.items()}
             art["pictures"]["jewel"] = {k: [round(g[0]) + moved.get(k, (0, 0))[0], round(g[1]) + moved.get(k, (0, 0))[1]]
@@ -2462,6 +2476,7 @@ def write_js(colors, pposes, note, faces, mac_pal, rivals, mac_cgb=None, full=No
           f"  mac: '{base64.b64encode(DISASM_MAC.read_bytes()).decode()}',",
           f"  sound: '{base64.b64encode(DISASM_BANK.with_name('PRG_Bank008.bin').read_bytes()).decode()}',",
           f"  soundFixed: '{base64.b64encode(DISASM_BANK.with_name('PRG_BankDEF.bin').read_bytes()[0x5400:0x5900]).decode()}',",
+          f"  crowd: '{base64.b64encode(DISASM_BANK.with_name('PRG_Bank007.bin').read_bytes()[0x0A00:0x0E40]).decode()}',",
           f"  samples: '{base64.b64encode(DISASM_BANK.with_name('PRG_BankDEF.bin').read_bytes()[0x4000:0x5400]).decode()}',",
           f"  macFrames: {json.dumps(MAC_FRAMES)}, macHome: 176, macScale: {SCALE_MAC},",
           f"  macPictures: {json.dumps(mac_pictures(SCALE_MAC, colors))},",
@@ -2516,7 +2531,9 @@ def _rival_js(key, art):
                + [f"  '{k}':" + pic(v)[1:] for k, v in sorted(art["pictures"]["poses"].items())]
                + [f"}}, places: {json.dumps(art['pictures']['places'])}"
                   + (f", next: {json.dumps(art['pictures']['next'])}" if art["pictures"].get("next") else "")
-                  + (f", jewel: {json.dumps(art['pictures']['jewel'])}" if art["pictures"].get("jewel") else "") + " };"]
+                  + (f", jewel: {json.dumps(art['pictures']['jewel'])}" if art["pictures"].get("jewel") else "")
+                  + (", dmgPoses: { " + ", ".join(f"'{k}': " + pic(v)[2:].rstrip(",") for k, v in art["pictures"]["dmgPoses"].items())
+                     + f" }}, dmgPlaces: {json.dumps(art['pictures']['dmgPlaces'])}" if art["pictures"].get("dmgPoses") else "") + " };"]
                if art.get("pictures") else [])
             + [f"export const {up}_NES = {{ bank: '{base64.b64encode(bank).decode()}', offset: {r['offset']},",
                f"  frames: {json.dumps(r['frames'])}, home: [135, 182], scale: {SCALE_JOE},",

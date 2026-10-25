@@ -247,6 +247,8 @@ def fit(rows, nes, nudge=(0, 0)):
             mv = abs(dx + PAD_X) + abs(dy + PAD_Y)
             if ph not in trials or mv < trials[ph][0]:
                 trials[ph] = (mv, dx, dy)
+    if getattr(fit, "force", None) in trials:          # (a phase asked for: his head's tiles where they were)
+        trials = {fit.force: trials[fit.force]}
     best = None
     for mv, dx, dy in sorted(trials.values()):
         g = [["."] * build.RW for _ in range(build.RH)]
@@ -259,9 +261,11 @@ def fit(rows, nes, nudge=(0, 0)):
         if best is None or (n, mv) < best[0]:
             best = ((n, mv), dx, dy, g)
     (_, _), dx, dy, g = best
+    fit.last = ((top + dy) % 8, (left + dx) % 8)
     fr = [[(LEG[c] + (255,)) if c != "." else None for c in r] for r in g]
     cells = build.import_pictures({"x": fr}, pals)["x"]["cells"]
     sh = shows(pals)
+    before = [r[:] for r in g]
     for ty in range(build.RH // 8):                 # (a tile that can't hold his glove's color with the rest: the
         for tx in range(build.RW // 8):             #  glove's kept, the rest it can't hold black -- a shadow by
             px = [(y, x) for y in range(ty * 8, ty * 8 + 8) for x in range(tx * 8, tx * 8 + 8) if g[y][x] != "."]
@@ -274,6 +278,7 @@ def fit(rows, nes, nudge=(0, 0)):
                 for y, x in px:                     #  the nearest color's block -- an eye's white aside: a sprite's)
                     if g[y][x] not in can and g[y][x] not in ".W":
                         g[y][x] = "K"
+    fit.blacked = sum(1 for y in range(len(g)) for x in range(len(g[0])) if g[y][x] != before[y][x])   # (made black)
     if nudge != (0, 0):                             # (moved on by hand, the colors' phase kept: a tile's width)
         ndx, ndy = nudge
         h = [["."] * build.RW for _ in range(build.RH)]

@@ -1,6 +1,7 @@
 """NES opponent engine tests: the Game Boy port (kit_nes.asm) against the original NES routines.
 
-Both run from the same RAM, with the same random numbers and the same inputs each frame: the NES game's
+Both run from the same RAM and the same inputs each frame -- the random byte ($18) each machine's own, built and
+rotated as the NES does, and compared like the rest: the NES game's
 own code in a 6502 interpreter (tools/punchout_art/cpu6502.py, on the ROM banks from the disassembly)
 and the port in the Game Boy machine. After every frame all of the NES RAM must match, byte for byte.
 Needs the disassembly at ~/code/mike-tysons-punch-out-disassembly and the Joe vs Mac example.
@@ -29,16 +30,8 @@ SKIP = set(range(0x00, 0x20)) | set(range(0xE0, 0xF0)) | set(range(0x100, 0x300)
     # raw controller polls (not ported: the GB draws and reads its own)
 
 
-def lfsr(s):
-    s = s or 1
-    s <<= 1
-    if s > 0xFF:
-        s = (s ^ 0x1D) & 0xFF
-    return s
-
-
 class Nes:
-    """The NES routines, with $18 (its random byte) fed the Game Boy port's sequence."""
+    """The NES routines, as they are (its random byte, $18, its own)."""
 
     def __init__(self, bank=0):
         sys.path.insert(0, str(ROOT / "tools" / "punchout_art"))
@@ -49,20 +42,18 @@ class Nes:
         # ($A0 = 0) and a sprite transfer asked of the vblank ($17 = 1).
         hi[0xC890 - 0xA000:0xC89D - 0xA000] = bytes.fromhex("A5A0F008A90085A0A9018517") + b"\x60"
         self.nes.hi = bytes(hi)
-        self.rand = 0
 
-    def call(self, addr, bank=None):
+    def call(self, addr, bank=None, carry=None):
         if bank is not None:
             self.nes.lo = self.nes.bank(bank)
         cpu = self.nes.cpu
+        if carry is not None:
+            cpu.c = carry
         cpu.push(0xFF); cpu.push(0xFE)
         cpu.pc = addr
         for _ in range(200_000):
             if cpu.pc == 0xFFFF:
                 return
-            if self.nes.read(cpu.pc) == 0xA5 and self.nes.read(cpu.pc + 1) == 0x18:   # LDA $18: the next random
-                self.rand = lfsr(self.rand)
-                self.nes.ram[0x18] = self.rand
             cpu.step()
         raise RuntimeError(f"NES ${addr:04X} didn't return")
 
@@ -144,6 +135,8 @@ def run(log=print):
                  dict(frames=6000, seed=2)))
     jobs.append(("Glass Joe", "pass keys: read and written as the NES's (keys at random, every kind of record)",
                  "passkeys", dict(seed=1)))
+    jobs.append(("Glass Joe", "the random byte: built as the NES builds it, on the NES's own frames (cynes)",
+                 "randoms", {}))
     ok = True
     with ProcessPoolExecutor() as pool:
         last = None
@@ -157,13 +150,13 @@ def run(log=print):
     return ok
 
 
-# NES RAM the Game Boy doesn't keep: its drawing (OAM, PPU update buffers, palettes, the crowd's palette
-# animation at $41-$47), its sound engine's ($F0-$FF, $0700+), and display copies of the numbers.
-NES_ONLY = (set(range(0x00, 0x17)) | set(range(0x18, 0x1E)) | set(range(0x1F, 0x20)) | set(range(0x41, 0x48)) | set(range(0x61, 0x6A)) | set(range(0x80, 0x83))
+# NES RAM the Game Boy doesn't keep: its drawing (OAM, PPU update buffers, palettes, the crowd's tell
+# at $46-$47), its sound engine's ($F0-$FF, $0700+), and display copies of the numbers.
+NES_ONLY = (set(range(0x00, 0x17)) | set(range(0x1A, 0x1E)) | set(range(0x1F, 0x20)) | set(range(0x46, 0x48)) | set(range(0x61, 0x6A)) | set(range(0x80, 0x83))
             | set(range(0xE0, 0x100)) | set(range(0x100, 0x300)) | set(range(0x0303, 0x0304))
             | set(range(0x030B, 0x0310)) | set(range(0x0326, 0x0328)) | set(range(0x0344, 0x0349)) | set(range(0x034A, 0x034B))
             | set(range(0x0395, 0x0397)) | set(range(0x039C, 0x039E)) | set(range(0x03F1, 0x0400))
-            | set(range(0x0400, 0x04C8)) | set(range(0x04C9, 0x04CA)) | set(range(0x06A0, 0x06A9))
+            | set(range(0x0404, 0x0410)) | {0x0412} | set(range(0x0416, 0x04C8)) | set(range(0x04C9, 0x04CA)) | set(range(0x06A0, 0x06A9))
             | set(range(0x0730, 0x0800)))
 
 
@@ -176,6 +169,9 @@ def vblank(ram):
     if ram[0x60] == 1:
         ram[0x60] = 0; budget -= 1
     if budget:
+        ram[0x04A0] = 0                     # the palettes ($A5F0), then the words buffer if flagged ($A606: $C24A)
+        if ram[0x0410] & 0x80:
+            ram[0x0410] = 0
         for a in {0: (0x0325, 0x0349), 1: (0x03F0,), 2: (0x030A,), 3: (0x0394, 0x039B)}[ram[0x1E] & 3]:
             if ram[a] & 0x80:
                 ram[a] = 0
@@ -214,9 +210,10 @@ def full(log, title, frames, seed, low=False, idle=False, style=None):
     ram[0x02], ram[0x03] = FIGHTERS[FIGHTER]      # (the NES finds his data by these; the port knows its own)
     (ram[0x02], ram[0x03]), ram[0x04] = FIGHTERS[FIGHTER], 0xFF
     rng = random.Random(seed)
-    nes.rand = rng.randrange(1, 256)
+    r = rng.randrange(256)
+    ram[0x18] = r; gb.poke(0x18, r)
+    gb.m.write(gb.sym["wNesD0Prev"][1], ram[0xD0])
     held, hold = 0, 0
-    crowd = random.Random(seed + 1)
     failures, seen, macs, events = [], set(), set(), []
     last = (0, 0)
     for frame in range(frames):
@@ -242,25 +239,16 @@ def full(log, title, frames, seed, low=False, idle=False, style=None):
         for k in range(0, 8, 2):
             ram[0x6A0 + k] = held
         gb.poke(0xD0, held)
-        gb.m.write(gb.sym["wNesRand"][1], nes.rand)
         nes.nes.lo = nes.nes.bank(7); ram[0x0D] = 7
         vblank(ram)
+        nes.call(0x85E9, bank=7, carry=ram[0x21] >> 7)     # ($A64F) the frame's random byte, from last frame's pad
+        nes.nes.lo = nes.nes.bank(7)
         cpu = nes.nes.cpu
         cpu.push(0xFF); cpu.push(0xFE); cpu.push(cpu.flags()); cpu.push(0); cpu.push(0); cpu.push(0)
         cpu.pc = 0xA669
-        cheer = None                        # the stack depth while the crowd ($8A6F) runs
         for _ in range(400_000):
             if cpu.pc in (0xFFFE, 0xFFFF):
                 break
-            if cpu.pc == 0x8A6F and nes.nes.lo is nes.nes.bank(7):
-                cheer = cpu.sp
-            elif cheer is not None and cpu.sp > cheer:
-                cheer = None
-            if nes.nes.read(cpu.pc) == 0xA5 and nes.nes.read(cpu.pc + 1) == 0x18:
-                if cheer is not None:
-                    ram[0x18] = crowd.randrange(256)    # the crowd's own (its draws are only looks)
-                else:
-                    nes.rand = lfsr(nes.rand); ram[0x18] = nes.rand
             cpu.step()
         gb.call("NesEngineFrame")
         seen.add(ram[0x90] & 0x7F); macs.add(ram[0x50] & 0x7F)
@@ -281,7 +269,6 @@ def full(log, title, frames, seed, low=False, idle=False, style=None):
             break
         if ram[0x00] == 0xFF and ram[0x06] < 3:     # time: the next round ($A9AA)
             ram[0x06] += 1
-            gb.m.write(gb.sym["wNesRand"][1], nes.rand)
             nes.call(0xAB4E)                        # his knockdowns this round, $AB58's clear of
             ram[0x40:0xF0] = bytes(0xB0)            # zero page $40-$EF ($AB5B), then $AB58 from
             nes.call(0xAB96, bank=7)                # where the screen's drawn: places, $ABB3
@@ -333,6 +320,46 @@ def passkeys(log, title, seed, count=1500):
         bad += passwords.encode(*rec) != [gb.m.read(w + 0x10 + i) for i in range(10)]
     ok = bad == 0
     log(f"  {'✓' if ok else '✗'} {title}: {len(keys)} read, {count} written" + ("" if ok else f", {bad} differ"))
+    return ok
+
+
+def randoms(log, title):
+    """$18, the random byte, against the NES itself (tests/nes_reference.json "randoms": TASVideos' clock-stop run in
+    cynes, a stretch into each of ten fights): each frame, the port's builder (NesRandBuild) given what the NES built
+    it from -- its frame count, the pad as it was, its running sum and $21, as the NES's frames have them -- makes
+    the NES's running sum ($19) exactly, and the NES's $18: as built, or after the draws ($AEF1's three RORs) the NES
+    had made by the end of its frame (cynes's frames end inside its NMI, a few draws in)."""
+    ref = json.loads((ROOT / "tests" / "nes_reference.json").read_text()).get("randoms")
+    if not ref:
+        log("  - the random byte: no cynes stretches in tests/nes_reference.json")
+        return True
+
+    def ror3(a, c):
+        for _ in range(3):
+            a, c = ((a >> 1) | (c << 7)) & 0xFF, a & 1
+        return a
+    project, _ = fighter_project("Glass Joe")
+    gb = Gb(project)
+    frames, bad = 0, []
+    for c in ref:
+        tr = c["trace"]
+        for k in range(1, len(tr)):
+            gb.poke(0x1E, tr[k][4]); gb.poke(0x19, tr[k - 1][1]); gb.poke(0x21, tr[k - 1][6])
+            gb.m.write(gb.sym["wNesD0Prev"][1], tr[k - 1][5])
+            gb.call("NesRandBuild", bank="NesMac")
+            built, reach = gb.ram(0x18), set()
+            seen = {built}
+            for _ in range(4):                  # (as built, and after up to three draws: any carries in)
+                reach |= seen
+                seen = {ror3(v, cin) for v in seen for cin in (0, 1)}
+            frames += 1
+            if gb.ram(0x19) != tr[k][1] or tr[k][0] not in reach:
+                bad.append(f"{c['opponent']} frame {k}: $19 NES {tr[k][1]:02X} GB {gb.ram(0x19):02X}, $18 NES "
+                           f"{tr[k][0]:02X} GB built {built:02X}")
+    ok = not bad
+    log(("  ✓" if ok else "  ✗") + f" {title}: {frames} frames, {len(ref)} fights" + ("" if ok else f"; {len(bad)} wrong"))
+    for b in bad[:6]:
+        log("      " + b)
     return ok
 
 
@@ -410,7 +437,6 @@ def fight(log, title, frames, seed):
     ram[0x04] = 0xFF                        # playing, not the demo
     ram[0x00] = 0x01                        # the fight phase ($B530 -> $B549)
     rng = random.Random(seed)
-    nes.rand = rng.randrange(1, 256)
     held, hold = 0, 0
     failures, seen, macs, downs = [], set(), set(), []
     for frame in range(frames):
@@ -425,7 +451,8 @@ def fight(log, title, frames, seed):
             v = (ram[0x0311] - 1) & 0xFF
             ram[0x0311] = v; gb.poke(0x0311, v)
         ram[0xD0] = held; gb.poke(0xD0, held)
-        gb.m.write(gb.sym["wNesRand"][1], nes.rand)
+        r = rng.randrange(256)                  # (the frame's random byte, as bank 7 builds it: the same to both)
+        ram[0x18] = r; gb.poke(0x18, r)
         ram[0xE3] = 0x80
         for k in range(0, 8, 2):            # the raw polls the NES checks against each other ($B021)
             ram[0x6A0 + k] = held
@@ -479,8 +506,6 @@ def scenario(log, title, frames, seed, busy):
         ram[a] = (v + 0x40) & 0xFF if a in POINTER_HI and v else v
     ram[0x02], ram[0x03] = FIGHTERS[FIGHTER]      # (the NES finds his data by these; the port knows its own)
     rng = random.Random(seed)
-    nes.rand = rand = rng.randrange(1, 256)
-    gb.poke(0x18, 0); gb.m.write(gb.sym["wNesRand"][1], rand)
     mac, failures, seen = 1, [], set()
     for frame in range(frames):
         # the same inputs to both: what Mac is doing, where he aims, his punches, how the rival's punch went
@@ -496,15 +521,14 @@ def scenario(log, title, frames, seed, busy):
             inputs[0x98] = rng.choice([1, 2, 3, 4])
         if frame % 60 == 59:
             inputs[0x0311 & 0x7FF] = (ram[0x0311] - 1) & 0xFF
+        inputs[0x18] = rng.randrange(256)       # (the frame's random byte: the same to both)
         for a, v in inputs.items():
             ram[a] = v
             gb.poke(a, v)
-        gb.m.write(gb.sym["wNesRand"][1], nes.rand)
         for addr, name in ROUTINES:
             ram[0xE3] = 0x80        # as the NES's drawing ($C890) leaves it each frame
             nes.call(addr)
             gb.call(name)
-        nes.rand = gb.m.read(gb.sym["wNesRand"][1]) if False else nes.rand
         seen.add(ram[0x90])
         bad = []
         for a in range(0x800):

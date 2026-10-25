@@ -38,10 +38,10 @@ def run(log=print, only=None):
     ok = True
     with ProcessPoolExecutor() as pool:
         for scene, r in sorted(pool.map(_fight, [(str(rom), i) for i, _ in fights])):
-            good = r["won"] and r["round"] <= MAX_ROUND
+            good = r["won"] and r["round"] <= MAX_ROUND and not r["dropped"]   # (and no frame dropped)
             ok = ok and good
             how = (f"won in round {r['round']}" if r["won"] else
                    "lost on points" if r["result"] == 0xFA else "lost" if r["result"] else "no result")
             log(("  ✓" if good else "  ✗") + f" {names[scene]}: {how}; Mac down {r['mac_knockdowns']}, "
-                f"him down {r['his_knockdowns']} ({r['frames'] / 60:.0f}s of fight)")
+                f"him down {r['his_knockdowns']} ({r['frames'] / 60:.0f}s of fight)" + (f"; {r['dropped']} frames dropped" if r["dropped"] else ""))
     return ok

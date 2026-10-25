@@ -6,6 +6,8 @@ sprites. The numbers here are shared by the project checks, the code generator a
 """
 
 REGION_W, REGION_H = 8, 10                      # rival area, in tiles
+PIC_H = 12                                      # an NES fighter's picture, in rows: his area's, and two below it (the
+                                                #  NES's tallest frames' feet: none cut off)
 # With a rope row (Punch-Out!!'s ring: the fighters stand in front of the ropes and crowd), his rows above his
 # band's top are sprites over them: his top HEAD_ROWS of tiles (HEAD_ROWS_TALL for the poses the NES walks him
 # in and steps him back with: up over the crowd), kept in tiles sprites can reach.

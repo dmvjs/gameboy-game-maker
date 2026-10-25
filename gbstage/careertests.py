@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import codegen
 from .build import build_rom
+from .qatests import qa_grey, qa_hud, qa_mac, qa_perf, qa_star  # noqa: F401  (career jobs too)
 
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE = ROOT / "examples" / "joe-vs-mac.gbstage.json"
@@ -659,15 +660,16 @@ def tells(rom):
         scene = names.index(f"Fight: {who}")
         trials, tried, orig = {}, [], bot.Game.tick       # (a tell Mac can't answer, mid-hit: the next, up to 3)
 
-        state, live = ref[who]["state"], [0]
+        state, live, due = ref[who]["state"], [0], [1200]
 
         def tick(self, render=True, _orig=orig):
             _orig(self, render)
             if not render or trials.get("bot's") or len(tried) >= 3 or not hasattr(self, "_cue_cell"):
                 return
             live[0] += self.hram("hFtActive") == 1 and self.nes(0x05) == 0
-            if live[0] > 2400 and live[0] % 900 == 899 and self.nes(0x90) & 0x7F in (1, 2):   # (not reached by now: his move forced,
-                self.m[self.w + 0x90] = state | 0x80                      # from standing, as the NES's script has it)
+            if live[0] >= due[0] and self.nes(0x90) & 0x7F in (1, 2):   # (not reached by now: his move forced, from
+                self.m[self.w + 0x90] = state | 0x80                    # standing, as the NES's script has it; again
+                due[0] = live[0] + 600                                  # in a while if it can't be answered)
             lit = self.m[0, self._cue_cell[0]] != self._cue_cell[1]
             first, self._was_lit = lit and not getattr(self, "_was_lit", False), lit
             if first:                                                # (the tell's first frame on screen)
@@ -867,6 +869,16 @@ def glitches(rom):
     return ok, lines
 
 
+def random(rom):
+    """The random byte ($18) as the NES builds it, on the NES's own frames (cynes: tests/nes_reference.json's
+    "randoms"), the port's builder fed what the NES's was: nestests.randoms (no disassembly needed)."""
+    from . import nestests
+    lines = []
+    good = nestests.randoms(lambda line: lines.append("  " + line.strip() if not line.startswith("    ") else line),
+                            "the random byte, built as the NES builds it, on its own frames")
+    return good, lines
+
+
 def _job(args):
     name, rom = args
     return globals()[name](rom)
@@ -892,7 +904,13 @@ def run(log=print, only=None):
               "another_world_played": "The Another World Circuit, played through by the bot",
               "beat_mac": "Every opponent beats a still Mac, as the NES's",
               "tells": "The crowd's tells, used by the bot as the NES's",
-              "glitches": "The NES game's glitches, fixed: the clock stop, the midget Sandman"}
+              "glitches": "The NES game's glitches, fixed: the clock stop, the midget Sandman",
+              "random": "The random byte, as the NES's",
+              "qa_perf": "Each fight's frames within budget (the crowd's sound, his pictures)",
+              "qa_mac": "Mac's height as the NES's (a round's start, a count, his walk up)",
+              "qa_star": "A star's sparkle over his head, as the NES's",
+              "qa_grey": "The original Game Boy's screens as saved",
+              "qa_hud": "Every fight's HUD from its first frame"}
     if only:
         titles = {k: v for k, v in titles.items() if k in only}
     with ProcessPoolExecutor() as pool:

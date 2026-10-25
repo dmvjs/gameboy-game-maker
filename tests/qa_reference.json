@@ -1,0 +1,32 @@
+{
+ "perf": {
+  "Fight: Bull2|cgb": 3.77,
+  "Fight: Bull2|dmg": 16.89,
+  "Fight: Bull|cgb": 3.81,
+  "Fight: Bull|dmg": 17.7,
+  "Fight: Don2|cgb": 0.0,
+  "Fight: Don2|dmg": 5.76,
+  "Fight: Don|cgb": 0.0,
+  "Fight: Don|dmg": 7.53,
+  "Fight: Hippo|cgb": 0.0,
+  "Fight: Hippo|dmg": 13.02,
+  "Fight: Honda2|cgb": 0.0,
+  "Fight: Honda2|dmg": 17.72,
+  "Fight: Honda|cgb": 0.0,
+  "Fight: Honda|dmg": 17.43,
+  "Fight: Kaiser|cgb": 0.0,
+  "Fight: Kaiser|dmg": 6.47,
+  "Fight: Macho|cgb": 1.09,
+  "Fight: Macho|dmg": 6.51,
+  "Fight: Sandman|cgb": 4.46,
+  "Fight: Sandman|dmg": 16.22,
+  "Fight: Soda|cgb": 0.56,
+  "Fight: Soda|dmg": 11.36,
+  "Fight: Tiger|cgb": 0.0,
+  "Fight: Tiger|dmg": 10.86,
+  "Fight: Tyson|cgb": 0.0,
+  "Fight: Tyson|dmg": 25.4,
+  "Fight|cgb": 0.0,
+  "Fight|dmg": 6.07
+ }
+}

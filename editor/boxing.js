@@ -31,7 +31,7 @@ import { REF_POSES } from './art/referee.js';
 
 export const BOXING_VERSION = 32;
 
-const pal = (name, colors) => ({ name, colors });
+const pal = (name, colors, greys) => ({ name, colors, ...(greys ? { greys } : {}) });   // (greys: the original's, if not as is)
 export const MAT = [26, 28, 31];
 export const PORTRAIT = 56;                            // portraits are 56x56 (7x7 tiles)
 const PT = PORTRAIT / 8;
@@ -97,14 +97,14 @@ export function boxingGame(pack) {
       pal('Crowd', [[31, 31, 31], [18, 16, 24], [26, 6, 8], [4, 4, 10]]),
       pal('Mat', [matOf(R), [20, 22, 28], [8, 12, 24], [3, 3, 6]]),
       ...['skin', 'gloves', 'hair'].map((part, k) => pal(`${R.short} ${part}`, [matOf(R), ...R.palettes[k].slice(1)])),
-      pal('Text', pack.textPalette),
-      ...(pack.titleLogo ? [pal('Title logo', pack.titleLogo.colors)] : []),
+      pal('Text', pack.textPalette, [0, 1, 1, 3]),        // (the original: its green as light as its orange, over black)
+      ...(pack.titleLogo ? [pal('Title logo', pack.titleLogo.colors, [3, 2, 0, 1])] : []),
     ],
     objPalettes: [pal('Player', [[0, 0, 0], ...P.colors]),
                   pal('Referee', [[0, 0, 0], ...(pack.referee?.colors || [[31, 24, 18], [26, 29, 31], [3, 3, 6]])]),
                   pal('Player tired', [[0, 0, 0], ...P.tiredColors]),
                   ...(P.downColors ? [pal('Player down', [[0, 0, 0], ...P.downColors])] : []),
-                  ...(pack.referee?.shirtColors ? [pal('Referee shirt', [[0, 0, 0], ...pack.referee.shirtColors])] : [])],
+                  ...(pack.referee?.shirtColors ? [pal('Referee shirt', [[0, 0, 0], ...pack.referee.shirtColors.slice(0, 2), [4, 4, 10]])] : [])],   // (its dark the crowd's: the side ropes' outside, as over the mat)
     cursor: { palette: 0, pixels: Uint8Array.from(
       '00333000' + '03313300' + '33133330' + '33333330' + '33333330' + '03333300' + '00222000' + '00000000', ch => +ch) },
     scenes: ['Title', 'Challenger', 'Fight', 'You win', `${R.short} wins`, 'Pass key', 'Corner', 'Rematch',
@@ -121,6 +121,8 @@ export function boxingGame(pack) {
   };
   const [title, passKey] = [M.layerOf(p, 0), M.layerOf(p, 5)];
   const LOGO = p.palettes.length - 1;                    // the title logo's palette (when there is one)
+  const NAME = pack.titleLogo ? p.palettes.push(pal('Title name', pack.titleLogo.colors, [3, 0, 2, 3])) - 1 : LOGO;   // (its name
+                                                         //  over it: on the original, white on black)
   (pack.portraitPalettes || []).forEach((colors, k) => {
     const greys = pack.portraitGreys?.[k];               // (the original Game Boy's greys for its slots, if not as is)
     const at = p.palettes.findIndex(q => JSON.stringify(q.colors) === JSON.stringify(colors) && JSON.stringify(q.greys) === JSON.stringify(greys || undefined));
@@ -180,7 +182,7 @@ export function boxingGame(pack) {
   }
   for (const t of pack.title) {
     if (logo) {                                          // in the logo's colors: its black (slot 0) behind
-      cellPalettes(S[0], 0, t.y >> 3, M.CW, t.scale, LOGO);
+      cellPalettes(S[0], 0, t.y >> 3, M.CW, t.scale, NAME);
       fillRect(title, 0, t.y & ~7, M.W, 8 * t.scale, 0);
     }
     if (t.shadow !== undefined) M.drawText(title, t.text, t.x + 1, t.y + 1, t.shadow, t.scale);
@@ -205,7 +207,7 @@ export function boxingGame(pack) {
     S[0].menu.confirm = {
       sprite: { ...punch.sprite }, faded: true,
       steps: punch.steps.map(st => ({ frames: st.frames, colors: st.colors, front: st.front, nesSfx: st.nesSfx || 0,
-                                      bg: { [LOGO]: st.logo, [ROLE.t]: [text[0], text[1], text[2], st.backdrop] } })),
+                                      bg: { [LOGO]: st.logo, [NAME]: st.logo, [ROLE.t]: [text[0], text[1], text[2], st.backdrop] } })),
     };
   }
   S[0].texts = [{ label: pack.credit, x: centered(pack.credit) >> 3, y: 16, textSlot: 0 }];
@@ -217,9 +219,9 @@ export function boxingGame(pack) {
   function nesScreen(scene, layer, lines, gloveAt, gloveX, circuit = pack.circuit) {   // (gloveX: the glove's own place)
     if (LOSS === null) {
       LOSS = p.palettes.length;
-      p.palettes.push(pal('Loss', [[1, 2, 18], [7, 22, 25], [29, 29, 29], [0, 0, 0]]),       // NES $02, $2C, $30
-                      pal('Loss glove', [[1, 2, 18], [19, 4, 4], [29, 13, 12], [0, 0, 0]]),   // $16, $26
-                      pal('Loss glove, letters', [[1, 2, 18], [19, 4, 4], [29, 29, 29], [0, 0, 0]]));   // (where they meet)
+      p.palettes.push(pal('Loss', [[1, 2, 18], [7, 22, 25], [29, 29, 29], [0, 0, 0]], [3, 1, 0, 3]),   // NES $02, $2C, $30 (the original: light on black)
+                      pal('Loss glove', [[1, 2, 18], [19, 4, 4], [29, 13, 12], [0, 0, 0]], [3, 2, 1, 3]),   // $16, $26
+                      pal('Loss glove, letters', [[1, 2, 18], [19, 4, 4], [29, 29, 29], [0, 0, 0]], [3, 2, 0, 3]));   // (where they meet)
     }
     cellPalettes(scene, 0, 0, M.CW, M.CH, LOSS);
     fillRect(layer, 0, 0, M.W, M.H, 0);
@@ -313,9 +315,9 @@ export function boxingGame(pack) {
     });
   }
   // A palette by its colors: one already in the project if it has them (a rematch's are his first fight's)
-  const addPal = (name, colors) => {
-    const k = p.palettes.findIndex(q => JSON.stringify(q.colors) === JSON.stringify(colors));
-    return k >= 0 ? k : p.palettes.push(pal(name, colors)) - 1;
+  const addPal = (name, colors, greys) => {
+    const k = p.palettes.findIndex(q => JSON.stringify(q.colors) === JSON.stringify(colors) && JSON.stringify(q.greys) === JSON.stringify(greys));
+    return k >= 0 ? k : p.palettes.push(pal(name, colors, greys)) - 1;
   };
   // ---- Punch-Out!!'s screens between fights that aren't a fighter's (the game's, at 5/8 its size, the words in our
   // font): NEXT IS ... TITLE BOUT!! before a circuit's title bout, the KO News page after the World Circuit's (its
@@ -325,9 +327,9 @@ export function boxingGame(pack) {
   const plain = name => ({ name, pixels: new Uint8Array(M.W * M.H), cellPal: new Uint8Array(M.CW * M.CH), menu: null,
     pressStart: null, pressed: null, options: null, puzzle: null, fight: null, passKey: null, back: null, texts: [] });
   if (NS && pack.loseGlove) {
-    const big = addPal('Title bout', [NS.navy, NS.cyan, NS.orange, [0, 0, 0]]);
-    const gl = addPal('Title bout glove', [NS.navy, NS.glove[0], NS.glove[1], [0, 0, 0]]);
-    const gll = addPal('Title bout glove, letters', [NS.navy, NS.glove[0], NS.orange, [0, 0, 0]]);
+    const big = addPal('Title bout', [NS.navy, NS.cyan, NS.orange, [0, 0, 0]], [3, 1, 0, 3]);
+    const gl = addPal('Title bout glove', [NS.navy, NS.glove[0], NS.glove[1], [0, 0, 0]], [3, 2, 1, 3]);
+    const gll = addPal('Title bout glove, letters', [NS.navy, NS.glove[0], NS.orange, [0, 0, 0]], [3, 2, 0, 3]);
     const bigScreen = (name, spec, lines, linesY, lettersY, gloveAt, target, note) => {
       const sc = plain(name), L = spec.letters, lx = (M.W - L.w) >> 1, front = new Set();
       sc.cellPal.fill(big);

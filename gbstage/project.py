@@ -1040,6 +1040,12 @@ def _nes_fighter(nes, where, errors):
         mac = b""
     if len(mac) != 0x2000:
         errors.append(f"{where}: the NES Little Mac bank (PRG bank B) must be 8 KB."); return None
+    try:                                        # the crowd's script and its tables: bank 7's $8A00-$8E3F
+        crowd = base64.b64decode(nes.get("crowd", ""), validate=True)
+    except Exception:
+        crowd = b""
+    if len(crowd) != 0x440:
+        errors.append(f"{where}: the NES crowd (PRG bank 7's $8A00-$8E3F) must be 1088 bytes."); return None
     sound = sound_fixed = samples = None
     if nes.get("sound") is not None:             # its sound engine: PRG bank 8 and the fixed bank's $F400-$F8FF
         try:
@@ -1134,6 +1140,10 @@ def _nes_fighter(nes, where, errors):
             errors.append(f"{where}: the NES Mac pictures are each his frame's pixels, its size and where it sits.")
             return None
         mac_places = [v & 0x80 for v in mac_places]     # (where each sits: in the pictures; his colors still here)
+    low = {0x48: 48, 0x98: 48, 0xA4: 48, **{f: 4 * (1 + (f - 127) // 2) for f in range(0x80, 0x96)}}
+    for n, dy in low.items():           # (his walk in from the bottom, the round's start and after a knockdown: his
+        mac_frames[n] = mac_frames[0]   #  standing frame drawn lower, as the NES draws these: 48 pixels down, then up
+        mac_places[n] = min(63, round(dy * MAC_LOW_SCALE)) | (mac_places[n] & 0x80)   # 4 at a time)
     tell = nes.get("tellFlash")             # his tell as a palette change (Great Tiger's: his black goes gray)
     if tell is not None and not (isinstance(tell, dict) and all(isinstance(tell.get(k), int) and 0 <= tell[k] < 256
                                                                 for k in ("frame", "state"))
@@ -1147,14 +1157,21 @@ def _nes_fighter(nes, where, errors):
         errors.append(f"{where}: the NES jewel is per pose, where (pixels in his area)."); return None
     pictures = nes.get("pictures")          # Color: each NES picture of his, exact ({poses: {key: {pixels, cells, whites}},
     if pictures is not None:                # places: {key: [dx, dy]}}: shown as the game draws them, streamed in)
-        area = kit.REGION_W * CELL * kit.REGION_H * CELL
+        area = kit.REGION_W * CELL * kit.PIC_H * CELL
         pp, pl = (pictures or {}).get("poses"), (pictures or {}).get("places") or {}
+        dp = (pictures or {}).get("dmgPoses") or {}    # (the original's own picture for some: the one before full size)
+        for v in list(pp.values() if isinstance(pp, dict) else ()) + list(dp.values() if isinstance(dp, dict) else ()):   # (one of his area's rows only: the two below it empty)
+            if isinstance(v, dict) and isinstance(v.get("pixels"), str) and len(v["pixels"]) == kit.REGION_W * CELL * kit.REGION_H * CELL \
+                    and isinstance(v.get("cells"), str) and len(v["cells"]) == kit.REGION_W * kit.REGION_H:
+                v["pixels"] += "0" * (area - len(v["pixels"]))
+                v["cells"] += "s" * (kit.REGION_W * kit.PIC_H - len(v["cells"]))
         if not (isinstance(pp, dict) and pp and all(
                 re.fullmatch(r"[0-9A-F]{2}\|?", k) and isinstance(v, dict) and isinstance(v.get("pixels"), str)
                 and len(v["pixels"]) == area and set(v["pixels"]) <= set("0123") and isinstance(v.get("cells"), str)
-                and len(v["cells"]) == kit.REGION_W * kit.REGION_H and set(v["cells"]) <= set("sgh")
+                and len(v["cells"]) == kit.REGION_W * kit.PIC_H and set(v["cells"]) <= set("sgh")
                 and all(isinstance(i, int) and 0 <= i < area for i in v.get("whites") or ())
-                for k, v in pp.items())
+                for k, v in list(pp.items()) + list(dp.items()))
+                and all(k in pp for k in dp)
                 and isinstance(pl, dict) and all(k in pp and isinstance(v, list) and len(v) == 2
                                                  and all(isinstance(c, int) and -64 <= c <= 64 for c in v)
                                                  for k, v in pl.items())):
@@ -1167,8 +1184,18 @@ def _nes_fighter(nes, where, errors):
         if not (isinstance(gem, dict) and all(k in pp and isinstance(v, list) and len(v) == 2
                                               and all(isinstance(c, int) and 0 <= c < 80 for c in v) for k, v in gem.items())):
             errors.append(f"{where}: the NES pictures' jewel is per picture, where (pixels in his area)."); return None
+        cue = nes.get("cueFrames") or {}            # (frames the NES draws as another's in his dodge cue's colors:
+        if not (isinstance(cue, dict) and len(cue) <= 13 and all(  # that one's picture, the cue's palettes)
+                re.fullmatch(r"[0-9A-F]{2}", k) and isinstance(v, str) and v in pp for k, v in cue.items())):
+            errors.append(f"{where}: the NES cue frames are each a frame (2 hex digits) and the picture it's drawn as."); return None
         pictures = {"poses": pp, "places": {k: tuple(v) for k, v in pl.items()}, **({"next": nx} if nx else {}),
-                    **({"jewel": {k: tuple(v) for k, v in gem.items()}} if gem else {})}
+                    **({"jewel": {k: tuple(v) for k, v in gem.items()}} if gem else {}), **({"cue": cue} if cue else {})}
+        dpl = (nes.get("pictures") or {}).get("dmgPlaces") or {}
+        if dp:                                      # (the original's own pictures for some, and where each sits)
+            if not (isinstance(dpl, dict) and all(k in pp and isinstance(v, list) and len(v) == 2 and
+                                                  all(isinstance(c, int) and -64 <= c <= 64 for c in v) for k, v in dpl.items())):
+                errors.append(f"{where}: the original's NES picture places are each where a picture sits."); return None
+            pictures["dmgPoses"], pictures["dmgPlaces"] = dp, {k: tuple(v) for k, v in dpl.items()}
     return {"bank": bank, "offset": offset, "frames": frames, "places": places, "home": home, "scale": float(scale),
             "eyes": bool(nes.get("eyes")),      # (the original: his eyes' whites white, over the crowd too)
             **({"pictures": pictures, "frame_names": {str(k): v for k, v in (nes.get("frames") or {}).items()}}
@@ -1177,7 +1204,7 @@ def _nes_fighter(nes, where, errors):
             **({"jewel": {p: tuple(v) for p, v in jewel.items()}} if jewel else {}),
             **({"mac_pictures": mac_pics} if mac_pics else {}),
             "mac": mac, "mac_frames": mac_frames, "mac_places": mac_places, "mac_home": nes.get("macHome", 176),
-            "mac_scale": float(nes.get("macScale", scale)), "sound": sound, "sound_fixed": sound_fixed,
+            "mac_scale": float(nes.get("macScale", scale)), "sound": sound, "sound_fixed": sound_fixed, "crowd": crowd,
             "samples": samples}
 
 
@@ -2044,8 +2071,13 @@ def _fight_compose_tiles(scene, tile_of):
         side = ft.get("side_rope")              # (and the side ropes' ends: their two tiles with his)
         if side:
             scene["fight_side_tile"] = len(ctiles)
+            filled = []                          # (outside the ring, left of his innermost rope: the NES's black, the
+            for y in range(16):                  #  shirt palette's 3 -- the mat doesn't run on past the corner)
+                row = [int(side[y * 8 + x]) for x in range(8)]
+                last = max((x for x, v in enumerate(row) if v == 2), default=None)
+                filled += [3 if v == 0 and last is not None and x < last else v for x, v in enumerate(row)]
             for half in (0, 1):
-                ctiles.append(tuple(side[(half * 8 + y) * 8 + x] for y in range(8) for x in range(8)))
+                ctiles.append(tuple(filled[(half * 8 + y) * 8 + x] for y in range(8) for x in range(8)))
         if len(ctiles) > 128:
             raise ProjectError([f'Scene "{scene["name"]}": the player\'s Game Boy Color poses need {len(ctiles)} tiles; '
                                 'the limit is 128. Share more of their tiles.'])
@@ -2325,19 +2357,45 @@ MAC_PIC_ROOM = 32                       # Color: tiles a picture of Mac's may ha
 MAC_DMG_ROOM = 18                       # the original's: each of its two copies' room (sprite tiles OBJ_FIRST_TILE on)
 
 
+MAC_LOW_SCALE = 1 / 3                   # Mac's walks to and from the screen's bottom: per NES pixel (his own
+MAC_SCALE_DEFAULT = 0.7                 #  0.7 would hide all but his hair's tip there: the NES shows his shoulders)
+
+
 def _mac_pics(mp, pal):
     """Color, the NES's Mac: his pictures (identical frames once), each its tiles (a tile and its mirror one once)
     and its sprites (dy, dx from the pose box's top-left, tile, attributes: bank 1), on its own 8-pixel grid from its
-    top-left; and per NES frame of his (128), its picture."""
-    order, index, frame_pic = [], {}, [0xFF] * 128
+    top-left; and per NES frame of his (256), its picture."""
+    order, index, frame_pic = [], {}, [0xFF] * 256
+    mp = dict(mp)
+    for n in range(0x49, 0x58):         # (his walk down to his corner: as low as the NES's at its end, his head and
+        k = f"{n:02X}"                  #  shoulders still on screen -- MAC_LOW_SCALE, not his 0.7, below his stance)
+        if k in mp and "00" in mp and mp[k]["y"] > mp["00"]["y"]:
+            v = dict(mp[k])
+            v["y"] = mp["00"]["y"] + round((v["y"] - mp["00"]["y"]) * MAC_LOW_SCALE / MAC_SCALE_DEFAULT)
+            mp[k] = v
+    for over, base in (("60", "0A"), ("61", "0C")):   # (the NES's partial frames: a dodge's glove redrawn over the
+        if over in mp and base in mp:                 #  dodge it follows, the rest of him left up -- as one picture)
+            a, b = mp[base], mp[over]
+            x0, y0 = min(a["x"], b["x"]), min(a["y"], b["y"])
+            x1, y1 = max(a["x"] + a["w"], b["x"] + b["w"]), max(a["y"] + a["h"], b["y"] + b["h"])
+            w, h = x1 - x0, y1 - y0
+            px = ["0"] * (w * h)
+            for v in (a, b):
+                for yy in range(v["h"]):
+                    for xx in range(v["w"]):
+                        c = v["pixels"][yy * v["w"] + xx]
+                        if c != "0":
+                            px[(v["y"] - y0 + yy) * w + v["x"] - x0 + xx] = c
+            mp[over] = {"pixels": "".join(px), "w": w, "h": h, "x": x0, "y": y0}
     for k in sorted(mp):
         v = mp[k]
         key = (v["pixels"], v["w"], v["h"], v["x"], v["y"])
         if key not in index:
             index[key] = len(order)
             order.append(v)
-        if int(k, 16) < 128:
-            frame_pic[int(k, 16)] = index[key]
+        frame_pic[int(k, 16)] = index[key]
+    for n in [0x48, 0x98, 0xA4, *range(0x80, 0x96)]:   # (his walk in from the bottom: his standing picture, lower)
+        frame_pic[n] = frame_pic[0]
     pics = []
     for v in order:
         w, h, px = v["w"], v["h"], v["pixels"]
@@ -2379,7 +2437,7 @@ def _fight_pics(scene):
     nes = ft["nes"]
     pics = nes["pictures"]
     order = sorted(pics["poses"])
-    region = [(ft["y"] + r) * CW + ft["x"] + c for r in range(kit.REGION_H) for c in range(kit.REGION_W)]
+    region = [(ft["y"] + r) * CW + ft["x"] + c for r in range(kit.PIC_H) for c in range(kit.REGION_W)]
     pw = kit.REGION_W * CELL
     blank = cell_key(scene["composed"], region[0]) if ft.get("rope_row") else None
     pose_of = {}                        # (a picture's head rows: as many as the pose it stands for on the original)
@@ -2438,6 +2496,11 @@ def _fight_pics(scene):
                 n = by_pose[name]
             frame_map.append(0xFF if n is None else n)
             place.append(tuple(pics["places"].get(order[n], (0, 0))) if n is not None else (0, 0))
+    for f, k in (pics.get("cue") or {}).items():   # (a frame drawn as another in his dodge cue's colors: that
+        for mi in (0, 1):                           #  one's picture, the cue's palettes put up while it shows)
+            n = index.get(k + "|") if mi and k + "|" in index else index[k]
+            frame_map[mi * 256 + int(f, 16)] = n | 0x80
+            place[mi * 256 + int(f, 16)] = tuple(pics["places"].get(order[n], (0, 0)))
     out["frame_map"], out["places"] = frame_map, place
     out["idle"] = index.get("C0", 0)
     if pics.get("jewel"):               # (his gem, per picture: where it shows, (255, 255) not)
@@ -2465,20 +2528,35 @@ def _face_whites(rgb, W, H):
     return out
 
 
-def _grey_shades(scene, beta=3.0):
-    """The original Game Boy: each color of his pictures (wherever it's used) to a grey, 1-3 (0 the mat, white):
-    of every assignment, the one keeping brightness best (by use) while telling touching areas apart (by how much
-    they touch); his darkest stays black. {rgb: grey}."""
+GREY_LUM = {0: 0.93, 1: 0.62, 2: 0.33, 3: 0.05}     # (the original's four greys, as bright as they look)
+
+
+def _mat_grey(scene):
+    """The original Game Boy: the grey of his ring's mat, the one nearest the brightness of its color on Color (the
+    NES's: each circuit's own; Mike Tyson's lighter)."""
+    from . import fight as kit
+    ft = scene["fight"]
+    CW = 20                                                 # (the screen's cells across)
+    cell = (ft["y"] + kit.REGION_H - 1) * CW + 1           # (the mat, by his area's last row, at the left)
+    c = scene["_palettes"][scene["cell_pal"][cell]][0]
+    lum = (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) / 31
+    return min(GREY_LUM, key=lambda g: abs(GREY_LUM[g] - lum))
+
+
+def _grey_shades(scene, beta=3.0, mat=0):
+    """The original Game Boy: each color of his pictures (wherever it's used) to a grey, any but the mat's (white,
+    or his ring's own): of every assignment, the one keeping brightness best (by use) while telling touching areas
+    apart (by how much they touch) and him from the mat at his edges; his darkest stays black. {rgb: grey}."""
     import itertools
     from . import fight as kit
     ft = scene["fight"]
-    pics = ft["nes"]["pictures"]["poses"]
-    W, H = kit.REGION_W * CELL, kit.REGION_H * CELL
+    pics = _dmg_poses(ft, scene["name"])
+    W, H = kit.REGION_W * CELL, kit.PIC_H * CELL
     color = {}
     for kind, idx in ft["palettes"].items():
         for slot in (1, 2, 3):
             color[(kind, slot)] = tuple(scene["_palettes"][idx][slot])
-    use, touch = collections.Counter(), collections.Counter()
+    use, touch, edge = collections.Counter(), collections.Counter(), collections.Counter()
     for v in pics.values():
         px, cells = v["pixels"], v["cells"]
         key = lambda i: color[(cells[(i // W // CELL) * kit.REGION_W + (i % W) // CELL], int(px[i]))]
@@ -2492,12 +2570,14 @@ def _grey_shades(scene, beta=3.0):
                     q = key(j)
                     if q != k:
                         touch[(min(k, q), max(k, q))] += 1
+                elif j is not None and j < W * H:
+                    edge[k] += 1
     lum = lambda c: (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]) / 31
     keys = sorted(use, key=lum)
-    target = {1: 0.62, 2: 0.33, 3: 0.05}
-    total, ttot = sum(use.values()) or 1, sum(touch.values()) or 1
+    target = GREY_LUM
+    total, ttot, etot = sum(use.values()) or 1, sum(touch.values()) or 1, sum(edge.values()) or 1
     best = None
-    for vals in itertools.product((1, 2, 3), repeat=len(keys)):
+    for vals in itertools.product([g for g in (0, 1, 2, 3) if g != mat and (mat or g)], repeat=len(keys)):
         m = dict(zip(keys, vals))
         if keys and m[keys[0]] != 3:
             continue
@@ -2506,9 +2586,17 @@ def _grey_shades(scene, beta=3.0):
             continue                    # (a clearly lighter color never a darker grey)
         cost = sum(use[k] * (lum(k) - target[m[k]]) ** 2 for k in keys) / total
         cost += beta * sum(w for (a, b), w in touch.items() if m[a] == m[b]) / ttot
+        if mat:                         # (a grey mat: his edges kept apart from it)
+            cost += beta / 2 * sum(w * (1 - abs(m[k] - mat) / 3) ** 2 for k, w in edge.items()) / etot
         if best is None or cost < best[0]:
             best = (cost, m)
     return best[1] if best else {}
+
+
+def _dmg_poses(ft, name=None):
+    """The original's pictures: Color's, full size (its streaming quick enough for them: kit_fight.asm's caches of
+    the sprite lists, a picture all in late in the frame up at its VBlank)."""
+    return dict(ft["nes"]["pictures"]["poses"])
 
 
 def _fight_pics_dmg(scene):
@@ -2518,28 +2606,33 @@ def _fight_pics_dmg(scene):
     sprites (a rope row). Streamed in, out of the frame's work (kit_fight.asm, FT_DMG_PICS)."""
     from . import fight as kit
     ft = scene["fight"]
-    pics = ft["nes"]["pictures"]["poses"]
+    pics = _dmg_poses(ft, scene["name"])
     order = scene["fight_pics"]["order"]
-    grey = _grey_shades(scene)
+    mat = _mat_grey(scene)
+    grey = _grey_shades(scene, mat=mat)
+    ring = [mat] + [g for g in (0, 1, 2, 3) if g != mat]    # (his ring's BGP: 0 the mat, 1-3 his greys light to dark)
+    idx = {g: k for k, g in enumerate(ring)}
     color = {(kind, slot): tuple(scene["_palettes"][idx][slot]) for kind, idx in ft["palettes"].items() for slot in (1, 2, 3)}
     W = kit.REGION_W * CELL
-    out = {"tiles": [], "maps": [], "heads": [], "grey": {f"{k}": v for k, v in grey.items()}}
+    out = {"tiles": [], "maps": [], "heads": [], "grey": {f"{k}": v for k, v in grey.items()},
+           "ring_bgp": sum(g << (2 * k) for k, g in enumerate(ring)), "mat": mat}
     pose_of = {k: n for k, n in (ft["nes"].get("frame_names") or {}).items()}
+    low = []                                        # (per picture: nothing of him in the rows below his area)
     for key in order:
         v = pics[key]
         px, cells = v["pixels"], v["cells"]
         rgb = lambda i: color[(cells[(i // W // CELL) * kit.REGION_W + (i % W) // CELL], int(px[i]))] if px[i] != "0" else None
-        eyes = _face_whites(rgb, W, kit.REGION_H * CELL) if ft["nes"].get("eyes") else set()
+        eyes = _face_whites(rgb, W, kit.PIC_H * CELL) if ft["nes"].get("eyes") else set()
         cell_tiles = []
-        for r in range(kit.REGION_H):
+        for r in range(kit.PIC_H):
             for c in range(kit.REGION_W):
                 kind = cells[r * kit.REGION_W + c]
                 t = []
                 for y in range(CELL):
                     for x in range(CELL):
                         i = (r * CELL + y) * W + c * CELL + x
-                        sl = int(px[i])         # (his eyes' whites: the mat's white, 0, in his band; over the crowd, a
-                        t.append(0 if i in eyes else grey.get(color[(kind, sl)], 3) if sl else 0)   # sprite of their own)
+                        sl = int(px[i])         # (his eyes' whites: white in his band; over the crowd, a sprite of their own)
+                        t.append(idx[0] if i in eyes else idx[grey.get(color[(kind, sl)], 3)] if sl else 0)
                 cell_tiles.append(tuple(t))
         rows = kit.HEAD_ROWS_TALL         # (any picture can rise into the crowd: his get-up, his walk-in)
         whites = {}                       # (his top rows' cells with an eye's white: its white as a sprite, OBP1's 1)
@@ -2570,8 +2663,16 @@ def _fight_pics_dmg(scene):
         local = {t: n for n, t in enumerate(own)}
         out["tiles"].append(own)
         out["maps"].append([PIC_BASE + local[t] for t in cell_tiles])
+        low.append(not any(any(t) for t in cell_tiles[kit.REGION_H * kit.REGION_W:]))
         out["heads"].append([(dy, dx, PIC_BASE + local[t], a) for dy, dx, t, a in heads])
         out["white"] = out.get("white", False) or any(a for _, _, _, a in heads)
+    if all(low):                                    # (none: those rows the mat's own tiles, set once as the
+        CWn = 20                                    #  fight sets up; each picture puts up his area's rows only)
+        mat = [scene["cell_tiles"][(ft["y"] + r) * CWn + ft["x"] + c] for r in range(kit.REGION_H, kit.PIC_H) for c in range(kit.REGION_W)]
+        for m in out["maps"]:
+            m[kit.REGION_H * kit.REGION_W:] = mat
+    out["rows"] = kit.REGION_H if all(low) else kit.PIC_H
+    out["places"] = scene["fight_pics"]["places"]  # (Color's pictures: Color's places)
     scene["fight_pics_dmg"] = out
 
 
