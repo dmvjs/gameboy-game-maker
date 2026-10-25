@@ -2529,6 +2529,9 @@ IF DEF(FT_ROPE)
     ld a, [wRvPicSwitch]
     and a
     jr z, .notYet
+    ldh a, [rLY]            ; (too late in the frame to work it all out again: as it is)
+    cp FT_LATE_UNDO
+    ret nc
     ldh a, [hFtBandY]       ; (going up already -- its last tiles in just now: his band worked out again for it, how
     ld b, a                 ;  far up it may go, and his top rows' sprites with it if that moved him)
     push bc
@@ -2611,7 +2614,7 @@ IF DEF(FT_ROPE)
 ENDC
     ret
 DEF FT_LATE_LAST EQU 127       ; (his top rows' sprites built again: 10 to 14 lines, 18 at the most -- an
-DEF FT_LATE_UNDO EQU 128       ;  interrupt or two among them -- so begun by 127: done by 145, VBlank's work due by 147)
+DEF FT_LATE_UNDO EQU 124       ;  interrupt or two among them, his band worked out again first -- so begun by 123: done by 145, VBlank's work due by 147)
 
 ; A tile's 16 bytes HL -> DE, a line's quiet part at a time: 6 bytes once its drawing's done (30 cycles: the
 ; line's HBlank and the next's OAM scan are 41 at the least, a line of 10 sprites; finding HBlank's start takes up
