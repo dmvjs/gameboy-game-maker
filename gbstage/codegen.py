@@ -1456,6 +1456,7 @@ def _press_code(i, s, index_of, corner=False):
             "    ld a, [hl+]", "    ld [wCardRows], a", "    ld a, [hl]", "    ld [wCardRows + 1], a",
             "    xor a", "    ld [wCardY], a", "    ld [wCardRow], a", f"    ld a, {c['hold']}", "    ld [wCardHold], a",
             "    ld a, 1", "    ld [wCardOn], a",
+            "    QUEUE_PATCH ResetOAM    ; (the screen's sprites -- Doc, the divide -- gone as the card comes over it)",
             f"    SET_UPDATE Scene{i}Card", "    ret"]) + "\n"
         card_code = f"""Scene{i}Card:                ; the screen scrolls up 4 pixels a frame, the card's rows drawn below a row ahead
     ld a, [wCardY]
