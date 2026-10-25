@@ -266,3 +266,33 @@ def qa_hud(rom):
                 lines.append(f"    ✗ {name} {'cgb' if cgb else 'dmg'}: hearts {hearts} (the NES's {want}), clock {mn}:{sec:02X}")
     lines.append(f"    {'✓' if good else '✗'} every fight's HUD right from its first frame")
     return good, lines
+
+
+def qa_reset(rom):
+    """The soft reset, Color and the original: A, B, Select and Start together mid-fight start the game over (as
+    from power on, the same machine), and a fight can be reached again after."""
+    lines, good = [], True
+    first = _fights()[0][0]
+    for cgb in (True, False):
+        g = _game(rom, first, cgb)
+        fought = _to_fight(g, first)
+        for _ in range(120):
+            g.hold([])
+            g.tick(False)
+        g.hold(["a", "b", "select", "start"])
+        for _ in range(4):
+            g.tick(False)
+        g.hold([])
+        t = 0
+        while g.hram("hScene") != 0 and t < 600:
+            g.tick(False)
+            t += 1
+        reset = g.hram("hScene") == 0 and bool(g.hram("hIsCGB")) == cgb
+        again = _to_fight(g, first)
+        g.stop()
+        ok = fought and reset and again
+        good = good and ok
+        if not ok:
+            lines.append(f"    ✗ {'cgb' if cgb else 'dmg'}: fight {fought}, reset {reset}, fight again {again}")
+    lines.append(f"    {'✓' if good else '✗'} A+B+Select+Start mid-fight: the game over from the start, both machines")
+    return good, lines
