@@ -1,100 +1,86 @@
-; ---- Punch-Out!!'s crowd, recorded: its NES sample played on the wave channel (off the fight) ---------------
+; ---- Punch-Out!!'s crowd, recorded: its NES sample played on the wave channel ------------------------------
 ; The NES plays its crowd as a sample (the DMC); the GB has no such channel, but its wave channel plays 32
-; four-bit steps over and over. So: the sample (CrowdPcm: the NES's own, decoded and taken to 10923 Hz, 4 bits),
-; 32 steps at a time, the wave channel retriggered on each with the next 32, by the timer (341 a second). It's
-; played from WRAMX (copied there the first time), so the interrupt never touches a ROM bank: the far calls map
-; theirs without noting it, and it couldn't put the right one back. In the fight the noise channel's stands in
-; for it (kit_nes_sound.asm, DmcStep).
+; four-bit steps over and over. So: the sample (CrowdPcm: the NES's own, decoded, 4 bits, in order), the wave
+; channel restarted by the timer every 27 of its steps (404 a second) on the next 32. A restart plays the step it
+; was on once more, then the RAM's from its second: 26 new steps a restart (the recording's at 26/27 of the
+; channel's rate, 10518 Hz, for it), and 27 to 31 of the RAM's are the steps to come -- a restart late (an
+; interrupt, VBlank's sprite copy, the screen's splits ahead of it: up to 4 1/2 steps on the original) plays on
+; into them, never back to the RAM's first, and the next buffer's taken from as far on as it's late, so the steps
+; run on unbroken. Off the fight (and in it on the original) straight from the recording, in WRAMX (copied there
+; the first time): the interrupt never touches a ROM bank (the far calls map theirs without noting it, and it
+; couldn't put the right one back). In the fight on Color, from a ring of buffers with the triangle mixed in
+; (PcmProduce, each frame), in WRAMX's second bank: the recording fills the first.
 
 DEF rTIMA EQU $FF05
 DEF rTMA EQU $FF06
 DEF rTAC EQU $FF07
+DEF rSVBK EQU $FF70
 DEF _AUD3WAVERAM EQU $FF30
-DEF MIX_N EQU 12              ; (the ring's buffers: room for a slow frame)
-DEF MIX_AHEAD EQU 9           ; (how many it keeps ready: some 35 ms of it, a slow frame covered, the triangle kept close)
+DEF PCM_STEP EQU 13           ; (bytes a restart: 26 steps)
+DEF PCM_MIRROR EQU 32         ; (past a buffer's end, its start again: a late restart's 32 steps read on into it)
+DEF MIX_AHEAD EQU 160         ; (the ring's bytes kept ready past where it plays: some 30 ms, a slow frame covered)
 
-SECTION "Crowd PCM buffer", WRAMX[$D000]
-wPcm: ds CROWD_PCM_SIZE
+SECTION "Crowd PCM buffer", WRAMX[$D000], BANK[1]
+wPcm: ds CROWD_PCM_SIZE + PCM_MIRROR
+
+SECTION "Crowd mix ring", WRAMX[$D000], BANK[2]   ; (a page: its place in it a byte, wrapping on its own)
+wMixRing: ds 256 + PCM_MIRROR
+
+SECTION "Crowd PCM timer", HRAM    ; (the interrupt's: in order)
+hPcmT:
+hPcmLateAt: db              ; the timer's count, the restart a byte late (its reload and half a byte's counts)
+hPcmPtr: dw                 ; where the next restart plays from, if on time
+hPcmEndHi: db               ; its end (past it: again from its start, if it loops, else done)
+hPcmEndLo: db
+hPcmSize: dw
+hPcmLoop: db
+hPcmBias: db                ; the timer's reload less half a byte's counts (late: from it, whole bytes, rounded)
+hPcmQ: db                   ; the timer's counts a byte (2 steps)
 
 SECTION "Crowd PCM state", WRAM0
 wPcmOn: db                  ; playing
 wPcmWave: db                ; the wave RAM the crowd's: TriangleOut's to put back
 wPcmLoaded: db              ; (copied to wPcm)
-wPcmPtr: dw                 ; the next 16 bytes
 wPcmMix: db                 ; in the fight (Color): played from the mixed ring (the triangle mixed in)
-wMixHead: db                ; the ring: the next buffer to fill, the next to play (MIX_N of them)
-wMixTail: db
-wMixCrowd: dw               ; the crowd's next 16 bytes (in its rotated blocks)
+wMixHead: db                ; the ring: the next buffer to fill (its byte)
+wMixStop: db                ; (PcmProduce's A: the screen line its topping up stops at, VBlank's lines free)
+wMixCrowd: dw               ; the crowd's next 16 bytes
 wMixPhase: dw               ; the triangle: its phase (32 steps a turn, the top 5 bits), its step a sample, its period
 wMixInc: dw
 wMixPer: dw
 wMixOn: db                  ; (sounding)
 
-SECTION "Crowd mix ring", WRAMX     ; (with the crowd's samples: no bank is ever switched)
-wMixRing: ds 16 * MIX_N
-wMixStop: db                ; (PcmProduce's A: the screen line its topping up stops at, VBlank's lines free)
-
 SECTION "Crowd mix scratch", WRAM0, ALIGN[5]
 wMixTmp: ds 32              ; a buffer's 32 steps, in playing order (one page: its loop counts on the low byte)
 
+SECTION "Crowd mix bytes", HRAM
+hMixSrc: ds 16              ; the crowd's 16 bytes for it
+
 SECTION "Crowd PCM, from any bank", ROM0
-; A = the DMC sample just started (1: the crowd): off the fight, the recording instead of the noise's.
+; A fight starting with the crowd's sample under way: its recording from where the sample's got to.
+PcmResume::
+    ld a, [wDmcSample]
+    cp 1
+    ret nz
+    ld hl, PcmResumeIn
+    jr PcmFar
+; A = the DMC sample just started (1: the crowd): the recording instead of the noise's.
 PcmMaybeFar::
     cp 1
     ret nz
-    xor a
-    ld [wPcmMix], a
-    ldh a, [hFtActive]
-    and a
-    jr z, .off
-    ldh a, [hIsCGB]         ; (in the fight: on Color the triangle mixed in; on the original, the crowd's
-    and a                   ; alone while it lasts: its noise imitation can't make its band, 250-1000 Hz)
-    jr z, .off
-    inc a
-    ld [wPcmMix], a
-.off:
+    ld hl, PcmStart
+PcmFar:                     ; HL: the routine, in its bank, the caller's (hBank) back after
+    push hl
     call PcmLoad
-    ld hl, wPcm
-    ld a, l
-    ld [wPcmPtr], a
-    ld [wMixCrowd], a
-    ld a, h
-    ld [wPcmPtr + 1], a
-    ld [wMixCrowd + 1], a
-    xor a
-    ld [wMixHead], a
-    ld [wMixTail], a
-    ld a, $FF               ; (the triangle's period: none yet)
-    ld [wMixPer + 1], a
-    ld a, 1
-    ld [wPcmOn], a
-    ld a, [wPcmMix]
-    and a
-    jr z, .plain
-    ld a, 144               ; (the ring's first, whatever the line: then its first up)
-    call PcmProduce
-    call PcmMixOut
-    jr .timer
-.plain:
-    call PcmFill
-.timer:
-    ldh a, [hIsCGB]         ; (341 overflows a second: the original's 65536 Hz / 192; Color's double speed
-    and a                   ; doubles the timer's clock, so its 16384 Hz, made 32768, / 96)
-    ld a, 256 - 192
-    ld b, %110
-    jr z, .rate
-    ld a, 256 - 96
-    ld b, %111
-.rate:
-    ldh [rTMA], a
-    ldh [rTIMA], a
-    ld a, b
-    ldh [rTAC], a
-    ldh a, [rIE]
-    or %100
-    ldh [rIE], a
-    ei                      ; (off the fight no handler runs, VBlank only waking HALT: the timer's must)
+    pop hl
+    ld a, BANK(PcmStart)
+    ld [$2100], a
+    call .hl
+    ldh a, [hBank]
+    ld [$2100], a
     ret
+.hl:
+    jp hl
 
 ; The crowd's recording into WRAMX, its first time (the fight's load does it, screen dark: not mid-fight, where
 ; it ran past a frame); the caller's bank (hBank) back after.
@@ -102,11 +88,13 @@ PcmLoad::
     ld a, [wPcmLoaded]
     and a
     ret nz
+    ld a, 1                 ; (WRAMX: its bank)
+    ldh [rSVBK], a
     ld a, BANK(CrowdPcm)
     ld [$2100], a
     ld hl, CrowdPcm
     ld de, wPcm
-    ld bc, CROWD_PCM_SIZE
+    ld bc, CROWD_PCM_SIZE + PCM_MIRROR
 .copy:
     ld a, [hl+]
     ld [de], a
@@ -121,118 +109,95 @@ PcmLoad::
     ld [wPcmLoaded], a
     ret
 
-; A fight starting with the crowd's sample under way: its recording from where the sample's got to (its frame,
-; 91 bytes a frame, whole blocks), mixed on Color.
-PcmResume::
-    ld a, [wDmcSample]
-    cp 1
-    ret nz
-    ld a, [wPcmOn]
-    and a
-    ret nz
-    inc a                   ; (the crowd's sample: 1)
-    call PcmMaybeFar
-    ld a, [wDmcFrame]       ; (frame * 91, to whole 16-byte blocks)
-    ld b, a
-    ld hl, 0
-    ld de, 91
-    inc b
-.frames:
-    dec b
-    jr z, .counted
-    add hl, de
-    jr .frames
-.counted:
-    ld a, l
-    and $F0
-    ld l, a
-    ld de, CROWD_PCM_SIZE
-    ld a, l
-    sub e
-    ld a, h
-    sbc d
-    ret nc                  ; (past its end)
-    ld de, wPcm
-    add hl, de
-    ld a, l
-    ld [wMixCrowd], a
-    ld [wPcmPtr], a
-    ld a, h
-    ld [wMixCrowd + 1], a
-    ld [wPcmPtr + 1], a
-    xor a
-    ld [wMixHead], a
-    ld [wMixTail], a
-    ld a, [wPcmMix]         ; (mixed: the ring filled now, before the timer's first asks for it)
-    and a
-    ret z
-    ld a, 144
-    jp PcmProduce
-
-; Timer: the next 32 steps.
+; Timer: the wave channel restarted on the next 32 steps, from as far on as it's late. At the timer's own vector
+; (no jump to it: 404 a second). WRAMX's bank is the one it plays from all the while it plays (PcmStart).
+PUSHS
+SECTION "Interrupt: Timer", ROM0[$50]
 PcmTick::
     push af
     ei                      ; (the fight's splits may cut in: never late for them)
-    push bc
     push hl
-    ld a, [wPcmMix]
-    and a
-    jr nz, .mixed
-    call PcmFill
-    jr .done
-.mixed:
-    call PcmMixOut
-.done:
-    pop hl
-    pop bc
-    pop af
-    reti
-
-; The fight (Color): the ring's next mixed buffer up (none ready: the last again).
-PcmMixOut:
-    ld a, [wMixTail]
-    ld b, a
-    ld a, [wMixHead]
-    cp b
-    jr nz, .ready
-    ld a, b                 ; (under: the one before again)
-    and a
-    jr nz, .back
-    ld a, MIX_N
-.back:
-    dec a
-    jr .at
-.ready:
-    ld a, b
-    inc a
-    cp MIX_N
-    jr c, .next
-    xor a
-.next:
-    ld [wMixTail], a
-    ld a, b
-.at:
-    swap a
-    add LOW(wMixRing)
+    ld hl, hPcmT
+    ldh a, [rTIMA]          ; how late: a byte's time (2 steps) or more since the timer overflowed?
+    cp [hl]
+    jr nc, .late
+    inc l
+    ld a, [hl+]
+    ld h, [hl]
     ld l, a
-    ld a, 0
-    adc HIGH(wMixRing)
-    ld h, a
-    xor a
+.copy:
+    xor a                   ; (the channel off as short a time as can be: unrolled)
     ldh [rAUD3ENA], a
     FOR N, 16
         ld a, [hl+]
         ldh [_AUD3WAVERAM + N], a
     ENDR
-    ld a, $80
+    ld a, $87               ; (on, and restarted: 2048 - $740 = 192, its level and low byte set at the start)
     ldh [rAUD3ENA], a
-    ld a, $20
-    ldh [rAUD3LEVEL], a
-    ld a, $40
-    ldh [rAUD3LOW], a
-    ld a, $87
     ldh [rAUD3HIGH], a
-    ret
+    ld hl, hPcmPtr          ; on 26 steps
+    ld a, [hl]
+    add PCM_STEP
+    ld [hl+], a
+    jr nc, .same
+    inc [hl]
+.same:
+    ld a, [hl+]
+    cp [hl]
+    jr nc, .end
+.done:
+    pop hl
+    pop af
+    reti
+.late:                      ; late: the buffer from that many bytes on (the steps that time's played already)
+    push bc
+    ld hl, hPcmBias
+    sub [hl]
+    inc l
+    ld c, 0
+.count:
+    inc c
+    sub [hl]
+    cp [hl]
+    jr nc, .count
+    ld hl, hPcmPtr
+    ld a, [hl+]
+    add c
+    ld c, a
+    ld a, [hl]
+    adc 0
+    ld h, a
+    ld l, c
+    pop bc
+    jr .copy
+.end:                       ; its end reached? Past it: again from as far into its start, if it loops, else done
+    jr nz, .past
+    inc l
+    ld a, [hPcmPtr]
+    cp [hl]
+    jr c, .done
+.past:
+    ld a, [hPcmLoop]
+    and a
+    jr z, .stop
+    push bc
+    ld hl, hPcmSize
+    ld a, [hl+]
+    ld b, [hl]
+    ld c, a
+    ld hl, hPcmPtr
+    ld a, [hl]
+    sub c
+    ld [hl+], a
+    ld a, [hl]
+    sbc b
+    ld [hl], a
+    pop bc
+    jr .done
+.stop:
+    call PcmStop
+    jr .done
+POPS
 
 ; Each frame of a fight (Color, the crowd on): the ring topped up, from its bank (the mixer and its tables there),
 ; stopping at screen line A (a buffer takes some 13 lines: the frame's work never runs into VBlank for it; VBlank's own
@@ -246,49 +211,14 @@ PcmProduce::
     ld [$2100], a
     ret
 
-; The wave channel off, its RAM the next 16 bytes, on again from the first (8192 steps a second: 2048 - 256).
-PcmFill::
-    ld a, [wPcmPtr]
-    ld l, a
-    ld a, [wPcmPtr + 1]
-    ld h, a
-    xor a                   ; (the channel off as short a time as can be: unrolled)
-    ldh [rAUD3ENA], a
-    FOR N, 16
-        ld a, [hl+]
-        ldh [_AUD3WAVERAM + N], a
-    ENDR
-    ld a, $80
-    ldh [rAUD3ENA], a
-    ld a, $20               ; (all of it)
-    ldh [rAUD3LEVEL], a
-    ld a, $40
-    ldh [rAUD3LOW], a
-    ld a, $87               ; (restart: 2048 - $740 = 192)
-    ldh [rAUD3HIGH], a
-    ld a, l
-    cp LOW(wPcm + CROWD_PCM_SIZE)
-    jr nz, .on
-    ld a, h
-    cp HIGH(wPcm + CROWD_PCM_SIZE)
-    jr nz, .on
-    ld a, [wDmcLoop]        ; its end: again, if it loops, else done
-    and a
-    jr z, PcmStop
-    ld hl, wPcm
-.on:
-    ld a, l
-    ld [wPcmPtr], a
-    ld a, h
-    ld [wPcmPtr + 1], a
-    ret
-
 ; Done (its end, the fight, or another sample): the timer off, the wave channel the triangle's again.
 PcmStop::
     xor a
     ld [wPcmOn], a
     ld [wPcmMix], a
     ldh [rTAC], a
+    inc a                   ; (WRAMX: the recording's bank again)
+    ldh [rSVBK], a
     ldh a, [rIE]
     and ~%100
     ldh [rIE], a
@@ -306,24 +236,180 @@ PcmStop::
     ret
 
 SECTION FRAGMENT "Screens far", ROMX
-; The fight's mixer (Color): the ring topped up, each buffer 32 steps of the crowd (wMixCrowd, in its rotated
-; blocks) with the triangle mixed in at its pitch (the NES's: its 32-step wave, CPU / (period + 1) steps a second),
-; through MixTable; written back rotated, as the wave channel's restart wants.
+; PcmResume, in its bank: the sample's frame * 88 bytes (10518 Hz), to whole 16-byte blocks, its recording from there.
+PcmResumeIn:
+    ld a, [wPcmOn]
+    and a
+    ret nz
+    ld a, [wDmcFrame]
+    ld b, a
+    ld hl, 0
+    ld de, 88
+    inc b
+.frames:
+    dec b
+    jr z, .counted
+    add hl, de
+    jr .frames
+.counted:
+    ld a, l
+    and $F0
+    ld e, a
+    ld d, h
+    ld a, e
+    sub LOW(CROWD_PCM_SIZE)
+    ld a, d
+    sbc HIGH(CROWD_PCM_SIZE)
+    ret nc                  ; (past its end)
+    jr PcmStartAt
+
+; PcmMaybeFar, in its bank: the crowd from its start (PcmStartAt: DE bytes in). Mixing already (its sample
+; begun again in the fight on Color): the ring plays on, its crowd from there; else the timer's set going.
+PcmStart:
+    ld de, 0
+PcmStartAt:
+    ld hl, wPcm
+    add hl, de
+    ld b, 0                 ; (the ring: on Color in the fight -- the triangle mixed in; on the original, the
+    ldh a, [hFtActive]      ;  crowd's alone while it lasts: its noise imitation can't make its band, 250-1000 Hz)
+    and a
+    jr z, .plain
+    ldh a, [hIsCGB]
+    and a
+    jr z, .plain
+    inc b
+.plain:
+    ld a, [wPcmMix]
+    and b
+    jr z, .new
+    ld a, l                 ; (the ring under way: its crowd from here)
+    ld [wMixCrowd], a
+    ld a, h
+    ld [wMixCrowd + 1], a
+    ret
+.new:
+    xor a                   ; (the timer stopped while it's set up: none due meanwhile)
+    ldh [rTAC], a
+    ldh a, [rIF]
+    and ~%100
+    ldh [rIF], a
+    ld a, b
+    ld [wPcmMix], a
+    and a
+    jr z, .fromPcm
+    ld a, l
+    ld [wMixCrowd], a
+    ld a, h
+    ld [wMixCrowd + 1], a
+    ld hl, wMixRing
+    xor a
+    ld [wMixHead], a
+    ld a, $FF               ; (the triangle's period: none yet)
+    ld [wMixPer + 1], a
+    ld a, 2                 ; (WRAMX: the ring's bank while it plays)
+    ldh [rSVBK], a
+    ld a, 1
+    ld [hPcmLoop], a
+    ld a, HIGH(wMixRing + 256)
+    ld [hPcmEndHi], a
+    ld bc, 256
+    jr .ptr
+.fromPcm:
+    ld a, 1                 ; (WRAMX: the recording's bank)
+    ldh [rSVBK], a
+    ld a, [wDmcLoop]
+    ld [hPcmLoop], a
+    ld a, HIGH(wPcm + CROWD_PCM_SIZE)
+    ld [hPcmEndHi], a
+    ld a, LOW(wPcm + CROWD_PCM_SIZE)
+    ld [hPcmEndLo], a
+    ld bc, CROWD_PCM_SIZE
+.ptr:
+    ld a, l
+    ld [hPcmPtr], a
+    ld a, h
+    ld [hPcmPtr + 1], a
+    ld a, c
+    ld [hPcmSize], a
+    ld a, b
+    ld [hPcmSize + 1], a
+    ld a, [wPcmMix]
+    and a
+    jr z, .endLo
+    xor a
+    ld [hPcmEndLo], a
+.endLo:
+    ld a, 1
+    ld [wPcmOn], a
+    ld a, $20               ; (all of it)
+    ldh [rAUD3LEVEL], a
+    ld a, $40
+    ldh [rAUD3LOW], a
+    ld a, [wPcmMix]         ; (mixing: the ring's first buffers now, whatever the line)
+    and a
+    ld a, 144
+    ld [wMixStop], a
+    call nz, PcmProduceIn
+    ldh a, [hIsCGB]         ; (the original's timer at 65536 Hz, 6 counts a step; Color's double speed doubles
+    and a                   ; its 16384 Hz: 3)
+    ld bc, (256 - 27 * 6) << 8 | 12
+    jr z, .rate
+    ld bc, (256 - 27 * 3) << 8 | 6
+.rate:
+    ld a, c
+    ld [hPcmQ], a
+    srl c
+    ld a, b
+    sub c
+    ld [hPcmBias], a
+    ld a, b
+    add c
+    ld [hPcmLateAt], a
+    ld a, b
+    ldh [rTMA], a
+    ld a, $FF               ; (its first at once)
+    ldh [rTIMA], a
+    ldh a, [hIsCGB]
+    and a
+    ld a, %110
+    jr z, .tac
+    inc a
+.tac:
+    ldh [rTAC], a
+    ldh a, [rIE]
+    or %100
+    ldh [rIE], a
+    ei                      ; (off the fight no handler runs, VBlank only waking HALT: the timer's must)
+    ret
+
+; The fight's mixer (Color): the ring topped up, each buffer 32 steps of the crowd (wMixCrowd) with the triangle
+; mixed in at its pitch (the NES's: its 32-step wave, CPU / (period + 1) steps a second), through MixTable. The
+; ring's WRAMX bank (the second) in all the while; the crowd's 16 bytes fetched from the first with the timer held
+; off (.fetch). A ring short of three buffers is topped up whatever the line: it never runs dry.
 PcmProduceIn:
     ld a, [wMixStop]        ; (144, "fill it, whatever the line": the crowd just started, its ring empty; mid-frame,
     cp 144                  ;  a few buffers now -- the first at once -- and the rest at the frame's usual top-ups,
-    jr nz, .more            ;  not all nine in one go: that ran a hundred lines on and dropped the frame)
+    jr nz, .more            ;  not all of them in one go: that ran a hundred lines on and dropped the frame)
     ldh a, [rLY]
     cp 144
-    jr nc, .more
+    ld a, 20                ; (in VBlank: as its own top-up, to the screen's line 20)
+    jr nc, .limit
+    ldh a, [rLY]
     add 24
     cp 144
     jr c, .limit
     ld a, 143
 .limit:
     ld [wMixStop], a
-    jr .go
 .more:
+    ld a, [hPcmPtr]         ; (MIX_AHEAD bytes ready past where it plays: enough)
+    ld b, a
+    ld a, [wMixHead]
+    sub b
+    cp MIX_AHEAD
+    ret nc
+    cp 48
+    jr c, .go               ; (under three buffers: one more, whatever the line)
     ld a, [wMixStop]
     ld c, a
     ldh a, [rLY]
@@ -332,25 +418,6 @@ PcmProduceIn:
     cp c
     ret nc                  ; (another buffer would run on into VBlank: the rest next time)
 .go:
-    ld a, [wMixTail]        ; (MIX_AHEAD ready: enough)
-    ld b, a
-    ld a, [wMixHead]
-    sub b
-    jr nc, .ahead
-    add MIX_N
-.ahead:
-    cp MIX_AHEAD
-    ret nc
-    ld a, [wMixHead]
-    inc a
-    cp MIX_N
-    jr c, .head
-    xor a
-.head:
-    ld b, a
-    ld a, [wMixTail]
-    cp b
-    ret z                   ; (full)
     call .triangle
     ld a, [wMixOn]          ; pass 1: the triangle's step each sample (its value x16), or the middle when it's still
     and a
@@ -392,31 +459,43 @@ PcmProduceIn:
     ld [wMixPhase], a
     ld a, d
     ld [wMixPhase + 1], a
-.mix:                       ; pass 2: each with its crowd step (playing order: the stored block's 2nd step on, its 1st last)
+.mix:                       ; pass 2: each with its crowd step (its high step first)
     ld a, [wMixCrowd]
     ld l, a
     ld a, [wMixCrowd + 1]
     ld h, a
+    ld de, hMixSrc
+    call .fetch
+    call .fetch
+    push hl
+    ld bc, hMixSrc          ; ([DE] = MixTable[[DE] | the crowd's step], each)
     ld de, wMixTmp
-    ld a, [hl+]             ; (byte 0: its low step first; its high, the block's last)
-    push af
-    and $0F
-    call .one
-    ld b, 15
+    ld h, HIGH(MixTable)
 .byte:
+    ld a, [bc]
+    swap a
+    and $0F
+    ld l, a
+    ld a, [de]
+    or l
+    ld l, a
     ld a, [hl]
-    swap a
+    ld [de], a
+    inc e
+    ld a, [bc]
     and $0F
-    call .one
-    ld a, [hl+]
-    and $0F
-    call .one
-    dec b
+    ld l, a
+    ld a, [de]
+    or l
+    ld l, a
+    ld a, [hl]
+    ld [de], a
+    inc e
+    inc c
+    ld a, c
+    cp LOW(hMixSrc + 16)
     jr nz, .byte
-    pop af
-    swap a
-    and $0F
-    call .one
+    pop hl
     ld a, l                 ; the crowd on (its end: again, if it loops, else done)
     cp LOW(wPcm + CROWD_PCM_SIZE)
     jr nz, .on
@@ -432,53 +511,46 @@ PcmProduceIn:
     ld [wMixCrowd], a
     ld a, h
     ld [wMixCrowd + 1], a
-    ld a, [wMixHead]        ; pass 3: packed into the ring, rotated (the last step first)
-    swap a
-    add LOW(wMixRing)
+    ld a, [wMixHead]        ; pass 3: packed into the ring, in order (its first 32 bytes past its end too)
     ld l, a
-    ld a, 0
-    adc HIGH(wMixRing)
-    ld h, a
+    ld h, HIGH(wMixRing)
     ld de, wMixTmp
-    ld a, [wMixTmp + 31]
-    swap a
-    ld b, a
-    ld a, [de]
-    inc de
-    or b
-    ld [hl+], a
-    ld c, 15
+    ld c, 16
 .pack:
     ld a, [de]
-    inc de
+    inc e
     swap a
     ld b, a
     ld a, [de]
-    inc de
+    inc e
     or b
-    ld [hl+], a
+    ld [hl], a
+    ld b, a
+    ld a, l
+    cp PCM_MIRROR
+    jr nc, .packed
+    inc h
+    ld [hl], b
+    dec h
+.packed:
+    inc l
     dec c
     jr nz, .pack
-    ld a, [wMixHead]
-    inc a
-    cp MIX_N
-    jr c, .stored
-    xor a
-.stored:
+    ld a, l
     ld [wMixHead], a
     jp .more
-.one:                       ; A = a crowd step: [DE] = MixTable[[DE] | A], DE on
-    push hl
-    ld h, a
-    ld a, [de]
-    or h
-    ld l, a
-    ld h, HIGH(MixTable)
-    ld a, [hl]
-    ld [de], a
-    inc de
-    pop hl
-    ret
+.fetch:                     ; 8 of the crowd's bytes HL -> DE, from WRAMX's first bank (the timer's plays from the
+    di                      ; second: held off the while, some 25 cycles)
+    ld a, 1
+    ldh [rSVBK], a
+    REPT 8
+        ld a, [hl+]
+        ld [de], a
+        inc e
+    ENDR
+    ld a, 2
+    ldh [rSVBK], a
+    reti
 .triangle:                  ; wMixOn: sounding (its linear and length counters running, period 2 on); wMixInc for it
     xor a
     ld [wMixOn], a
@@ -515,16 +587,16 @@ PcmProduceIn:
     ld [wMixPer], a
     ld a, b
     ld [wMixPer + 1], a
-    inc bc                  ; inc = 335585 / (period + 1) (2048 a step, 1789773 / 10923 steps... a sample)
+    inc bc                  ; inc = 348489 / (period + 1) (2048 a step, 1789773 / 10518 steps... a sample)
     ld hl, 0                ; (24 / 16 bits, by shifts: the quotient in DE)
     ld de, 0
     ld a, 24
     push af
     ld a, $05
-    ld [wMixTmp], a         ; (335585 = $051EE1: its bytes, high first, into the scratch)
-    ld a, $1E
+    ld [wMixTmp], a         ; (348489 = $055149: its bytes, high first, into the scratch)
+    ld a, $51
     ld [wMixTmp + 1], a
-    ld a, $E1
+    ld a, $49
     ld [wMixTmp + 2], a
 .div:
     ld a, [wMixTmp + 2]     ; the dividend's next bit into HL

@@ -29,6 +29,8 @@ KIT_NES = __import__("pathlib").Path(__file__).with_name("kit_nes.asm").read_tex
 KIT_NES_SOUND = __import__("pathlib").Path(__file__).with_name("kit_nes_sound.asm").read_text()
 KIT_PASSKEY = __import__("pathlib").Path(__file__).with_name("kit_passkey.asm").read_text()
 KIT_PCM = __import__("pathlib").Path(__file__).with_name("kit_pcm.asm").read_text()
+KIT_SGB = __import__("pathlib").Path(__file__).with_name("kit_sgb.asm").read_text()
+SGB_BORDER = __import__("pathlib").Path(__file__).with_name("sgb_border.hex")
 
 
 # The template's effects as Punch-Out!!'s (its SQ1 effect numbers): what plays when a project has its engine.
@@ -101,7 +103,9 @@ def _noise_centroids(rate, per):
 _NOISE = {}
 
 
-PCM_RATE = 2097152 / 192        # (kit_pcm.asm: the wave channel's 2048 - 192, the timer's 256 - 192: 10923 Hz)
+PCM_RATE = 2097152 / 192 * 26 / 27  # (kit_pcm.asm: the wave channel's 2048 - 192, 26 new steps in 27: 10518 Hz)
+FT_LATE_UNDO = 124              # (the original: a picture's late going up, his top rows' sprites built again: decided by
+LATE_BASE = 5                   #  line 123 at the latest, sooner by their count -- _pic_late, kit_fight.asm's FtDmgLateOk)
 
 
 NES_SAMPLE_STEP = (0.42545 / 127) / (0.1128 / 15)     # a DMC step, in the Game Boy's (a square's) steps
@@ -360,9 +364,10 @@ def _knee(x):
 def _crowd_pcm(nes):
     """Punch-Out!!'s crowd (its first DMC sample), recorded, for the wave channel (kit_pcm.asm): the NES's 1-bit
     delta stream decoded at the rate the game plays it (33144 Hz), averaged down to the wave channel's rate, 4 bits
-    a step, two to a byte (the first high), whole 32-step buffers (10923 Hz: 4 KB, the original's WRAMX). As loud
-    as the NES has it against the other channels (its mixer: a sample step 0.42545/127, a square's 0.1128/15, the
-    Game Boy's four alike), its peaks taken in softly (_knee); and MixTable, the triangle with it in the fight."""
+    a step, two to a byte (the first high), in order, whole 32-step buffers and its first 32 bytes again past its
+    end (10518 Hz: 4 KB, the original's WRAMX). As loud as the NES has it against the other channels (its mixer: a
+    sample step 0.42545/127, a square's 0.1128/15, the Game Boy's four alike), its peaks taken in softly (_knee);
+    and MixTable, the triangle with it in the fight."""
     fixed, data = nes["sound_fixed"], nes["samples"]
     a, n = fixed[0x368], fixed[0x369] * 16 + 1
     start = 0xC000 + a * 64 - 0xE000
@@ -385,14 +390,12 @@ def _crowd_pcm(nes):
     steps = [max(0, min(15, round(7.5 + _knee((v - mid) * NES_SAMPLE_STEP)))) for v in steps]
     while len(steps) % 32:
         steps.append(steps[-1])
-    rot = []                            # (a restart plays from its second step: each 32 rotated a step, its last first)
-    for i in range(0, len(steps), 32):
-        blk = steps[i:i + 32]
-        rot += [blk[-1]] + blk[:-1]
-    packed = [rot[i] << 4 | rot[i + 1] for i in range(0, len(rot), 2)]
+    packed = [steps[i] << 4 | steps[i + 1] for i in range(0, len(steps), 2)]
+    size = len(packed)
+    packed += packed[:32]               # (past its end its start again: a late restart reads on into it)
     mix = [max(0, min(15, round(7.5 + _knee((t - 7.5) + (c - 7.5))))) for t in range(16) for c in range(16)]
     return ("MACRO MIX_TABLE\n" + _db(mix) + "\nENDM\n"
-            f"DEF CROWD_PCM_SIZE EQU {len(packed)}\nSECTION \"Data: Crowd PCM\", ROMX\n"
+            f"DEF CROWD_PCM_SIZE EQU {size}\nSECTION \"Data: Crowd PCM\", ROMX\n"
             f"CrowdPcm:                   ; the crowd, recorded: {round(PCM_RATE)} Hz, 4 bits ({len(steps)} steps)\n{_db(packed)}\n")
 
 
@@ -586,16 +589,82 @@ def _db(values, per_line=16):
                      for i in range(0, len(values), per_line))
 
 
-def _pic_next(s, pics):
-    """The original's grey pictures: per picture (by number), the one likely next ($FF: none known), the picture
-    before it that changes that, and the one next then (pic_next.py's, from the bot's fights)."""
+def _pic_next(s, pics, suffix):
+    """The original's grey pictures: his guess at the next (FT_DPIC_GUESS: A, $FF none), by the one shown and the two
+    before it (pic_next.py's rules, from his fights: the longest that fits). Per picture its rules' address, then
+    each picture's rules: their count, then each its two before, before ($FF: any) and next."""
     order = pics["order"]
     nxt = (s["fight"].get("nes") or {}).get("pictures", {}).get("next") or {}
-    num = lambda k: order.index(k) if k in order else 0xFF
+    num = lambda k: order.index(k) if k in order else None
+    index, lists = [], []
+    for k in range(128):
+        rules = []
+        for r in sorted(nxt.get(order[k], []) if k < len(order) else [], key=lambda r: -len(r)):
+            ns = [num(c) for c in r]
+            if None not in ns:
+                rules.append([0xFF] * (3 - len(ns)) + ns)
+        index.append(f"PicGuessDmg{suffix}_{k}" if rules else "0")
+        if rules:
+            lists.append(f"PicGuessDmg{suffix}_{k}:\n    db {len(rules)}\n" + _db([b for r in rules for b in r], 15))
+    table = "\n".join("    dw " + ", ".join(index[i:i + 8]) for i in range(0, 128, 8))
+    code = f"""PicGuessDmg{suffix}:             ; A: his picture likely next, after the one shown and the two before it ($FF: none)
+    push de
+    ld a, [wRvPicShown]
+    ld l, a
+    ld h, 0
+    add hl, hl
+    ld de, PicNextDmg{suffix}
+    add hl, de
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    or h
+    ld a, $FF
+    jr z, .out
+    ld a, [hl+]             ; (its rules: the first that fits)
+    ld d, a
+    ld a, [wRvPicPrev]
+    ld b, a
+    ld a, [wRvPicPrev2]
+    ld c, a
+.rule:
+    ld a, [hl+]
+    cp $FF
+    jr z, .before
+    cp c
+    jr nz, .skip2
+.before:
+    ld a, [hl+]
+    cp $FF
+    jr z, .yes
+    cp b
+    jr nz, .skip1
+.yes:
+    ld a, [hl]
+    jr .out
+.skip2:
+    inc hl
+.skip1:
+    inc hl
+    dec d
+    jr nz, .rule
+    ld a, $FF
+.out:
+    pop de
+    ret
+"""
+    return table, "\n".join(lists), code
+
+
+def _pic_late(dpics):
+    """The original's grey pictures, per picture: the last line his top rows' sprites may begin to be built again for
+    it, late in a frame (its last tiles just in: up at this VBlank, not the next), and be done by VBlank's work (line
+    145): his band worked out again and their building take up to 5 lines and 5 more per 8 of its sprites (measured:
+    the bot's fights and qa_perf's, the most 3 lines under that)."""
     out = []
     for k in range(128):
-        v = nxt.get(order[k]) if k < len(order) else None
-        out += [num(v[0]), num(v[1]), num(v[2])] if v else [0xFF] * 3
+        n = len(dpics["heads"][k]) if k < len(dpics["heads"]) else 255
+        out.append(max(0, min(FT_LATE_UNDO, 145 - LATE_BASE - (n * 5 + 7) // 8)))
     return out
 
 
@@ -726,7 +795,7 @@ Scene{i}Attr:               ; palette number per tile (Game Boy Color only)
         f"Scene{i}AwRecord{n}:           ; (the Another World Circuit's record's glyphs)\n    db {', '.join(map(str, g))}\n"
         for n, (_, _, g) in enumerate(s.get("aw_record_glyphs") or ())) + _far(
         f"Scene{i}Time{n}:               ; the fight's time's glyphs: each digit's cell, 0-9\n    db {', '.join(str(v) for g in cells for v in g)}\n"
-        for n, (_, _, cells) in enumerate(s.get("time_glyphs") or ())) + (
+        for n, (_, _, cells, _) in enumerate(s.get("time_glyphs") or ())) + (
         f"Scene{i}Greys:              ; the original's: tiles whose palette has greys of its own, each's map (2 bits a slot)\n"
         f"    db {len(s['dmg_remap'])}\n" + "".join(f"    db {tl}, ${m:02X}\n" for tl, m in s["dmg_remap"]) if s.get("dmg_remap") else "") + (
         "PUSHS\nSECTION FRAGMENT \"Screens far\", ROMX     ; (with DocLoadIn: read in its bank)\n"
@@ -890,6 +959,16 @@ SLIDE_SLOW_CODE = """    ldh a, [hScrollY]       ; sliding in: climb a line ever
 .wait:
     ldh [hSlideTick], a
 .still:
+"""
+SGB_HOOK = """    ld a, [wSgbBoot]        ; (a Super Game Boy, kit_sgb.asm: the first time, its border and colors)
+    cp $14
+    jr nz, .noSgb
+    ld a, BANK(SgbScene)
+    ld [$2100], a
+    call SgbScene
+    ldh a, [hBank]
+    ld [$2100], a
+.noSgb:
 """
 SCREEN_ON_CHECK = """    ldh a, [hScene]         ; a plain screen: the display stays on (black, faded out), interrupts off
     add LOW(SceneScreenOn)
@@ -1173,12 +1252,16 @@ def _scene_load(i, s, sprites, opt_index=None, markers=False):
                   "    ld a, [hl+]", "    ld [de], a", "    inc de", "    dec c", "    jr nz, .mapCol", "    ld a, l", "    add MAP_W",
                   "    ld l, a", "    adc h", "    sub l", "    ld h, a", "    ld a, e", "    add MAP_W", "    ld e, a", "    adc d",
                   "    sub e", "    ld d, a", "    dec b", "    jr nz, .mapRow", ".mapDone:"]
+    for n, (x, y, _, aw) in enumerate(s.get("time_glyphs") or ()):  # the fight's time (a title won)
+        if not aw:
+            lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Time{n}", "    call TimeDraw"]
     for n, (x, y, _) in enumerate(s.get("record_glyphs") or ()):    # Mac's record, as it stands
         lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Record{n}", "    call RecordDraw"]
     if s.get("aw_patch"):               # (Punch-Out!!'s Another World Circuit on: its words over those, its record)
         lines += ["    ld a, [wAw]", "    and a", "    jr z, .notAw", f"    ld hl, Scene{i}Aw", "    call AwPatch"]
-        for n, (x, y, _) in enumerate(s.get("time_glyphs") or ()):  # (and the fight's time, there)
-            lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Time{n}", "    call TimeDraw"]
+        for n, (x, y, _, aw) in enumerate(s.get("time_glyphs") or ()):  # (and the fight's time, there)
+            if aw:
+                lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Time{n}", "    call TimeDraw"]
         for n, (x, y, _) in enumerate(s.get("aw_record_glyphs") or ()):
             lines += [f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}AwRecord{n}", "    call RecordDraw"]
         lines.append(".notAw:")
@@ -2955,6 +3038,7 @@ ASSERT PicHeader{suffix} == $4000
     dpics = s.get("fight_pics_dmg")
     if dpics and pics:                  # the original: his pictures in greys (FT_DMG_PICS): a header bank, then each
         n = len(dpics["tiles"])         # picture's tiles and his area's rows for each copy of them
+        guess = _pic_next(s, pics, suffix)
         lab = lambda k: f"PicDmg{suffix}_{k}"
         entries = "\n".join(f"    dw {lab(k)}\n    db BANK({lab(k)}), {max(1, len(dpics['tiles'][k]))}\n    dw PicHeadDmg{suffix}_{k}"
                             for k in range(n))
@@ -2967,19 +3051,25 @@ ASSERT PicHeader{suffix} == $4000
                         + _db(dpics["maps"][k], kit.REGION_W) + "\n" + _db([t + 64 if t >= PIC_BASE else t for t in dpics["maps"][k]], kit.REGION_W))   # (his tiles' second copy; the mat's as is)
         pics_data += f"""
 SECTION "Data: Rival grey pictures{suffix}", ROMX[$4000]
-PicHeaderDmg{suffix}:           ; his pictures in greys: count; per picture its tiles (address, bank, count), his top rows'
-    db {n}                      ; sprites; each picture's tiles, then his area's rows for its tiles' first copy, then second
-    ds 15
+PicHeaderDmg{suffix}:           ; his pictures in greys: count, his guess at the next (FT_DPIC_GUESS); per picture its tiles
+    db {n}                      ; (address, bank, count), his top rows' sprites; each picture's tiles, then his area's
+    jp PicGuessDmg{suffix}       ; rows for its tiles' first copy, then second
+    ds 12
 {entries}
     ds {6 * (128 - n)}
-PicNextDmg{suffix}:             ; per picture: the one likely next, then (the picture before it this one) the one then
-{_db(_pic_next(s, pics))}
+PicNextDmg{suffix}:             ; per picture: its rules for the one likely next (PicGuessDmg)
+{guess[0]}
+PicLateDmg{suffix}:             ; per picture: the last line his top rows' sprites may begin to be built again for it
+{_db(_pic_late(dpics))}
 PicPlaceDmg{suffix}:            ; per NES frame (then mirrored): where its grey picture sits, x; then y
 {_db([dx & 0xFF for dx, _ in dpics["places"]])}
 {_db([dy & 0xFF for _, dy in dpics["places"]])}
 {heads}
+{guess[2]}
+{guess[1]}
 ASSERT PicHeaderDmg{suffix} == $4000
 ASSERT PicNextDmg{suffix} == $4310
+ASSERT PicLateDmg{suffix} == $4410
 ASSERT PicPlaceDmg{suffix} == $4490
 {nl.join(body)}
 """
@@ -4306,6 +4396,10 @@ def generate_asm(project):
 .noPatch:""")
 
     boot = []
+    sgb = banked and nes_any        # Punch-Out!!: on a Super Game Boy, its border (kit_sgb.asm)
+    if sgb:                         # (the boot ROM's C, kept: $14 on a Super Game Boy, which the first LoadScene
+        boot.append("""    ld a, c                 ;  takes up)
+    ld [wSgbBoot], a""")
     if sprites:
         boot.append("""    call ResetOAM           ; OAM is random at power-on""")
     if fights:
@@ -4534,7 +4628,7 @@ MACRO SET_UPDATE            ; run \\1 every frame from now on
     ldh [hUpdateJump + 2], a
 ENDM
 
-{"SECTION " + chr(34) + "Interrupt: VBlank" + chr(34) + ", ROM0[$40]" + nl + "    reti                    ; VBlank only wakes HALT; the work runs in the main loop" + nl + nl + "SECTION " + chr(34) + "Interrupt: STAT" + chr(34) + ", ROM0[$48]" + nl + "    jp FtStat               ; the fight's mid-frame scroll for the rival's band" + nl + nl if fights else ""}{"SECTION " + chr(34) + "Interrupt: Timer" + chr(34) + ", ROM0[$50]" + nl + "    jp PcmTick              ; Punch-Out!!'s crowd, recorded: the wave channel's next 32 steps" + nl + nl if any(((scenes[i].get("fight") or {}).get("nes") or {}).get("sound") for i in fights) else ""}SECTION "Header", ROM0[$100]
+{"SECTION " + chr(34) + "Interrupt: VBlank" + chr(34) + ", ROM0[$40]" + nl + "    reti                    ; VBlank only wakes HALT; the work runs in the main loop" + nl + nl + "SECTION " + chr(34) + "Interrupt: STAT" + chr(34) + ", ROM0[$48]" + nl + "    jp FtStat               ; the fight's mid-frame scroll for the rival's band" + nl + nl if fights else ""}SECTION "Header", ROM0[$100]
     nop
     jp Start
     ds $150 - @, 0
@@ -4638,7 +4732,7 @@ LoadScene:
     xor a
     ldh [rLCDC], a
 .screenOff:
-{"    call ResetOAM           ; no sprites left over from the last scene" + nl if fights else ""}    ldh a, [hScene]
+{SGB_HOOK if sgb else ""}{"    call ResetOAM           ; no sprites left over from the last scene" + nl if fights else ""}    ldh a, [hScene]
     add a
     add LOW(SceneLoads)
     ld l, a
@@ -5165,12 +5259,38 @@ OptionDefaults:
         if banked and not s.get("fight"):
             in_bank[i].insert(0, _scene_load_banked(i, s, cursor_on, opt_index, markers))
     out += [_scene_data(i, s, banked) + ("\n".join(in_bank[i]) + "\n" if in_bank[i] else "") for i, s in enumerate(scenes)]
+    if sgb:
+        out.append(_sgb())
     if banked:                      # every bank switch noted (hBank), for what maps a bank of its own and puts back
         hram.append("hBank: db               ; the ROM bank mapped")    # (UploadPalettes): all of them in ROM0
         out = [re.sub(r"^(\s*)ld \[\$2000\], a", r"\1ldh [hBank], a\n\1ld [$2000], a", o, flags=re.M) for o in out]
     out.append('SECTION "Variables", HRAM\n' + nl.join(hram) + "\n")
     return nl.join(out)
 
+
+# Super Game Boy: every screen in the grey look's four greens (fight_videos.DMG_LCD), lightest first; the border
+# (tools/punchout_art/sgb_border.py) in color.
+SGB_GREENS = [(0xE0, 0xF8, 0xD0), (0x88, 0xC0, 0x70), (0x34, 0x68, 0x56), (0x08, 0x18, 0x20)]
+
+
+def _sgb():
+    """kit_sgb.asm, its PAL01 packet (palette 0, the whole screen's, and 1 alike) and the border's data."""
+    def bgr(c):
+        v = (c[0] >> 3) | (c[1] >> 3) << 5 | (c[2] >> 3) << 10
+        return [v & 0xFF, v >> 8]
+    g = SGB_GREENS
+    b = bytes.fromhex(SGB_BORDER.read_text())
+    return f"""{KIT_SGB}
+SgbPal01:                   ; color 0, palette 0's 1-3, palette 1's 1-3
+{_db([0x01] + [x for c in g + g[1:] for x in bgr(c)] + [0])}
+SgbBorderChr:               ; 256 SNES tiles (4 bits a pixel)
+{_db(list(b[:0x2000]))}
+SgbBorderMap:               ; 32x28 (tile, palette 4, flips)
+{_db(list(b[0x2000:0x2700]))}
+SgbBorderPal:               ; palette 4 (0: the screen's backdrop)
+{_db(list(b[0x2700:0x2720]))}
+DEF SGB_SUPPORT EQU 1       ; (build.py: the header says so)
+"""
 
 def auto_session(project):
     """A profiling session that exercises the project: for a menu, move down, choose, and follow the

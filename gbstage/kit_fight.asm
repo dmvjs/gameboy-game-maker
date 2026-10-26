@@ -243,6 +243,7 @@ wFtCueHold: db              ; (the original: frames his dodge cue stays shown af
 wFtBulbs: ds 4 * 2          ; per flash: map address, the tile it covers, state (0 free, frames left, $FF restore)
 wFtOAMEnd: ds 3             ; per sprite list (wFtOAM, wFtOAM2, wFtOAM3): where it ended last time (slots past it hidden)
 wRvPicPrev: db              ; (the original: the picture shown before the shown one)
+wRvPicPrev2: db             ; (and the one before that)
 wFtEnd:
 
 SECTION "Fight between rounds", WRAM0   ; kept while the corner scene shows
@@ -478,31 +479,8 @@ IF DEF(FT_MAC_PICS)
 ENDC
     xor a                   ; the referee standing, his tiles in
     call FtRefFirst
-    ld a, $FF               ; no rare pose of the player's in yet
-    ld [wPlRareIn], a
-    ld [wPlRareWant], a
-    ld [wPlRareLoad], a
-    xor a
-    ld [wPlRegular], a
-IF DEF(FT_NES)
-    ld a, REF_IN            ; the referee is in the ring as the round opens, as in Punch-Out!!
-ELSE
-    ld a, REF_OUT
-ENDC
-    ld [wFtRefX], a
-    ld a, M_BREAK           ; the referee calls the fight first
-    ld [wFtMatch], a
-    ld a, FT_INTRO
-    ld [wFtTimer], a
-    xor a                   ; the map shows the idle pose, and the attack set is loaded with the scene
-    ld [wRvShown], a
-    ld [wRvPose], a
-    ld [wFtSwapWant], a
-    ld [wFtSwapHave], a
-    ld [wFtSwapPos], a
-    ld [wFtSwapPos + 1], a
-    ld [wFtSwapGoing], a
-    ld [wFtCount], a
+    ld hl, FtLoadState      ; (its first state: the far setup code's)
+    call FtSetupFar
     ld a, [wFtResume]
     and a
     jr z, .newFight
@@ -621,39 +599,8 @@ ENDC
     call FtHudCompute
     FT_VWAIT FT_ROOM_ALL
     call FtHudDraw
-    xor a
-    ldh [hFtHudReady], a
-    ldh [hFtScx], a
-IF DEF(FT_ROPE)
-    ld a, HIGH(wFtOAM3)     ; (the lower list's two: built in one, shown from the other)
-    ldh [hFtOamShown], a
-    ld a, HIGH(wFtOAM2)
-    ldh [hFtOamBuild], a
-ENDC
-    ld a, 1
-    ldh [hFtActive], a
-    xor a
-    ldh [hFtBandX], a
-    ldh [hFtBandY], a
-    ldh [hFtShowX], a
-    ldh [hFtShowY], a
-
-    ldh [hFtBandOn], a
-    ldh [hFtBandGap], a
-    ldh [hFtFlash], a       ; (not flashing: his palettes come up with the fade)
-    ldh [hFtFlashShown], a
-    ldh [hFtCueSrc], a      ; (nor his cue's greys up: HRAM's random at power-on)
-    ldh [hFtCueOn], a
-    ld [wFtCueHold], a
-    ld a, FT_BAND_BOTTOM
-    ldh [hFtBandBottom], a
-    ldh [hFtShowBottom], a
-IF DEF(FT_ROPE)
-    ld a, FT_ROPE_LINE      ; the bottom rope's row over his area's first, then his band: interrupts there
-ELSE
-    ld a, FT_BAND_TOP       ; the rival's band scrolls on its own: an interrupt at its top and bottom lines
-ENDC
-    ldh [hFtBandTop], a
+    ld hl, FtLoadShow       ; (the screen's state for the fight: the far setup code's)
+    call FtSetupFar
 IF DEF(FT_NES)
     ld a, [wFtBankNes]  ; where the round puts him (his corner), from the first frame shown
     ld [$2000], a
@@ -689,6 +636,85 @@ ENDC
     ldh [hVblank], a        ; (no VBlank noted yet: the setup's own run into one isn't the fight's first)
     ret
 
+FtSetupFar:                 ; (setup: HL, a routine of the far setup code's, from its bank; the fight's data after)
+    ld a, BANK(FtLoadState)
+    ld [$2000], a
+    call .go
+    ld a, [wFtBankData]
+    ld [$2000], a
+    ret
+.go:
+    jp hl
+
+PUSHS
+SECTION "Code: Fight setup state, far", ROMX
+; The screen's state as the fight starts (setting up): its HUD drawn, his band, the frame's splits.
+FtLoadShow:
+    xor a
+    ldh [hFtHudReady], a
+    ldh [hFtScx], a
+IF DEF(FT_ROPE)
+    ld a, HIGH(wFtOAM3)     ; (the lower list's two: built in one, shown from the other)
+    ldh [hFtOamShown], a
+    ld a, HIGH(wFtOAM2)
+    ldh [hFtOamBuild], a
+ENDC
+    ld a, 1
+    ldh [hFtActive], a
+    xor a
+    ldh [hFtBandX], a
+    ldh [hFtBandY], a
+    ldh [hFtShowX], a
+    ldh [hFtShowY], a
+
+    ldh [hFtBandOn], a
+    ldh [hFtBandGap], a
+    ldh [hFtFlash], a       ; (not flashing: his palettes come up with the fade)
+    ldh [hFtFlashShown], a
+    ldh [hFtCueSrc], a      ; (nor his cue's greys up: HRAM's random at power-on)
+    ldh [hFtCueOn], a
+    ld [wFtCueHold], a
+    ld a, FT_BAND_BOTTOM
+    ldh [hFtBandBottom], a
+    ldh [hFtShowBottom], a
+IF DEF(FT_ROPE)
+    ld a, FT_ROPE_LINE      ; the bottom rope's row over his area's first, then his band: interrupts there
+ELSE
+    ld a, FT_BAND_TOP       ; the rival's band scrolls on its own: an interrupt at its top and bottom lines
+ENDC
+    ldh [hFtBandTop], a
+    ret
+
+; The fight's first state (setting up): the referee, the match, his pose, the player's rare poses.
+FtLoadState:
+    ld a, $FF               ; no rare pose of the player's in yet
+    ld [wPlRareIn], a
+    ld [wPlRareWant], a
+    ld [wPlRareLoad], a
+    xor a
+    ld [wPlRegular], a
+IF DEF(FT_NES)
+    ld a, REF_IN            ; the referee is in the ring as the round opens, as in Punch-Out!!
+ELSE
+    ld a, REF_OUT
+ENDC
+    ld [wFtRefX], a
+    ld a, M_BREAK           ; the referee calls the fight first
+    ld [wFtMatch], a
+    ld a, FT_INTRO
+    ld [wFtTimer], a
+    xor a                   ; the map shows the idle pose, and the attack set is loaded with the scene
+    ld [wRvShown], a
+    ld [wRvPose], a
+    ld [wFtSwapWant], a
+    ld [wFtSwapHave], a
+    ld [wFtSwapPos], a
+    ld [wFtSwapPos + 1], a
+    ld [wFtSwapGoing], a
+    ld [wFtCount], a
+    ret
+POPS
+
 IF DEF(FT_NES)
 FtOffColumnsFar:            ; (setup, his data bank in: FtOffColumns from its own bank, his data back after)
     ld a, BANK(FtOffColumns)
@@ -710,6 +736,10 @@ FtOffColumns:
     call .rows
     FT_VWAIT (FT_PIC_ROWS + 1) / 2 * 13 + FT_ROOM_OVER
     ld c, FT_PIC_ROWS - FT_PIC_ROWS / 2
+    call .rows
+    FT_VWAIT 13 + FT_ROOM_OVER  ; and the screen's last row's: the lines his band leaves show it, scrolled as he is
+    ld hl, $9800 + 17 * 32      ; (left as they were, its stray tiles came in at the mat's left)
+    ld c, 1
 .rows:
     ld a, [hl]
     push hl
@@ -1104,7 +1134,8 @@ DEF FT_PIC_VRAM2 EQU $8C00
 DEF FT_VBL_LAST EQU 149        ; the last line VBlank's lesser work (a HUD redraw, 4 tiles of the referee's) may start
 DEF FT_MAC_PIC_ROOM EQU 32     ; Mac's: each copy's tiles (bank 1's sprite tiles, 0 on)
 DEF FT_DMG_MAC_ROOM EQU 18     ; the original's: each copy's (sprite tiles FT_OBJ_FIRST on)
-DEF FT_DPIC_NEXT EQU $4310     ; (and per picture its likely next: PicNextDmg)
+DEF FT_DPIC_LATE EQU $4410     ; (and per picture the last line his top rows' sprites may be built again for it: PicLateDmg)
+DEF FT_DPIC_GUESS EQU $4001    ; (and its guess at his next picture, A: PicGuessDmg, his rules from PicNextDmg)
 DEF FT_DPIC_PLACEX EQU $4490   ; (and per NES frame, then mirrored, where its grey picture sits: x, then y 512 on)
 DEF FT_DPIC_TABLE EQU $4010    ; the original's grey pictures: per picture its tiles (address, bank, count), sprites
 DEF FT_PIC_WHOLE EQU 60        ; a picture of up to this many tiles goes up in one VBlank, its tiles and all
@@ -2146,7 +2177,8 @@ FtDmgDecide:
     ld [$2000], a
     ret
 
-; The one wanted up, the copy not shown idle: the picture likely next (FT_DPIC_NEXT) into it, early.
+; The one wanted up, the copy not shown idle: the picture likely next (FT_DPIC_GUESS: by the one up and the two
+; shown before it) into it, early.
 FtDmgPrefetch:
     ld a, [wRvPicLoad]
     ld hl, wRvPicShown
@@ -2154,25 +2186,7 @@ FtDmgPrefetch:
     ret nz                  ; (one coming in, or in, already)
     ld a, [wFtBankPicsDmg]
     ld [$2000], a
-    ld a, [hl]
-    ld l, a
-    ld h, 0
-    ld b, h
-    ld c, l
-    add hl, hl
-    add hl, bc
-    ld bc, FT_DPIC_NEXT
-    add hl, bc
-    ld a, [hl+]             ; its next; or, after the one before it, the one then
-    ld b, a
-    ld a, [hl+]
-    ld c, a
-    ld a, [wRvPicPrev]
-    cp c
-    ld a, b
-    jr nz, .got
-    ld a, [hl]
-.got:
+    call FT_DPIC_GUESS
     cp $FF
     ret z
     ld hl, wRvPicShown
@@ -2220,6 +2234,8 @@ FtDmgSwitch:
     ld a, [wRvPicBuf]
     xor 1
     ld [wRvPicBuf], a
+    ld a, [wRvPicPrev]
+    ld [wRvPicPrev2], a
     ld a, [wRvPicShown]     ; (the one going down: whole in the copy now not shown)
     ld [wRvPicHidden], a
     ld [wRvPicPrev], a
@@ -2304,6 +2320,18 @@ FtDmgPicsStart:
     ret
 
 
+; A tile in (C: those still to come): on to the next, \1, unless it was the last. Kept short: the next tile's
+; first bytes are due in the very next line's quiet part, its drawing not yet over when this is.
+MACRO FT_DMG_TILE_IN
+    ld a, e                 ; (a tile's 16 bytes: on to the next 256 every 16 tiles)
+    and a
+    jr nz, .in\@
+    inc d
+.in\@:
+    dec c
+    jr nz, \1
+ENDM
+
 ; The next tiles to stream (Mac's first: his few, then his rival's): HL their source (bank mapped), DE where they
 ; go, wFtStreamN the picture's count, wFtStreamDone its count in so far. Z: none.
 FtDmgJob:
@@ -2376,7 +2404,11 @@ ENDC
     ld e, l
     pop hl
 .some:
-    or 1
+    push hl                 ; C: its tiles still to come (counted down as each goes in; FtDmgFlush puts the count back)
+    call FtDmgFlush.count
+    sub [hl]
+    ld c, a                 ; (NZ: some)
+    pop hl
     ret
 .none:
     xor a
@@ -2403,24 +2435,18 @@ ENDC
     push bc
     ret
 
-; A tile in: its count on (Z: the job's done).
-FtDmgTileIn:
-    ld a, e                 ; (a tile's 16 bytes: on to the next 256 every 16 tiles)
-    and a
-    jr nz, .counted
-    inc d
-.counted:
-    push hl
-    ld a, [wFtStreamDone]
+; The job's count in so far put back (C: its tiles still to come). .count: HL its count's address, A its tiles.
+FtDmgFlush:
+    call .count
+    sub c
+    ld [hl], a
+    ret
+.count:
+    ld hl, wFtStreamDone
+    ld a, [hl+]
+    ld h, [hl]
     ld l, a
-    ld a, [wFtStreamDone + 1]
-    ld h, a
-    inc [hl]
-    ld a, [hl]
-    pop hl
-    ld b, a
     ld a, [wFtStreamN]
-    cp b
     ret
 
 ; Before the frame's sprites are built (the original): the pictures just wanted streamed in now, while the lines
@@ -2441,10 +2467,10 @@ FtDmgEarly:
 .tile:
     ldh a, [rLY]
     cp FT_EARLY_LAST
-    jr nc, .out
+    jr nc, .stop
     call FtDmgStream.b0
-    call FtDmgTileIn
-    jr nz, .tile
+    FT_DMG_TILE_IN .tile
+    call FtDmgFlush
     call FtDmgJob           ; (that one in: the next, Mac's first)
     jr nz, .tile
 IF DEF(FT_MAC_PICS)
@@ -2475,6 +2501,8 @@ ENDC
     and a
     ret z
     jp FtAnimate
+.stop:
+    call FtDmgFlush
 .out:
     pop af
     ld [$2000], a
@@ -2501,15 +2529,33 @@ FtDmgStreamVBlank:
     dec b
     jr nz, .half
     ei
-    call FtDmgTileIn
-    jr nz, .tile
+    FT_DMG_TILE_IN .tile
+    call FtDmgFlush
     jr FtDmgStreamVBlank    ; (that one in: the next)
 .stopEi:
     ei
+    call FtDmgFlush
 .stop:
     ld a, [wFtBankData]
     ld [$2000], a
     ret
+
+IF DEF(FT_ROPE)
+; C: time yet to build his top rows' sprites again for the picture going up (wRvPicLoad) before VBlank's work is due
+; (FT_DPIC_LATE: per picture, the last line that may begin on -- by its sprites' count, their building's lines).
+FtDmgLateOk:
+    ld a, [wFtBankPicsDmg]
+    ld [$2000], a
+    ld a, [wRvPicLoad]
+    add LOW(FT_DPIC_LATE)
+    ld l, a
+    ld h, HIGH(FT_DPIC_LATE)
+    ldh a, [rLY]
+    cp [hl]
+    ld a, [wFtBankData]
+    ld [$2000], a
+    ret
+ENDC
 
 ; Out of the frame's work (its sprites built, the CPU free till VBlank): the coming pictures' tiles into their
 ; copies not shown, a few bytes in each line's quiet part (HBlank, then the next line's OAM scan: 41 cycles at the
@@ -2518,14 +2564,16 @@ DEF FT_STREAM_LAST EQU 141     ; the last line a burst may start on
 FtDmgStream:
     call FtDmgJob
     jr z, .stop
-.tile:                      ; a tile in three lines at the most (.b0)
+.tile:                      ; a tile in three lines at the most (.b0), two mostly
     ldh a, [rLY]            ; (VBlank's near, or past: the next frame's)
     cp FT_STREAM_LAST - 2
-    jr nc, .stop
+    jr nc, .flush
     call .b0
-    call FtDmgTileIn
-    jr nz, .tile
+    FT_DMG_TILE_IN .tile
+    call FtDmgFlush
     jr FtDmgStream          ; (that one in: the next)
+.flush:
+    call FtDmgFlush
 .stop:
     ld a, [wFtBankData]
     ld [$2000], a
@@ -2539,8 +2587,7 @@ IF DEF(FT_ROPE)
     ld a, [wRvPicSwitch]
     and a
     jr z, .notYet
-    ldh a, [rLY]            ; (too late in the frame to work it all out again: as it is)
-    cp FT_LATE_UNDO
+    call FtDmgLateOk        ; (too late in the frame to work it all out again: as it is)
     ret nc
     ldh a, [hFtBandY]       ; (going up already -- its last tiles in just now: his band worked out again for it, how
     ld b, a                 ;  far up it may go, and his top rows' sprites with it if that moved him)
@@ -2580,9 +2627,8 @@ IF DEF(FT_ROPE)
     ld a, [wRvPicSwitch]
     and a
     jr z, .notUp            ; (not all in after all)
-    ldh a, [rLY]            ; (decided too late to build his top rows' sprites again before VBlank's work is due:
-    cp FT_LATE_UNDO         ;  as it was, up next frame)
-    jr c, .lateUp
+    call FtDmgLateOk        ; (decided too late to build his top rows' sprites again before VBlank's work is due:
+    jr c, .lateUp           ;  as it was, up next frame)
     pop af
     ld [wRvPicLoadWanted], a
     pop bc
@@ -2623,8 +2669,8 @@ IF DEF(FT_ROPE)
     jp FtBuildOAM.upper
 ENDC
     ret
-DEF FT_LATE_LAST EQU 127       ; (his top rows' sprites built again: 10 to 14 lines, 18 at the most -- an
-DEF FT_LATE_UNDO EQU 124       ;  interrupt or two among them, his band worked out again first -- so begun by 123: done by 145, VBlank's work due by 147)
+DEF FT_LATE_LAST EQU 127       ; (his top rows' sprites built again: 10 to 26 lines, by their count -- an interrupt or two
+                               ;  among them, his band worked out again first -- done by 145, VBlank's work due by 147)
 
 ; A tile's 16 bytes HL -> DE, a line's quiet part at a time: 6 bytes once its drawing's done (30 cycles: the
 ; line's HBlank and the next's OAM scan are 41 at the least, a line of 10 sprites; finding HBlank's start takes up

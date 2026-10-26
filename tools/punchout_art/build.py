@@ -2402,8 +2402,9 @@ def rival_art(key, s, colors, pposes, max_share=24):
                     else:
                         art["pictures"]["jewel"].pop(k, None)
         nxt = json.loads(PIC_NEXT.read_text()).get(key) if PIC_NEXT.exists() else None
-        if nxt:                         # (the original: the picture likely next, loaded early: pic_next.py)
-            art["pictures"]["next"] = {k: v for k, v in nxt.items() if k in frames_ and v[0] in frames_}
+        if nxt:                         # (the original: the picture likely next, by the ones before it, loaded early:
+            art["pictures"]["next"] = {k: [r for r in v if all(c in frames_ for c in r)]   # pic_next.py)
+                                       for k, v in sorted(nxt.items()) if k in frames_}
         write_sheet(HERE / "out" / f"{key}-pictures.png", [frames_[k] for k in sorted(frames_)], RW, RH, cols=13)
         print(f"{r['name']}: {len(frames_)} pictures, exact for Color")
     return art

@@ -1177,9 +1177,10 @@ def _nes_fighter(nes, where, errors):
                                                  for k, v in pl.items())):
             errors.append(f"{where}: the NES pictures are each his area's pixels and palettes, and where each sits.")
             return None
-        nx = (pictures or {}).get("next") or {}     # (the original: per picture, the one likely next: pic_next.py)
-        nx = {k: v for k, v in nx.items() if k in pp and isinstance(v, list) and len(v) == 3
-              and all(c in pp for c in v)} if isinstance(nx, dict) else {}
+        nx = (pictures or {}).get("next") or {}     # (the original: per picture, the one likely next by the ones before
+        nx = {k: [r for r in v if isinstance(r, list) and 1 <= len(r) <= 3 and all(c in pp for c in r)]  # it: pic_next.py)
+              for k, v in nx.items() if k in pp and isinstance(v, list)} if isinstance(nx, dict) else {}
+        nx = {k: v for k, v in nx.items() if v}
         gem = (pictures or {}).get("jewel") or {}      # (Great Tiger's: per picture, where his gem shows)
         if not (isinstance(gem, dict) and all(k in pp and isinstance(v, list) and len(v) == 2
                                               and all(isinstance(c, int) and 0 <= c < 80 for c in v) for k, v in gem.items())):
@@ -1735,9 +1736,9 @@ def compose(scene):
             raise ProjectError([f'Scene "{scene["name"]}": the rival\'s states change {len(cells)} tiles; at most 12 can move.'])
         scene["rival_patch"] = {"cells": cells, "tiles": [[tile_of(cell_key(img, c)) for c in cells] for img in imgs],
                                 "time": d["time"]}
-    times = []                      # the fight's time (Punch-Out!!'s Another World Circuit, its last win): "TIME M:SS.CC,RN",
-    for t in scene.get("aw_texts") or []:   # each digit's cell in each digit
-        if t.get("fight_time"):
+    times = []                      # the fight's time (a title won; the Another World Circuit's last win): "TIME M:SS.CC,RN",
+    for aw, t in [(True, t) for t in scene.get("aw_texts") or []] + [(False, t) for t in scene.get("texts") or []]:
+        if t.get("fight_time"):     # (each digit's cell in each digit)
             cells = []
             for k in (5, 7, 8, 10, 11, 14):
                 c0 = t["y"] * CW + t["x"] + k
@@ -1748,7 +1749,7 @@ def compose(scene):
                         img[y * W + x] = t["text_slot"]
                     glyphs.append(tile_of(cell_key(img, c0)))
                 cells.append(glyphs)
-            times.append((t["x"], t["y"], cells))
+            times.append((t["x"], t["y"], cells, aw))
     scene["time_glyphs"] = times
     scene["aw_patch"] = []          # Punch-Out!!'s Another World Circuit: its words over these, cell by cell
     if scene.get("aw_texts"):

@@ -2,7 +2,7 @@
 budget (the crowd's sound never runs dry, his pictures up no later than they were), Mac's height as the NES's (low
 from a round's first frame, low through a count, walked up by the NES's $70), the star's sparkle over his head when
 the NES has no spot of its own for it, the original Game Boy's screens as they were (their words readable), and the
-HUD's first frame each round (the NES's numbers, not the last round's). QA_UPDATE=1 writes the references instead."""
+HUD's first frame each round (the NES's numbers, not the last round's), the Super Game Boy's packets. QA_UPDATE=1 writes the references instead."""
 import json
 import os
 from pathlib import Path
@@ -13,6 +13,8 @@ REF = ROOT / "tests" / "qa_reference.json"
 GREY = ROOT / "tests" / "golden" / "grey-screens"
 UPDATE = os.environ.get("QA_UPDATE") == "1"
 LATE_MARGIN = 1.5                       # (picture-late %: the bot plays no part, but a picture's tiles can shift)
+LAG_MARGIN = 1.0                        # (his poses up later on the original than on Color, % of them: Mac still, the
+                                        #  same poses at the same frames on both, run to run; a frame's work can shift a few)
 GREY_SCREENS = ["Title", "Challenger", "Challenger: Tyson", "You win", "Joe wins", "You win (TKO): Bull",
                 "Title bout: Honda", "The dream fight", "Pass key", "Credits"]
 
@@ -53,18 +55,60 @@ def _to_fight(g, scene, limit=4000):
     return g.hram("hScene") == scene
 
 
+def crowd_watch(g, rom, scene, cgb):
+    """The crowd's recording (kit_pcm.asm), each restart of the wave channel in the fight: {"under": the Color ring
+    short of the 16 bytes (and as many as the restart's late) it reads, "wrap": a restart so much later than the
+    one before that the channel ran past its buffer (its 32nd step: back to its first, a click)}."""
+    from . import bot
+    S, B = bot._symbols(rom)
+    st, prev, cps = {"under": 0, "wrap": 0}, [None], 3 if cgb else 6     # (the timer's counts a step)
+
+    def tick(_):
+        m = g.pb.memory
+        if g.hram("hScene") != scene or g.hram("hFtActive") != 1:
+            prev[0] = None
+            return
+        d = (m[0xFF05] - m[0xFF06]) & 0xFF              # (the timer's counts since it overflowed: how late)
+        if m[S["wPcmMix"]]:
+            q = m[S["hPcmQ"]]
+            if (m[S["wMixHead"]] - m[S["hPcmPtr"]]) & 0xFF < (d + q // 2) // q + 16:
+                st["under"] += 1
+        if prev[0] is not None and (256 - m[0xFF06]) + d - prev[0] >= 32 * cps:
+            st["wrap"] += 1
+        prev[0] = d
+
+    def restart(_):
+        prev[0] = None
+    g.pb.hook_register(B["PcmTick"], S["PcmTick"], tick, None)
+    for n in ("PcmMaybeFar", "PcmResume", "PcmStop"):
+        g.pb.hook_register(B[n], S[n], restart, None)
+    return st
+
+
 def _passive(rom, scene, cgb, frames):
-    """Mac standing still: the frames, the crowd's sound run dry, his pictures shown late."""
+    """Mac standing still: the frames, the crowd's sound run dry or broken, his pictures shown late (% of frames); per
+    VBlank the picture wanted and the one up after it; frames lost (their work run into VBlank: MainLoop's .late)."""
     from . import bot
     S, B = bot._symbols(rom)
     g = _game(rom, scene, cgb)
-    st = {"under": 0}
-    if "PcmMixOut.back" in S:
-        g.pb.hook_register(B["PcmMixOut.back"], S["PcmMixOut.back"],
-                           lambda _: st.__setitem__("under", st["under"] + (g.hram("hScene") == scene)), None)
+    st = crowd_watch(g, rom, scene, cgb)
+    st.update({"lost": set(), "t": 0})
+    shown = []
+    vblank = g._vblank
+
+    def done(_):                        # (VBlank's work done: the picture the NES wants, the one this frame shows)
+        vblank(_)
+        live = g.hram("hScene") == scene and g.hram("hFtActive") == 1
+        shown.append((g.m[S["wRvPic"]], g.m[S["wRvPicShown"]]) if live else None)
+    g.pb.hook_deregister(B["VBlankDone"], S["VBlankDone"])
+    g.pb.hook_register(B["VBlankDone"], S["VBlankDone"], done, None)
+    g.pb.hook_register(B["MainLoop.late"], S["MainLoop.late"], lambda _: st["lost"].add(st["t"]), None)
     _to_fight(g, scene)
+    shown.clear()
+    st["lost"].clear()
     n = behind = 0
-    for _ in range(frames):
+    for t in range(frames):
+        st["t"] = t
         g.hold([])
         g.tick(False)
         if g.hram("hScene") != scene:
@@ -72,27 +116,68 @@ def _passive(rom, scene, cgb, frames):
         if g.hram("hFtActive") == 1:
             n += 1
             behind += g.m[S["wRvPic"]] != g.m[S["wRvPicShown"]]
+    if cgb and g.m[S["wPcmLoaded"]]:    # (and the recording, in WRAMX's first bank, as the ROM has it: the Color
+        data = Path(rom).read_bytes()   #  ring, in its second, never over it)
+        at = B["CrowdPcm"] * 0x4000 + S["CrowdPcm"] - 0x4000
+        st["wrap"] += bytes(g.pb.memory[1, S["wPcm"]:S["wPcm"] + 512]) != data[at:at + 512]
     g.stop()
-    return n, st["under"], 100 * behind / max(1, n)
+    return n, st["under"] + st["wrap"], 100 * behind / max(1, n), shown, len(st["lost"])
+
+
+def _pose_delays(shown):
+    """Per change of the picture wanted: the VBlanks till it's up (0: at the first, as wanted; 99: never, another
+    wanted first)."""
+    out, pend, prev = [], None, None
+    for i, x in enumerate(shown):
+        if x is None:
+            pend = prev = None
+            continue
+        want, up = x
+        if pend is not None and up == pend[0]:
+            out[pend[1]] = i - pend[2]
+            pend = None
+        if prev is not None and want != prev:
+            if pend is not None:
+                out[pend[1]] = 99
+            out.append(0 if want == up else 99)
+            pend = None if want == up else (want, len(out) - 1, i)
+        prev = want
+    return out
 
 
 def qa_perf(rom):
-    """Each fight, Color and the original, Mac still (3000 frames): the crowd's sound never runs dry; his pictures
-    up late no more often than when last measured."""
+    """Each fight, Color and the original, Mac still (3000 frames): the crowd's sound never runs dry or skips; his
+    pictures up late no more often than when last measured; on the original no frame lost, and his poses up later than on
+    Color (the same poses at the same frames: Mac still) no more often than when last measured."""
     ref, out, lines, good = _ref().get("perf", {}), {}, [], True
+    lag_ref, lag_out, lag_n, lag_later = _ref().get("lag", {}), {}, 0, 0
     for scene, name in _fights():
+        delays, lost = {}, 0
         for cgb in (True, False):
             key = f"{name}|{'cgb' if cgb else 'dmg'}"
-            n, under, late = _passive(rom, scene, cgb, 3000)
+            n, under, late, shown, frames_lost = _passive(rom, scene, cgb, 3000)
+            delays[cgb] = _pose_delays(shown)
+            lost = lost if cgb else frames_lost
             out[key] = round(late, 2)
             ok = under == 0 and (UPDATE or late <= ref.get(key, 100) + LATE_MARGIN)
             good = good and ok
             if not ok or UPDATE:
-                lines.append(f"    {'✓' if ok else '✗'} {key}: {n} frames, sound dry {under}, pictures late {late:.2f}%"
+                lines.append(f"    {'✓' if ok else '✗'} {key}: {n} frames, crowd sound dry or broken {under}, pictures late {late:.2f}%"
                              f" (was {ref.get(key, '-')})")
+        poses = min(len(delays[True]), len(delays[False]))
+        later = sum(1 for d, c in zip(delays[False], delays[True]) if d > c)
+        pct = round(100 * later / max(1, poses), 2)
+        lag_out[name], lag_n, lag_later = pct, lag_n + poses, lag_later + later
+        ok = lost == 0 and (UPDATE or pct <= lag_ref.get(name, 0) + LAG_MARGIN)
+        good = good and ok
+        if not ok or UPDATE:
+            lines.append(f"    {'✓' if ok else '✗'} {name}|dmg: {poses} poses, {later} up later than on Color ({pct:.2f}%,"
+                         f" was {lag_ref.get(name, '-')}), frames lost {lost}")
     if UPDATE:
         _save_ref("perf", out)
-    lines.append(f"    {'✓' if good else '✗'} {len(out)} fights' frames within budget")
+        _save_ref("lag", lag_out)
+    lines.append(f"    {'✓' if good else '✗'} {len(out)} fights' frames within budget; the original's poses up later than"
+                 f" Color's: {lag_later} of {lag_n} ({100 * lag_later / max(1, lag_n):.1f}%)")
     return good, lines
 
 
@@ -295,4 +380,99 @@ def qa_reset(rom):
         if not ok:
             lines.append(f"    ✗ {'cgb' if cgb else 'dmg'}: fight {fought}, reset {reset}, fight again {again}")
     lines.append(f"    {'✓' if good else '✗'} A+B+Select+Start mid-fight: the game over from the start, both machines")
+    return good, lines
+
+
+def _sgb_boot(rom, c, cgb=False, frames=150):
+    """Power-on with the boot ROM's C as given ($14: a Super Game Boy's), A as the original's: the packets the ROM
+    sends through P1 (each from its bits, as SgbSend puts them out), the frame each starts on, and VRAM as each
+    transfer shows it (the screen's tiles, its map rows, LCDC, BGP)."""
+    from pyboy import PyBoy
+    from . import bot
+    S, B = bot._symbols(rom)
+    pb = PyBoy(str(rom), window="null", cgb=cgb, sound_emulated=False)
+    st = {"bits": None, "packets": [], "shown": [], "t": 0, "at": 0}
+
+    def start(_):
+        pb.register_file.C = c
+        if not cgb:
+            pb.register_file.A = 1
+
+    def done():
+        b = st["bits"][:128]
+        st["packets"].append((st["at"], bytes(sum(b[i * 8 + k] << k for k in range(8)) for i in range(16))))
+        st["bits"] = None
+
+    def packet(_):
+        if st["bits"] is not None and len(st["bits"]) >= 128:
+            done()
+        st["bits"], st["at"] = [], st["t"]
+
+    def bit(_):
+        st["bits"].append(pb.register_file.A == 0x10)
+
+    def shown(_):                       # (a transfer's packet sent: its VRAM on show)
+        m = pb.memory
+        st["shown"].append({"tiles": bytes(m[0x8000:0x9000]), "lcdc": m[0xFF40], "bgp": m[0xFF47],
+                            "map": [bytes(m[0x9800 + 32 * r:0x9800 + 32 * r + 20]) for r in range(13)]})
+    pb.hook_register(B["Start"], S["Start"], start, None)
+    if "SgbSend" in S:
+        pb.hook_register(B["SgbSend.packet"], S["SgbSend.packet"], packet, None)
+        pb.hook_register(B["SgbSend.one"], S["SgbSend.one"], bit, None)
+        pb.hook_register(B["SgbTransfer.shown"], S["SgbTransfer.shown"], shown, None)
+    for t in range(frames):
+        st["t"] = t
+        pb.tick(1, False)
+    if st["bits"] is not None and len(st["bits"]) >= 128:
+        done()
+    up = pb.memory[S["hScene"]] == _project()["start"]
+    pb.stop()
+    return st["packets"], st["shown"], up
+
+
+def qa_sgb(rom):
+    """The Super Game Boy (PyBoy has none: the packets the ROM puts out, read off its own sender): the header's SGB
+    flag and old licensee $33; on an SGB, at boot, the screen held (MASK_EN), the border's tiles (CHR_TRN, both
+    halves) and map with its palette (PCT_TRN) each shown as the SGB reads them, the grey look's colors (PAL01), the
+    screen shown again; four frames between packets; nothing sent on a Game Boy or a Color."""
+    from . import codegen
+    lines, good = [], True
+    data = Path(rom).read_bytes()
+
+    def check(ok, what):
+        nonlocal good
+        good = good and ok
+        lines.append(f"    {'✓' if ok else '✗'} {what}")
+    check(data[0x146] == 0x03 and data[0x14B] == 0x33,
+          f"header: SGB flag ${data[0x146]:02X}, old licensee ${data[0x14B]:02X}")
+    border = bytes.fromhex(codegen.SGB_BORDER.read_text())
+    packets, shown, up = _sgb_boot(rom, 0x14)
+    heads = [p[0] for _, p in packets]
+    want = [0xB9, 0x99, 0x99, 0xA1, 0x01, 0xB9]
+    check(heads == want, "packets in turn: MASK_EN, CHR_TRN x2, PCT_TRN, PAL01, MASK_EN"
+          + ("" if heads == want else f" (sent: {' '.join(f'${h:02X}' for h in heads)})"))
+    if heads == want:
+        p = [q for _, q in packets]
+        check(p[0][1] == 1 and p[5][1] == 0, "the screen held through the transfers, shown after")
+        check(p[1][1] == 0 and p[2][1] == 1, "CHR_TRN: tiles 0-127, then 128-255")
+        g = codegen.SGB_GREENS
+        col = lambda c: (c[0] >> 3) | (c[1] >> 3) << 5 | (c[2] >> 3) << 10
+        pal = [int.from_bytes(p[4][1 + 2 * k:3 + 2 * k], "little") for k in range(7)]
+        check(pal == [col(x) for x in g + g[1:]], "PAL01: the grey look's four greens")
+        gaps = [b[0] - a[0] for a, b in zip(packets, packets[1:])]
+        check(all(d >= 4 for d in gaps), f"four frames between packets (frames apart: {gaps})")
+    if len(shown) == 3:
+        seq = all(m == bytes((r * 20 + x) & 0xFF for x in range(20)) for s in shown for r, m in enumerate(s["map"]))
+        check(seq and all(s["lcdc"] == 0x91 and s["bgp"] == 0xE4 for s in shown),
+              "each transfer's VRAM on show: tiles 0-255 in order, BGP $E4, LCDC $91")
+        check(shown[0]["tiles"] == border[:0x1000] and shown[1]["tiles"] == border[0x1000:0x2000],
+              "the border's tiles as made (sgb_border.hex)")
+        check(shown[2]["tiles"][:0x700] == border[0x2000:0x2700]
+              and shown[2]["tiles"][0x800:0x820] == border[0x2700:0x2720], "the border's map and palette as made")
+    else:
+        check(False, f"three transfers shown ({len(shown)})")
+    check(up, "the first scene up after")
+    for c, cgb, what in ((0x13, False, "a Game Boy"), (0x00, True, "a Color")):
+        packets, shown, up = _sgb_boot(rom, c, cgb)
+        check(not packets and not shown and up, f"nothing sent on {what}")
     return good, lines

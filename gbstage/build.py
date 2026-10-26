@@ -43,5 +43,7 @@ def build_rom(asm_source, title, cgb=False, info=None):
         fix = [deps.rgbds_tool(info, "rgbfix"), "-v", "-p", "0xFF", "-t", title] + (["-m", "0x19"] if banked else [])
         if cgb:
             fix.append("-c")
+        if "DEF SGB_SUPPORT EQU 1" in asm_source:   # Super Game Boy functions: the SGB flag and old licensee $33
+            fix += ["-s", "-l", "0x33", "-k", "00"]  # (which the SGB wants; the new licensee code left "00")
         _run("rgbfix", fix + [str(rom)])
         return Build(rom.read_bytes(), map_file.read_text(), sym_file.read_text())
