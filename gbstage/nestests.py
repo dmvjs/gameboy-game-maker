@@ -82,9 +82,9 @@ class Gb:
                 m.write(self.sym["hBank"][1], self.sym[bank][0])
         if a is not None:
             self.set_a(a)
-        cpu.sp = 0xDFF0
-        m.write(0xDFEE, SENTINEL & 0xFF); m.write(0xDFEF, SENTINEL >> 8)
-        cpu.sp = 0xDFEE
+        top = self.sym["wStackTop"][1]       # (the game's own stack, in WRAM0: the crowd's PcmStart switches WRAMX)
+        m.write(top - 2, SENTINEL & 0xFF); m.write(top - 1, SENTINEL >> 8)
+        cpu.sp = top - 2
         cpu.pc = self.sym[name][1]
         for _ in range(500_000):
             if cpu.pc == SENTINEL:

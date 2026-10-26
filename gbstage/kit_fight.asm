@@ -946,6 +946,7 @@ IF DEF(FT_NES)
     ret
 ENDC
 
+;;FIGHT BANK {          ; (codegen: into each fight's data bank -- run with it mapped, called at no cost)
 IF DEF(FT_NES)
 ; His palettes in his dodge cue, for VBlank to put up (FtFlashPalettes, 2): each palette's outline
 ; (RivalCueOutline) in the color the game holds now ($05EC, an NES color: NesRgb). Out of VBlank, when that
@@ -1016,6 +1017,7 @@ FtCueBuild:
     ret
 
 ENDC
+;;FIGHT BANK }
 
 ; His palettes late (hFtPalLate): wait for a line's HBlank, interrupts off (none may push the bytes past it); else
 ; at once. FtPalDone: interrupts back after.
@@ -1140,6 +1142,7 @@ DEF FT_DPIC_PLACEX EQU $4490   ; (and per NES frame, then mirrored, where its gr
 DEF FT_DPIC_TABLE EQU $4010    ; the original's grey pictures: per picture its tiles (address, bank, count), sprites
 DEF FT_PIC_WHOLE EQU 60        ; a picture of up to this many tiles goes up in one VBlank, its tiles and all
 
+;;FIGHT BANK {          ; (codegen: into each fight's data bank -- run with it mapped, called at no cost)
 FtVBlank:
 IF DEF(FT_NES)
     ld a, [wFtCueTile]      ; (the crowd's tell: its cell, first, on the frame it's due, as the NES's)
@@ -1408,6 +1411,7 @@ ENDC
     ld a, [wPlRegular]
     ret
 
+;;FIGHT BANK }
 ; The player's rare pose loading (wPlRareLoad) into its area: FT_REF_STEP tiles a call; once all are in, it shows.
 FtPlStep:
     ld a, [wFtBankData]
@@ -3034,6 +3038,7 @@ ENDC
 
 ENDC
 ; BC bytes from DE to HL (the screen off; or on, as a fight loads on Color: FT_LOAD_ON). DE, HL past them after.
+;;FIGHT BANK {          ; (codegen: into each fight's data bank -- run with it mapped, called at no cost)
 FtCopy:
     ldh a, [hIsCGB]         ; Color: whole tiles into video memory by DMA (a copy as the fight loads: on Color
     and a                   ; it loads with the display on, black, a VBlank's worth at a time)
@@ -3255,6 +3260,7 @@ ENDC
 
 ; Copy the next few tiles of the wanted set (knockdown or attack) into video memory.
 ; Returns NZ if it did work this VBlank.
+;;FIGHT BANK }
 IF DEF(FT_ALL_PICS)
 FtSwapStep:
     xor a                   ; (every fight in pictures: no pose sets to swap; Z: no work)
@@ -3480,6 +3486,17 @@ FtSwapStep:
 ; ---- the frame ----
 
 ENDC
+; How far up he's shown standing, per pixel up the NES puts him (0-63): one for one for his bobbing, then
+; easing to FT_STAND_UP over a step back (the NES walks him up to 37 pixels away; his band can't follow).
+IF !DEF(FT_ROPE)
+FtStandUp:
+    db $00, $FF, $FE, $FD, $FD, $FD, $FD, $FD, $FD, $FD, $FC, $FC, $FC, $FC, $FC, $FC
+    db $FC, $FC, $FC, $FC, $FC, $FC, $FB, $FB, $FB, $FB, $FB, $FB, $FB, $FB, $FB, $FB
+    db $FB, $FB, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA
+    db $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA
+ENDC
+
+;;FIGHT BANK {          ; (codegen: into each fight's data bank -- run with it mapped, called at no cost)
 FightUpdate:
     call FtCrowd
 IF DEF(FT_NES)
@@ -3630,15 +3647,6 @@ ENDC
     ld [wFtRefX], a
     ret
 
-; How far up he's shown standing, per pixel up the NES puts him (0-63): one for one for his bobbing, then
-; easing to FT_STAND_UP over a step back (the NES walks him up to 37 pixels away; his band can't follow).
-IF !DEF(FT_ROPE)
-FtStandUp:
-    db $00, $FF, $FE, $FD, $FD, $FD, $FD, $FD, $FD, $FD, $FC, $FC, $FC, $FC, $FC, $FC
-    db $FC, $FC, $FC, $FC, $FC, $FC, $FB, $FB, $FB, $FB, $FB, $FB, $FB, $FB, $FB, $FB
-    db $FB, $FB, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA
-    db $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA, $FA
-ENDC
 
 ; The rival's motion as a pixel offset: B = x (right), C = y (down). Small, drawn from his state.
 FtAnimate:
@@ -3899,6 +3907,7 @@ ENDC
     ldh [hFtBandGap], a
     ret
 
+;;FIGHT BANK }
 Wobble:
     db 0, 1, 2, 1, 0, -1, -2, -1
 IdleCycle:
@@ -4922,6 +4931,7 @@ FtTimedMoves:
     ret
 
 ENDC
+;;FIGHT BANK {          ; (codegen: into each fight's data bank -- run with it mapped, called at no cost)
 FtResetBoxers:              ; both back to neutral
     xor a
     ld [wFtSwapWant], a
@@ -4932,6 +4942,7 @@ FtResetBoxers:              ; both back to neutral
     ld a, 30
     ld [wRvTimer], a
     jp FtStand
+;;FIGHT BANK }
 
 IF !DEF(FT_NES)
 FtBreak:
@@ -5231,6 +5242,7 @@ FtSpark:
     ret
 
 ENDC
+IF !DEF(FT_NES)             ; (the NES game's fight: no sweat thrown, the kit's own)
 ; Sweat flies off his head: three beads, thrown up and out.
 FtSweat:
     ld hl, wFtSweat
@@ -5250,6 +5262,7 @@ SweatStart:                 ; x, y (OAM, from his mouth), x speed, y speed: spra
     db FT_STAR_X - 4, FT_STAR_Y + 18, -3, -2
     db FT_STAR_X, FT_STAR_Y + 16, -1, -4
     db FT_STAR_X + 4, FT_STAR_Y + 18, 2, -3
+ENDC
 
 ; Move the beads; gravity every other frame.
 FtSweatStep:
@@ -5941,6 +5954,7 @@ FtRivalOpen:
 
 ENDC
 ; Start the next step of the rival's script.
+;;FIGHT BANK {          ; (codegen: into each fight's data bank -- run with it mapped, called at no cost)
 FtNextOp:
     ld a, [wFtSwapHave]     ; only with the attack poses in video memory
     and a
@@ -5969,6 +5983,7 @@ FtNextOp:
     ld [wRvScript], a
     ld a, h
     ld [wRvScript + 1], a
+;;FIGHT BANK }
 IF !DEF(FT_NES)
 FtStartOp:                  ; B = op, C = argument
     ld a, c
@@ -6029,6 +6044,7 @@ FtStartOp:                  ; B = op, C = argument
     ret
 
 ENDC
+;;FIGHT BANK {          ; (codegen: into each fight's data bank -- run with it mapped, called at no cost)
 FtStand:                    ; standing guard: gloves low cover the body, gloves high the face
     ld a, RV_IDLE
     ld [wRvState], a
@@ -6056,6 +6072,7 @@ FtStandPose:                ; idle (bouncing) or guard; plain idle while another
 .pose:
     ld [wRvPose], a
     ret
+;;FIGHT BANK }
 
 IF !DEF(FT_NES)
 ; B = damage to the player
@@ -6216,6 +6233,7 @@ FtRivalDown:
     jp FtFrame
 
 ENDC
+IF !DEF(FT_NES)             ; (the NES game's fight: its own celebrations)
 ; Show the celebration once its tiles are loaded.
 FtCheer:
     ld a, [wFtSwapHave]
@@ -6224,6 +6242,7 @@ FtCheer:
     ld a, RP_TAUNT
     ld [wRvPose], a
     ret
+ENDC
 
 IF !DEF(FT_NES)
 FtPlayerDown:
@@ -6370,6 +6389,7 @@ ENDC
 .sound:
     jp PlaySfx
 
+IF !DEF(FT_NES)             ; (the NES game's fight: FtNesEnd)
 FtEndPause:
     ld a, [wFtResume]       ; the round's over: no celebrating
     and a
@@ -6394,10 +6414,12 @@ FtEndPause:
     call FtCareerResult
     call FtResultScene
     jp StartTransition
+ENDC
 
 ; Mac's record and where a loss takes him, as Punch-Out!!'s: a win counts (a KO or TKO a KO too); a loss
 ; counts, then the third (or the last fight's) is game over, a title bout's drops him down the ranks, a first
 ; loss to him is a rematch, a lost rematch drops him a place (not below his circuit's first: a rematch again).
+;;FIGHT BANK {          ; (codegen: into each fight's data bank -- run with it mapped, called at no cost)
 FtCareerResult:
     ld a, [wFtCareer]
     and a
@@ -6480,6 +6502,7 @@ FtCareerResult:
     inc [hl]
     ret
 
+;;FIGHT BANK }
 ; A new career: no wins, no losses.
 RecReset::
     xor a
@@ -6522,6 +6545,7 @@ ScreensBack:
     ret
 
 ; A = the scene the fight goes on to, from its result (won, lost, the corner): this fight's own (FtFights).
+;;FIGHT BANK {          ; (codegen: into each fight's data bank -- run with it mapped, called at no cost)
 FtResultScene:
     ld a, [wFtResult]
     cp FT_LOSE_SCENE
@@ -6751,9 +6775,11 @@ FtCrowdDraw:
     ENDR
     ret
 
+;;FIGHT BANK }
 ; ---- sprites ----
 
 ; The impact burst: one tile four ways, 16x16. HL = next OAM entry.
+IF FT_FX_SPARK              ; (the sprite effects, their flags off: not assembled)
 FtSparkSprites:
     ld a, [wFtSparkT]
     and a
@@ -6791,6 +6817,8 @@ FtSparkSprites:
     ret
 
 ; The sweat beads, if any are flying. HL = next OAM entry.
+ENDC
+IF FT_FX_SWEAT
 FtSweatSprites:
     ld a, [wFtSweatT]
     and a
@@ -6817,6 +6845,8 @@ FtSweatSprites:
     ret
 
 ; Stars circling his head while he's down or getting up. HL = next OAM entry.
+ENDC
+IF FT_FX_STARS
 FtStars:
     ld a, [wRvState]
     cp RV_OPEN              ; dazed after a miss
@@ -6891,9 +6921,11 @@ FtStars:
     dec c
     jr nz, .star
     ret
+ENDC
 
-IF DEF(FT_TWINKLE_TILE)
 DEF TWINKLE_OVER EQU 10     ; (its top this far over his head: a few pixels clear, as the NES's)
+;;FIGHT BANK {          ; (codegen: into each fight's data bank -- run with it mapped, called at no cost)
+IF DEF(FT_TWINKLE_TILE)
 ; A star just earned: it twinkles beside his head, where the NES's does, while its count runs ($0343: 20
 ; frames). HL = the next OAM entry.
 FtTwinkle:
@@ -6958,6 +6990,7 @@ ENDC
     ld [hl+], a
     ret
 ENDC
+;;FIGHT BANK }
 
 IF DEF(FT_ROPE) && DEF(FT_NES)
 ; His turban's gem (RivalJewel: Great Tiger's), a sprite of its own where his pose shows it, his band's offsets
@@ -7258,43 +7291,52 @@ ENDC
     ret
 IF DEF(FT_NES)
 ; Z: his top rows' sprites as last built -- the same picture, its copy, his band's x and y, from the same place in
-; the list (its next entry's low byte at [SP + 2]): there still. Either way, these noted for next frame's.
+; the list (its next entry's low byte at [SP + 2]): there still. Either way, these noted for next frame's (field by
+; field: at the first that differs, it and the rest).
+ASSERT HIGH(wFtHeadKey) == HIGH(wFtHeadKey + 4), "wFtHeadKey: in one page"
 .same:
     ld hl, sp + 2
     ld a, [hl]
     ld hl, wFtHeadKey + 4
-    ld b, [hl]
-    ld [hl], a
-    xor b
-    ld e, a
-    ld hl, wFtHeadKey
+    cp [hl]
+    jr nz, .new4
+    ld l, LOW(wFtHeadKey)
     ld a, [wRvPicHeads]
-    ld b, [hl]
-    ld [hl+], a
-    xor b
-    or e
-    ld e, a
+    cp [hl]
+    jr nz, .new0
+    inc l
     ld a, [wRvPicHeadsBuf]
-    ld b, [hl]
-    ld [hl+], a
-    xor b
-    or e
-    ld e, a
+    cp [hl]
+    jr nz, .new1
+    inc l
     ldh a, [hFtBandX]
-    ld b, [hl]
-    ld [hl+], a
-    xor b
-    or e
-    ld e, a
+    cp [hl]
+    jr nz, .new2
+    inc l
     ldh a, [hFtBandY]
-    ld b, [hl]
+    cp [hl]
+    ret z
+    ld [hl], a              ; (NZ, as each is noted: loads and stores keep the flags)
+    ret
+.new4:
     ld [hl], a
-    xor b
-    or e
+    ld l, LOW(wFtHeadKey)
+    ld a, [wRvPicHeads]
+.new0:
+    ld [hl+], a
+    ld a, [wRvPicHeadsBuf]
+.new1:
+    ld [hl+], a
+    ldh a, [hFtBandX]
+.new2:
+    ld [hl+], a
+    ldh a, [hFtBandY]
+    ld [hl], a
     ret
 ENDC
 ENDC
 
+;;FIGHT BANK {          ; (codegen: into each fight's data bank -- run with it mapped, called at no cost)
 IF DEF(FT_SIDE_TILE)
 ; The ring's side ropes, down off the posts to the screen's edges: their ends below the crowd's rows (fixed: the
 ; lines there scroll with his band). HL = the next OAM entry.
@@ -7303,7 +7345,39 @@ FtSideRopes:
     ldh a, [hIsCGB]
     and a
     jr nz, .cgb
-    ld de, FtSideRopeOAMDmg
+    ld a, FT_SIDE_Y         ; (the original: its own copy of the tiles, OBP0 -- his ring's greys up there; written
+    ld [hl+], a             ;  straight, no table: the frame's work, every frame)
+    ld a, 8
+    ld [hl+], a
+    ld a, FT_SIDE_TILE_DMG
+    ld [hl+], a
+    ld a, $80
+    ld [hl+], a
+    ld a, FT_SIDE_Y + 8
+    ld [hl+], a
+    ld a, 8
+    ld [hl+], a
+    ld a, FT_SIDE_TILE_DMG + 1
+    ld [hl+], a
+    ld a, $80
+    ld [hl+], a
+    ld a, FT_SIDE_Y
+    ld [hl+], a
+    ld a, 160
+    ld [hl+], a
+    ld a, FT_SIDE_TILE_DMG
+    ld [hl+], a
+    ld a, $A0
+    ld [hl+], a
+    ld a, FT_SIDE_Y + 8
+    ld [hl+], a
+    ld a, 160
+    ld [hl+], a
+    ld a, FT_SIDE_TILE_DMG + 1
+    ld [hl+], a
+    ld a, $A0
+    ld [hl+], a
+    ret
 .cgb:
     ld b, 4 * 4
 .copy:
@@ -7318,18 +7392,16 @@ FtSideRopeOAM:
     db FT_SIDE_Y + 8, 8, FT_SIDE_TILE + 1, FT_SIDE_ATTR | $80
     db FT_SIDE_Y, 160, FT_SIDE_TILE, FT_SIDE_ATTR | $A0
     db FT_SIDE_Y + 8, 160, FT_SIDE_TILE + 1, FT_SIDE_ATTR | $A0
-FtSideRopeOAMDmg:           ; (the original: its own copy of the tiles, OBP0 -- his ring's greys up there)
-    db FT_SIDE_Y, 8, FT_SIDE_TILE_DMG, $80
-    db FT_SIDE_Y + 8, 8, FT_SIDE_TILE_DMG + 1, $80
-    db FT_SIDE_Y, 160, FT_SIDE_TILE_DMG, $A0
-    db FT_SIDE_Y + 8, 160, FT_SIDE_TILE_DMG + 1, $A0
 ENDC
+;;FIGHT BANK }
 
+IF FT_FX_STARS
 StarOrbit:                  ; an ellipse: dx, dy in 16 steps
     db 0, -4,  5, -4,  9, -3,  12, -1,  13, 1,  12, 3,  9, 5,  5, 6
     db 0, 6,  -5, 6,  -9, 5,  -12, 3,  -13, 1,  -12, -1,  -9, -3,  -5, -4
 StarHeadY:                  ; head top, per knockdown pose
     db 8, 16, 24, 8, 8
+ENDC
 
 ; The player's vertical motion: A = y offset (down). Bobbing, lunging, recoiling, crouching.
 FtPlayerMotion:
@@ -7397,7 +7469,10 @@ ENDC
 
 
 ; The referee's sprites and words, about to be built at HL: Z if they're as last built in this list (D: where they
-; ended); NZ otherwise (this key noted, for these). Keeps HL.
+; ended); NZ otherwise (this key noted, for these). Keeps HL. (Compared field by field: at the first that differs,
+; it and the rest noted -- those before it are as they were.)
+;;FIGHT BANK {          ; (codegen: into each fight's data bank -- run with it mapped, called at no cost)
+ASSERT HIGH(wFtRefKey) == HIGH(wFtRefKey + 15), "wFtRefKey: in one page"
 FtRefSame:
     push hl
     ld a, h
@@ -7406,54 +7481,64 @@ FtRefSame:
     add a
     add a
     add LOW(wFtRefKey)
-    ld e, a
-    adc HIGH(wFtRefKey)
-    sub e
-    ld d, a
-    ld a, l                 ; where they begin
-    ld h, d
-    ld l, e
-    ld b, [hl]
-    ld [hl+], a
-    xor b
-    ld e, a
+    ld h, HIGH(wFtRefKey)
+    ld e, l                 ; (where they begin)
+    ld l, a
+    ld a, e
+    cp [hl]
+    jr nz, .new0
+    inc l
     ld a, [wFtRefShown]
-    ld b, [hl]
-    ld [hl+], a
-    xor b
-    or e
-    ld e, a
+    cp [hl]
+    jr nz, .new1
+    inc l
     ld a, [wFtRefX]
-    ld b, [hl]
-    ld [hl+], a
-    xor b
-    or e
-    ld e, a
+    cp [hl]
+    jr nz, .new2
+    inc l
     ld a, [wFtRefSlot]
-    ld b, [hl]
-    ld [hl+], a
-    xor b
-    or e
-    ld e, a
+    cp [hl]
+    jr nz, .new3
+    inc l
     ld a, [wFtSay]
-    ld b, [hl]
-    ld [hl+], a
-    xor b
-    or e
-    ld e, a
+    cp [hl]
+    jr nz, .new4
+    inc l
     ld a, [wFtCount]
-    ld b, [hl]
+    cp [hl]
+    jr nz, .new5
+    inc l
+    ld d, [hl]
+    pop hl
+    xor a                   ; (Z: INC L took it)
+    ret
+.new0:                      ; (NZ, as each is noted: loads and stores keep the flags)
     ld [hl+], a
-    xor b
-    or e
+    ld a, [wFtRefShown]
+.new1:
+    ld [hl+], a
+    ld a, [wFtRefX]
+.new2:
+    ld [hl+], a
+    ld a, [wFtRefSlot]
+.new3:
+    ld [hl+], a
+    ld a, [wFtSay]
+.new4:
+    ld [hl+], a
+    ld a, [wFtCount]
+.new5:
+    ld [hl+], a
     ld d, [hl]
     pop hl
     ret
 
+;;FIGHT BANK }
 IF DEF(FT_MAC_PICS) && DEF(FT_NES)
 ; Mac's sprites, his pictures', about to be built at DE (its list's page in D) from his picture wPlPicHeads with
 ; hFtPlY/X/Tile, BC his palette's mask and bits: Z if they're as last built in this list (HL: where they ended);
-; NZ otherwise (this key noted, for these). Either way, the path noted.
+; NZ otherwise (this key noted, for these). Either way, the path noted. (Field by field, as FtRefSame.)
+ASSERT HIGH(wFtMacKey) == HIGH(wFtMacKey + 15), "wFtMacKey: in one page"
 FtMacSame:
     ld a, 1
     ld [wFtMacPath], a
@@ -7464,51 +7549,57 @@ FtMacSame:
     add a
     add LOW(wFtMacKey)
     ld l, a
-    adc HIGH(wFtMacKey)
-    sub l
-    ld h, a
-    push bc
+    ld h, HIGH(wFtMacKey)
     ld a, e                 ; where they begin
-    ld b, [hl]
-    ld [hl+], a
-    xor b
-    ld e, a
+    cp [hl]
+    jr nz, .new0
+    inc l
     ld a, [wPlPicHeads]
-    ld b, [hl]
-    ld [hl+], a
-    xor b
-    or e
-    ld e, a
+    cp [hl]
+    jr nz, .new1
+    inc l
     ldh a, [hFtPlTile]
-    ld b, [hl]
-    ld [hl+], a
-    xor b
-    or e
-    ld e, a
+    cp [hl]
+    jr nz, .new2
+    inc l
     ldh a, [hFtPlY]
-    ld b, [hl]
-    ld [hl+], a
-    xor b
-    or e
-    ld e, a
+    cp [hl]
+    jr nz, .new3
+    inc l
     ldh a, [hFtPlX]
-    ld b, [hl]
-    ld [hl+], a
-    xor b
-    or e
-    pop bc
-    ld e, a
+    cp [hl]
+    jr nz, .new4
+    inc l
     ld a, b
-    ld b, [hl]
-    ld [hl+], a
-    xor b
-    or e
-    ld e, a
+    cp [hl]
+    jr nz, .new5
+    inc l
     ld a, c
-    ld b, [hl]
+    cp [hl]
+    jr nz, .new6
+    inc l
+    xor a                   ; (Z: INC L took it)
+    ret
+.new0:                      ; (NZ, as each is noted: loads and stores keep the flags)
     ld [hl+], a
-    xor b
-    or e
+    ld a, [wPlPicHeads]
+.new1:
+    ld [hl+], a
+    ldh a, [hFtPlTile]
+.new2:
+    ld [hl+], a
+    ldh a, [hFtPlY]
+.new3:
+    ld [hl+], a
+    ldh a, [hFtPlX]
+.new4:
+    ld [hl+], a
+    ld a, b
+.new5:
+    ld [hl+], a
+    ld a, c
+.new6:
+    ld [hl+], a
     ret
 ENDC
 
@@ -8196,6 +8287,8 @@ FtNesFrame:
 ; The crowd's cameras, as Punch-Out!!'s: flashing while either is down (and on through the count, his KO) and as he
 ; walks in. And the crowd's tells: his script's $46 1 (the moment to punch), the fight's spectator moves (its cue,
 ; $05BE: NES bank 7 $8A2A's tile; a camera for Bald Bull, the bearded man for Piston Honda; wFtCue: FtVBlank puts it).
+;;FIGHT BANK {          ; (codegen: into each fight's data bank -- run with it mapped, called at no cost)
+IF DEF(FT_NES)
 FtNesCameras:
     ld a, [wNes + $46]
     dec a
@@ -8346,6 +8439,8 @@ ENDC
     ld [wFtCountTimer], a
     ret
 
+ENDC
+;;FIGHT BANK }
 ; $00 negative: the fight's over ($FC TKO, $FD Mac out, $FE KO) or the round's time is up ($FF).
 FtNesOver:
     ld a, [wFtMatch]
@@ -8397,7 +8492,13 @@ FtNesOver:
     ld [$2000], a
     ret
 .decision:
+    ld a, [wFtBankNes]      ; (NesDecision: in his NES bank, as NesRoundStart)
+    ld [$2000], a
     call NesDecision
+    ld b, a
+    ld a, [wFtBankData]
+    ld [$2000], a
+    ld a, b
     cp 1
     ld a, FT_WIN_SCENE
     jp z, FtFinish
@@ -8880,6 +8981,8 @@ FtPlPicsStart:
 ENDC
 
 ; The HUD from the NES's numbers: HP ($0392 Mac, $0399 him), hearts (BCD $0323/$0324), stars ($0342).
+;;FIGHT BANK {          ; (codegen: into each fight's data bank -- run with it mapped, called at no cost)
+IF DEF(FT_NES)
 FtNesHud:
     ld a, [wNes + $0393]    ; the bars follow the shown HP (it steps a point a frame)
     ld b, a
@@ -8955,4 +9058,6 @@ FtNesHud:
     ld a, 1
     ld [wFtHudDirty], a
     ret
+ENDC
+;;FIGHT BANK }
 ENDC

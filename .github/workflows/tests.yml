@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test: [career, losses, routes, pass_key, another_world, original_flow, nes_keys, nes_flows, another_world_won, beat_mac, tells, glitches, another_world_played, random, qa_perf, qa_mac, qa_star, qa_grey, qa_hud, qa_reset, qa_sgb]
+        test: [career, losses, routes, pass_key, another_world, original_flow, nes_keys, nes_flows, another_world_won, beat_mac, tells, glitches, another_world_played, random, qa_perf, qa_mac, qa_star, qa_grey, qa_hud, qa_reset, qa_sgb, qa_decision]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

@@ -476,3 +476,38 @@ def qa_sgb(rom):
         packets, shown, up = _sgb_boot(rom, c, cgb)
         check(not packets and not shown and up, f"nothing sent on {what}")
     return good, lines
+
+
+def qa_decision(rom):
+    """A fight gone the distance, Color and the original: the last round's bell to the NES's decision, on points
+    ($03E8 against his mark, $05C8): Mac ahead, his win screen; behind, his loss."""
+    from . import bot
+    lines, good = [], True
+    first = _fights()[0][0]
+    names = [s["name"] for s in _project()["scenes"]]
+    for cgb in (True, False):
+        for ahead in (True, False):
+            g = _game(rom, first, cgb)
+            S, _ = bot._symbols(rom)
+            reached = _to_fight(g, first)
+            for _ in range(60):
+                g.hold([])
+                g.tick(False)
+            g.m[S["wFtRound"]] = 3
+            g.m[g.w + 0x06] = 3
+            g.m[g.w + 0x0302], g.m[g.w + 0x0304], g.m[g.w + 0x0305] = 2, 5, 8
+            end = None
+            for _ in range(1500):
+                g.m[g.w + 0x03E8] = 9 if ahead else 0
+                g.hold([])
+                g.tick(False)
+                if g.hram("hScene") != first:
+                    end = names[g.hram("hScene")]
+                    break
+            g.stop()
+            ok = reached and end is not None and end.endswith("wins") != ahead
+            good = good and ok
+            if not ok:
+                lines.append(f"    ✗ {'cgb' if cgb else 'dmg'}, Mac {'ahead' if ahead else 'behind'}: {end}")
+    lines.append(f"    {'✓' if good else '✗'} a decision after round 3, both ways, both machines")
+    return good, lines

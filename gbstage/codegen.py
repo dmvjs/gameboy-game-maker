@@ -25,6 +25,23 @@ STACK_SIZE = 64
 KIT_PUZZLE = __import__("pathlib").Path(__file__).with_name("kit_puzzle.asm").read_text()
 KIT_SFX = __import__("pathlib").Path(__file__).with_name("kit_sfx.asm").read_text()
 KIT_FIGHT = __import__("pathlib").Path(__file__).with_name("kit_fight.asm").read_text()
+
+
+def _kit_split(text):
+    """kit_fight.asm's code that runs with the fight's data bank mapped (";;FIGHT BANK {" to "}") apart from the rest:
+    an NES fight's copy goes in each fight's data bank (as every fight's data does: at the same addresses), not ROM0."""
+    rom0, bank, inside = [], [], False
+    for line in text.split("\n"):
+        if line.startswith(";;FIGHT BANK {"):
+            inside = True
+        elif line.startswith(";;FIGHT BANK }"):
+            inside = False
+        else:
+            (bank if inside else rom0).append(line)
+    return "\n".join(rom0), "\n".join(bank) + "\n"
+
+
+KIT_FIGHT_ROM0, KIT_FIGHT_BANK = _kit_split(KIT_FIGHT)
 KIT_NES = __import__("pathlib").Path(__file__).with_name("kit_nes.asm").read_text()
 KIT_NES_SOUND = __import__("pathlib").Path(__file__).with_name("kit_nes_sound.asm").read_text()
 KIT_PASSKEY = __import__("pathlib").Path(__file__).with_name("kit_passkey.asm").read_text()
@@ -2536,6 +2553,7 @@ def _fight_asm(i, s, index_of, project, banked=False, suffix="", shared=True, pa
     the kit uses the first's labels and each fight's banks (FtFights, `table`)."""
     from . import fight as kit
     ft = s["fight"]
+    kit_in_bank = banked and all((sc.get("fight") or {}).get("nes") for sc in project["scenes"] if sc.get("fight"))
     nl = "\n"
     tiles = s["cell_tiles"]
     pose_ids = "\n".join(f"DEF RP_{p.upper()} EQU {k}" for k, p in enumerate(kit.RIVAL_POSES)) + f"\nDEF RP_COUNT EQU {len(kit.RIVAL_POSES)}"
@@ -2824,7 +2842,7 @@ DEF FT_PLAYER_GETUP_2 EQU {kit.PLAYER_GETUP_HEALTH[1]}
 {pp_ids}
 {tuning}
 
-{KIT_FIGHT}
+{KIT_FIGHT_ROM0 if kit_in_bank else KIT_FIGHT}
 Scene{i}Update:
     jp FightUpdate
 
@@ -2881,7 +2899,7 @@ FtSwapSet2:                 ; special: the taunt, the arm pop
     data = pose_data + f"""
 
 SECTION "Data: Fight", {"ROMX[$4000]" if banked else "ROM0"}   ; mapped while the fight runs
-RivalPalSlots:              ; his palettes' hardware slots, as BCPS writes ($80: auto-increment)
+{KIT_FIGHT_BANK if kit_in_bank else ""}RivalPalSlots:              ; his palettes' hardware slots, as BCPS writes ($80: auto-increment)
     db {len(rival_pals)}, {", ".join(f"${0x80 | (s.get('pal_slots') or {}).get(k, k) * 8:02X}" for k in rival_pals)}
 {tail_data}
 {"" if _all_pics(project) else "RivalMaps:" + nl + "    dw " + ", ".join(f"RivalMap_{p}" for p in kit.RIVAL_POSES) + nl + "RivalMapBanks:              ; (each pose's rows' bank)" + nl + "    db " + ", ".join(f"BANK(RivalMap_{p})" for p in kit.RIVAL_POSES)}
@@ -4534,7 +4552,7 @@ def generate_asm(project):
     in_bank = {i: [] for i in range(len(scenes))}   # a banked game: a press-start screen's code and patches go in
     for i, s in enumerate(scenes):                  # its own data bank, mapped while it runs (ROM0 stays free)
         if s["menu"]:
-            scene_code.append(_menu_code(i, s, bool(fade), bool(fights)))
+            (in_bank[i] if banked else scene_code).append(_menu_code(i, s, bool(fade), bool(fights)))
         elif s.get("cutscene"):
             (in_bank[i] if banked else scene_code).append(_cut_code(i, s, index_of))
         elif s["press"]:
@@ -4543,7 +4561,7 @@ def generate_asm(project):
         elif s["options"]:
             scene_code.append(_options_code(i, s, index_of, opt_index))
         elif s.get("pass_key"):
-            scene_code.append(_pass_code(i, s, index_of))
+            (in_bank[i] if banked else scene_code).append(_pass_code(i, s, index_of))
         elif s.get("puzzle"):
             scene_code.append(_puzzle_asm(i, s, index_of, opt_rows))
         elif s.get("fight"):
@@ -5078,9 +5096,10 @@ BobTable:
 MarkerTile:
     db {", ".join(f"${b:02X}" for b in encode_tile(MARKER))}
 """)
-    if confirms and fights:             # (its sprites built outside VBlank, then up by OAM DMA: too many to write in it)
-        out.append("""SECTION "Code: Menu confirm build", ROM0
-ConfirmBuild:               ; the step's sprites into wFtOAM (free outside a fight): shown or not, in front or behind
+    conf = [i for i, sc in enumerate(scenes) if (sc["menu"] or {}).get("confirm")]
+    conf_in = in_bank[conf[0]] if banked and len(conf) == 1 else None    # (one menu's: its code in its scene's bank,
+    if confirms and fights:             # mapped while it runs) (its sprites built outside VBlank, then up by OAM DMA)
+        (conf_in if conf_in is not None else out).append(("" if conf_in is not None else 'SECTION "Code: Menu confirm build", ROM0\n') + """ConfirmBuild:               ; the step's sprites into wFtOAM (free outside a fight): shown or not, in front or behind
     ld hl, wFtOAM
     xor a
     ld b, 160
@@ -5129,9 +5148,8 @@ ConfirmBuild:               ; the step's sprites into wFtOAM (free outside a fig
 wConfirmPtr: dw             ; the next step
 wConfirmOAM: dw             ; the sprite's OAM template
 wConfirmStep: ds 1 + 9 + 9 * 8  ; the step VBlank shows: flags, colors, OBP1, BGP, count, palettes
-
-SECTION "Code: Menu confirm", ROM0
-ConfirmApply:               ; (VBlank) the step: its sprites (shown or not, in front or behind), their colors, the palettes
+""")
+        (conf_in if conf_in is not None else out).append(("" if conf_in is not None else 'SECTION "Code: Menu confirm", ROM0\n') + """ConfirmApply:               ; (VBlank) the step: its sprites (shown or not, in front or behind), their colors, the palettes
     xor a
     ldh [hConfirmDirty], a
 """ + ("""    ld a, HIGH(wFtOAM)      ; its sprites, built (ConfirmBuild): all of OAM by DMA (the cursor's after this)
@@ -5239,6 +5257,8 @@ OptionDefaults:
     if banked:                      # (a banked game: the effects' data in a bank of its own, mapped while they run)
         kit_sfx = re.sub(r"^PlaySfx:", "PlaySfxIn:", kit_sfx, flags=re.M)
         kit_sfx = re.sub(r"^SfxUpdate:", "SfxUpdateIn:", kit_sfx, flags=re.M)
+        sfx_update_in = kit_sfx[kit_sfx.index("SfxUpdateIn:"):]     # (in the effects' bank itself: it runs with it mapped,
+        kit_sfx = kit_sfx[:kit_sfx.index("SfxUpdateIn:")]           #  SfxUpdate's to call; ROM0 kept free)
         kit_sfx += "\n".join(f"""
 {name}:                  ; ({name}In, the effects' bank mapped, then the one that was: hBank)
     push af
@@ -5252,7 +5272,8 @@ OptionDefaults:
     pop af
     ret""" for name in ("PlaySfx", "SfxUpdate")) + "\n"
     out.append(kit_sfx)
-    out.append(f'SECTION "Data: Sound effects", {"ROMX" if banked else "ROM0"}\n{"SfxData:" + chr(10) if banked else ""}' + sfx_data + "\n")
+    out.append(f'SECTION "Data: Sound effects", {"ROMX" if banked else "ROM0"}\n{"SfxData:" + chr(10) if banked else ""}' + sfx_data + "\n"
+               + (sfx_update_in if banked else ""))
     if nes_sound:                   # each effect's counterpart in the NES game (an SQ1 effect; 0: none)
         out.append("SfxNes:\n" + _db([NES_SFX.get(n, 0) for n in sfx.effects(project.get("sound", "arcade"), sfx_groups(scenes))]) + "\n")
     for i, s in enumerate(scenes):      # (a banked game: a scene's load in its own bank, but a fight's: it maps its own)
