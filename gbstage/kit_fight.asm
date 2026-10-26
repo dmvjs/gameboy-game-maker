@@ -2038,6 +2038,11 @@ FtNesPic:
     and 1
     add a
     ld d, a
+    ld a, [wNes + $90]      ; (but in his walk-in, its own colors: the NES draws that frame there unlit)
+    and $3F
+    jr nz, .cueLit
+    ld d, a
+.cueLit:
     ld a, [wNesCue]
     and 1
     or d
