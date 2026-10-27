@@ -685,6 +685,46 @@ def _pic_late(dpics):
     return out
 
 
+DPLAN_MAX = 6                   # (the original: a picture's skip plan, its stretches to stream at the most -- FT_DPLAN_MAX)
+DPLAN_GAP = 2                   # (and the fewest tiles a gap between two may skip: a stretch more costs its setting up)
+DPLAN_GAIN = 3                  # (and the fewest it skips in all, to be kept: each plan's a step more to find one)
+
+
+def _pic_plans(tiles, k):
+    """The original's grey picture k, its skip plans: per picture whole in the copy it streams into, the stretches of its
+    tiles that differ there ([start, end), the rest already in, the same tile in the same slot), when any are the same:
+    per plan the picture, its stretches' count, each's start and end; $FF last (kit_fight.asm's FtDmgPlan)."""
+    tp, out = tiles[k], []
+    if not tp:
+        return [0xFF]
+    for q, tq in enumerate(tiles):
+        if q == k:                      # (itself under it: FtDmgPlan's own)
+            continue
+        eq = [i < len(tq) and tp[i] == tq[i] for i in range(len(tp))]
+        if not any(eq):
+            continue
+        segs, i = [], 0
+        while i < len(tp):
+            if eq[i]:
+                i += 1
+                continue
+            j = i
+            while j < len(tp) and not eq[j]:
+                j += 1
+            if segs and i - segs[-1][1] < DPLAN_GAP:
+                segs[-1][1] = j
+            else:
+                segs.append([i, j])
+            i = j
+        while len(segs) > DPLAN_MAX:
+            g = min(range(1, len(segs)), key=lambda m: segs[m][0] - segs[m - 1][1])
+            segs[g - 1][1] = segs[g][1]
+            del segs[g]
+        if len(tp) - sum(e - b for b, e in segs) >= DPLAN_GAIN:
+            out += [q, len(segs)] + [v for sg in segs for v in sg]
+    return out + [0xFF]
+
+
 def _crowd_pulse(s, project):
     """The crowd going wild at his KO, as Punch-Out!!'s: its color a brightness down every 4 frames, twice, and
     back up ($26, $16, $06, $16): its palette's hardware slot (as BCPS: color 1), then the four colors."""
@@ -772,6 +812,50 @@ POP_MAP_ROW = """    REPT MAP_W / 2
     ld h, a"""
 
 
+# Off the fight (a game with fights: the crowd's recording may play, its timer's handler on): VBlank never taken out
+# of HALT (its IE bit off), so its flag stays up from the moment it's raised -- whatever the line the work ends on,
+# or an interrupt returning just as VBlank starts -- and is taken (cleared, as only taking it clears it: never a
+# write to IF, which could clear the timer's too) once, as its work begins: never lost, never worked twice.
+IDLE_OFF_FIGHT = """    di                      ; off the fight: VBlank's flag, kept up till it's worked
+    ldh a, [rIE]
+    and ~1
+    ld b, a
+    ldh a, [rIF]
+    rra
+    jr c, .flagged          ; (raised already: as the work ran, or as it ended)
+    ld a, b
+    inc a
+    ldh [rIE], a            ; asleep till VBlank (or the crowd's timer)
+    halt
+    nop                     ; HALT may run the next byte twice if an interrupt's flag is up already
+    ld a, b
+    ldh [rIE], a            ; (VBlank kept, not taken)
+    ei                      ; (the crowd's timer, if it woke it: taken now)
+    ldh a, [rIF]
+    rra
+    jr nc, MainLoop
+.flagged:
+    di
+    ld a, b
+    inc a
+    ldh [rIE], a
+    ei
+    nop                     ; (VBlank taken here: its flag down)
+    di
+    ld a, b
+    ldh [rIE], a
+    and %100                ; (interrupts on again while the crowd's timer is: its handler's)
+    jr z, .woken
+    ei
+    jr .woken
+"""
+IDLE_PLAIN = """    xor a
+    ldh [rIF], a
+    halt                    ; sleep until VBlank
+    nop                     ; HALT may run the next byte twice if VBlank arrives just before it
+"""
+
+
 def _gdma(src, dest, size):
     lines = []
     for off in range(0, size, 2048):
@@ -828,22 +912,26 @@ Scene{i}Attr:               ; palette number per tile (Game Boy Color only)
 
 # ---- palettes per scene ----------------------------------------------------------
 
-def hw_palettes(s):
+def hw_palettes(s, force=None):
     """A project can have more background palettes than the 8 the hardware holds, as long as each scene
     uses 8 at most. Returns the scene with its palette map in hardware slots and, when any palette moved,
     "pal_slots" (palette -> slot) and "pal_used" (the project palettes it uploads). Palettes 0-7 keep their
-    own slot, so a project with 8 or fewer builds exactly as before."""
+    own slot, so a project with 8 or fewer builds exactly as before. `force`: the slots given (palette ->
+    slot: a rematch's laid out as the first bout's, so his pictures' data is the same: _rematch_pics)."""
     fight = s.get("fight")
     card = (s.get("press") or {}).get("card")       # (a round card's two: up with the scene, its rows drawn later)
     extra = {card["palette"], card["text_palette"]} if card else set()
     used = sorted(set(s["cell_pal"]) | (set(fight["palettes"].values()) if fight else set()) | extra)   # (a fight:
-    if all(g < 8 for g in used):                                                    # his palettes, every pose's)
+    if force is None and all(g < 8 for g in used):                                  # his palettes, every pose's)
         return s if extra <= set(s["cell_pal"]) else dict(s, pal_used=used)
-    slots = {g: g for g in used if g < 8}
-    free = [k for k in range(8) if k not in slots.values()]
-    for g in used:
-        if g >= 8:
-            slots[g] = free.pop(0)
+    if force is not None:
+        slots = {g: force[g] for g in used}
+    else:
+        slots = {g: g for g in used if g < 8}
+        free = [k for k in range(8) if k not in slots.values()]
+        for g in used:
+            if g >= 8:
+                slots[g] = free.pop(0)
     out = dict(s, cell_pal=[slots[g] for g in s["cell_pal"]], pal_slots=slots, pal_used=used)
     if card:
         out["card_rows"] = [[[(t, slots[g]) for t, g in row] for row in rows] for rows in s["card_rows"]]
@@ -2359,9 +2447,12 @@ def _career(scenes, fights, index_of):
     return out
 
 
-def _fight_entry(i, s, index_of, suffix, all_pics=False, career=None):
-    """A fight's row of FtFights: its scene, then the kit's wFtFight (its banks, its swap area, where it goes)."""
+def _fight_entry(i, s, index_of, suffix, all_pics=False, career=None, pics_suffix=None, dpics_suffix=None):
+    """A fight's row of FtFights: its scene, then the kit's wFtFight (its banks, its swap area, where it goes).
+    pics_suffix, dpics_suffix: whose pictures, Color's and the original's (a rematch's: the first bout's)."""
     from . import fight as kit
+    pics = suffix if pics_suffix is None else pics_suffix
+    dpics = suffix if dpics_suffix is None else dpics_suffix
     ft, sw = s["fight"], s["fight_swap"]
     swap_a = max(0, min(sw["count"], 128 - sw["first"]))
     vram_a = 0x9000 + 16 * sw["first"] if swap_a else 0
@@ -2374,8 +2465,8 @@ def _fight_entry(i, s, index_of, suffix, all_pics=False, career=None):
             f"    db {s['fight_flash_tile']}, {scene('win')}, {scene('win_tko')}, {scene('lose')}, {scene('corner')}\n"
             f"    db {f'BANK(CgbMaps{suffix}), BANK(CgbSwap{suffix})' if s.get('fight_cgb') else '0, 0'}\n"
             f"    db {f'BANK(RivalHeads{suffix})' if ft.get('rope_row') and not all_pics else '0'}\n"
-            f"    db {f'BANK(PicHeader{suffix})' if s.get('fight_pics') else '0'}\n"
-            f"    db {f'BANK(PicHeaderDmg{suffix})' if s.get('fight_pics_dmg') and s.get('fight_pics') else '0'}\n"
+            f"    db {f'BANK(PicHeader{pics})' if s.get('fight_pics') else '0'}\n"
+            f"    db {f'BANK(PicHeaderDmg{dpics})' if s.get('fight_pics_dmg') and s.get('fight_pics') else '0'}\n"
             f"    db {', '.join(str(v) for v in (career or (0, 255, 255, 255, 255, 0, 255, 255)))}\n"
             f"    db {s['fight_cue'][1] if s.get('fight_cue') else 0}, {s['fight_cue_old'] if s.get('fight_cue') else 0}, "
             f"{s['fight_cue'][0] if s.get('fight_cue') else 0}\n"
@@ -2400,61 +2491,39 @@ def _ring_obp(s):
 
 
 ROPE_DMG_ROOM = 24                  # (the original, a grey mat: the rope row's tiles in his ring's greys, room for)
-OUTSIDE_CELLS = [(3, 0), (3, 1), (3, 18), (3, 19), (4, 0), (4, 1), (4, 18), (4, 19)]   # (outside the ring, by the
-                                                                                        #  crowd: the NES's black)
 
 
 def _rope_dmg(s):
     """The original with a grey mat (fight_pics_dmg's ring_bgp): the bottom rope's row is shown in his ring's greys,
     so its tiles in those (their greys put to the ring's indices), as copies from the scene's last tile on (the
-    crowd above shares the originals); the crowd tell's cell's two tiles too. On a dark mat, outside the ring black
-    (one step past the mat: the corners read): the crowd rows' outside cells' copies, the rope row's edges'. Fixed
-    sizes: every fight's data alike."""
+    crowd above shares the originals); the crowd tell's cell's two tiles too. Fixed sizes: every fight's data alike.
+    (Outside the ring, by the crowd, is its palette's 3: black, as the NES's, on any mat.)"""
     d = s.get("fight_pics_dmg") or {}
     ring = [(d.get("ring_bgp", 0) >> (2 * k)) & 3 for k in range(4)]
     rope = s.get("fight_rope_tiles") or []
     cue = s.get("fight_cue")
     first = len(s["tiles"])
-    black = d.get("mat") == 2
     copies, slot = [], {}
-    edge_cols = {0, 1, 18, 19}
     if d.get("mat"):
         inv = {g: k for k, g in enumerate(ring)}
-        want = [(t, black and c in edge_cols) for c, t in enumerate(rope)]
-        want += [(cue[1], False), (s["fight_cue_old"], False)] if cue else []
-        for key in want:
-            if key not in slot:
-                t, out = key
-                slot[key] = first + len(copies)
-                copies.append([inv[3] if out and v == 2 else inv[v] for v in s["tiles"][t]])
+        want = list(rope) + ([cue[1], s["fight_cue_old"]] if cue else [])
+        for t in want:
+            if t not in slot:
+                slot[t] = first + len(copies)
+                copies.append([inv[v] for v in s["tiles"][t]])
         if len(copies) > ROPE_DMG_ROOM:
             raise ValueError(f"the rope row's grey-mat copies: {len(copies)} tiles, room for {ROPE_DMG_ROOM}")
     data = [b for t in copies for b in encode_tile(t)] + [0] * (16 * (ROPE_DMG_ROOM - len(copies)))
-    row = [slot.get((t, black and c in edge_cols), t) for c, t in enumerate(rope)] if copies else list(rope)
-    cue_at = lambda t: slot.get((t, False), t)
-    out_first = first + ROPE_DMG_ROOM
-    out_tiles, out_slot = [], {}
-    if black:                           # (above the mat's line: the base greys, the outside's 2 made 3)
-        for r, c in OUTSIDE_CELLS:
-            t = s["cell_tiles"][r * 20 + c]
-            if t not in out_slot:
-                out_slot[t] = out_first + len(out_tiles)
-                out_tiles.append([3 if v == 2 else v for v in s["tiles"][t]])
-        if out_first + len(out_tiles) > 128:
-            raise ValueError("the outside cells' copies: no room")
-    out_cells = [out_slot.get(s["cell_tiles"][r * 20 + c], s["cell_tiles"][r * 20 + c]) for r, c in OUTSIDE_CELLS]
-    out_data = [b for t in out_tiles for b in encode_tile(t)] + [0] * (16 * (len(OUTSIDE_CELLS) - len(out_tiles)))
+    row = [slot.get(t, t) for t in rope] if copies else list(rope)
+    cue_at = lambda t: slot.get(t, t)
     return (f"FtRopeTilesDmg:             ; (the original, a grey mat: the row's own copies, in his ring's greys)\n"
             f"{_db(_pad_rows(row, True), 32)}\n"
             f"FtRopeDmgAt:\n    dw ${0x9000 + 16 * first:04X}\n    db {len(copies)}, "
             f"{cue_at(cue[1]) if cue else 0}, {cue_at(s['fight_cue_old']) if cue else 0}\n"
             f"FtRopeDmgData:\n{_db(data, 16)}\n"
-            f"FtOutsideDmg:               ; (a dark mat: the outside cells' black copies -- count, address, cells' tiles)\n"
-            f"    db {len(out_tiles)}\n    dw ${0x9000 + 16 * out_first:04X}\n    db {', '.join(map(str, out_cells))}\n"
-            f"FtOutsideDmgData:\n{_db(out_data, 16)}\n"
             f"FtSideTilesDmg:             ; (the side ropes' ends' two tiles: the original's copy, Color's being in bank 1)\n"
             f"{_db(_side_dmg(s), 16)}\n"
-            "FtRingSetupDmg:             ; (setup, screen off; this fight's data bank in) DE: the bottom rope's row's map row;\n    ld de, FtRopeTiles      ; the original with a grey mat: its copies in his ring's greys, the tell's, outside\n    ldh a, [hFtRingBgp]     ; (the original, a grey mat: its copies in his ring's greys, and the tell's)\n    and a\n    ret z\n    ld a, [FtRopeDmgAt + 2]\n    and a\n    ret z\n    ld hl, FtRopeDmgAt\n    ld a, [hl+]\n    ld h, [hl]\n    ld l, a\n    ld a, [FtRopeDmgAt + 2]\n    swap a                  ; (16 bytes a tile: count * 16, at most 20 tiles)\n    ld c, a\n    and $0F\n    ld b, a\n    ld a, c\n    and $F0\n    ld c, a\n    ld de, FtRopeDmgData\n    call FtCopy\n    ld a, [wFtCueTile]\n    and a\n    jr z, .noCue\n    ld a, [FtRopeDmgAt + 3]\n    ld [wFtCueTile], a\n    ld a, [FtRopeDmgAt + 4]\n    ld [wFtCueOld], a\n.noCue:\n    ld a, [FtOutsideDmg]    ; (a dark mat: outside the ring black, its cells by the crowd)\n    and a\n    jr z, .noOutside\n    ld a, [FtOutsideDmg + 1]\n    ld l, a\n    ld a, [FtOutsideDmg + 2]\n    ld h, a\n    ld a, [FtOutsideDmg]\n    swap a\n    ld c, a\n    and $0F\n    ld b, a\n    ld a, c\n    and $F0\n    ld c, a\n    ld de, FtOutsideDmgData\n    call FtCopy\n    ld de, FtOutsideDmg + 3\n    ld hl, $9800 + 3 * 32\n    call .outsideRow\n    ld hl, $9800 + 4 * 32\n    call .outsideRow\n.noOutside:\nIF DEF(FT_SIDE_TILE)\n    ld de, FtSideTilesDmg   ; (and the side ropes' ends' tiles: the original's own copy)\n    ld hl, $8000 + FT_SIDE_TILE_DMG * 16\n    ld bc, 32\n    call FtCopy\nENDC\n    ld de, FtRopeTilesDmg\n    ret\n; (screen off) HL = a map row: its cells 0, 1, 18, 19 the next four tiles at DE (DE on past them).\n.outsideRow:\n    ld a, [de]\n    inc de\n    ld [hl+], a\n    ld a, [de]\n    inc de\n    ld [hl], a\n    ld bc, 17\n    add hl, bc\n    ld a, [de]\n    inc de\n    ld [hl+], a\n    ld a, [de]\n    inc de\n    ld [hl], a\n    ret\n\n")
+            "FtRingSetupDmg:             ; (setup, screen off; this fight's data bank in) DE: the bottom rope's row's map row;\n    ld de, FtRopeTiles      ; the original with a grey mat: its copies in his ring's greys, the tell's\n    ldh a, [hFtRingBgp]     ; (the original, a grey mat: its copies in his ring's greys, and the tell's)\n    and a\n    ret z\n    ld a, [FtRopeDmgAt + 2]\n    and a\n    ret z\n    ld hl, FtRopeDmgAt\n    ld a, [hl+]\n    ld h, [hl]\n    ld l, a\n    ld a, [FtRopeDmgAt + 2]\n    swap a                  ; (16 bytes a tile: count * 16, at most 20 tiles)\n    ld c, a\n    and $0F\n    ld b, a\n    ld a, c\n    and $F0\n    ld c, a\n    ld de, FtRopeDmgData\n    call FtCopy\n    ld a, [wFtCueTile]\n    and a\n    jr z, .noCue\n    ld a, [FtRopeDmgAt + 3]\n    ld [wFtCueTile], a\n    ld a, [FtRopeDmgAt + 4]\n    ld [wFtCueOld], a\n.noCue:\nIF DEF(FT_SIDE_TILE)\n    ld de, FtSideTilesDmg   ; (and the side ropes' ends' tiles: the original's own copy)\n    ld hl, $8000 + FT_SIDE_TILE_DMG * 16\n    ld bc, 32\n    call FtCopy\nENDC\n    ld de, FtRopeTilesDmg\n    ret\n\n")
 
 
 def _side_dmg(s):
@@ -2465,7 +2534,7 @@ def _side_dmg(s):
         return [0] * 32
     d = s.get("fight_pics_dmg") or {}
     ring = [(d.get("ring_bgp", 0) >> (2 * k)) & 3 for k in range(4)]
-    outside = 3 if d.get("mat") == 2 else 2     # (outside the ring: the NES's black; a step past a dark mat)
+    outside = 3                                 # (outside the ring: the NES's black, as by the crowd above)
     fill = ring.index(outside) if d.get("mat") and d["mat"] != outside else 0
     px = [v for x in pair for v in x]   # (the left end, 8x16: its rope the shirt's white, 2)
     out = []
@@ -2546,11 +2615,12 @@ def _blank_top(pixels):
     return min(rows, 48)
 
 
-def _fight_asm(i, s, index_of, project, banked=False, suffix="", shared=True, pads=None, table=""):
+def _fight_asm(i, s, index_of, project, banked=False, suffix="", shared=True, pads=None, table="", own_pics=True, own_dpics=True):
     """Constants, tables and generated HUD code for the fight scene, plus the hand-written kit. A game's first
     fight scene brings the kit and what every fight shares (shared); each fight's own data goes in sections of
     its own at $4000, laid out alike (swap sets padded to `pads`), its labels with `suffix` past the first:
-    the kit uses the first's labels and each fight's banks (FtFights, `table`)."""
+    the kit uses the first's labels and each fight's banks (FtFights, `table`). A rematch's pictures are the
+    first bout's (not own_pics, own_dpics: Color's, the original's: _rematch_pics)."""
     from . import fight as kit
     ft = s["fight"]
     kit_in_bank = banked and all((sc.get("fight") or {}).get("nes") for sc in project["scenes"] if sc.get("fight"))
@@ -2792,6 +2862,7 @@ DEF FT_GAP_SCY EQU ({CH - 1} * 8 - FT_BAND_TOP - 1) & $FF   ; (the lines his ban
 DEF FT_STAND_UP EQU 6                               ; standing, he shifts up into his frame's empty top only
 DEF FT_POSE_BYTES EQU {kit.REGION_H * 32}          ; map rows per pose; the same again for palettes
 DEF FT_PIC_ROWS EQU {kit.PIC_H}                    ; an NES picture's rows: his area's and two below (his feet)
+DEF FT_DPLAN_MAX EQU {DPLAN_MAX}                   ; the original's: a picture's skip plan, its stretches at the most (FtDmgPlan)
 DEF FT_DPIC_ROWS EQU {max([(sc.get("fight_pics_dmg") or {}).get("rows", kit.PIC_H) for sc in project["scenes"] if sc.get("fight_pics_dmg")] or [kit.PIC_H])}                   ; the original's: the rows a picture puts up (the rest the mat, set once)
 DEF FT_PIC_BYTES EQU {kit.PIC_H * 32}             ; its map rows; the same again for palettes
 DEF FT_HUD_CELLS EQU {len(s['fight_hud_cells'])}
@@ -3054,6 +3125,7 @@ ASSERT PicHeader{suffix} == $4000
 {nl.join(body)}
 """
     dpics = s.get("fight_pics_dmg")
+    dpics_data = ""
     if dpics and pics:                  # the original: his pictures in greys (FT_DMG_PICS): a header bank, then each
         n = len(dpics["tiles"])         # picture's tiles and his area's rows for each copy of them
         guess = _pic_next(s, pics, suffix)
@@ -3067,12 +3139,17 @@ ASSERT PicHeader{suffix} == $4000
             tb = [b for t in dpics["tiles"][k] for b in encode_tile(list(t))] or [0] * 16
             body.append(f'SECTION "Data: Rival grey picture {k}{suffix}", ROMX, ALIGN[4]\n{lab(k)}:\n' + _db(tb) + "\n"
                         + _db(dpics["maps"][k], kit.REGION_W) + "\n" + _db([t + 64 if t >= PIC_BASE else t for t in dpics["maps"][k]], kit.REGION_W))   # (his tiles' second copy; the mat's as is)
-        pics_data += f"""
+        plans = [_pic_plans(dpics["tiles"], k) for k in range(n)]
+        plan_lists = "\n".join(f"PicPlanDmg{suffix}_{k}:\n" + _db(pl) for k, pl in enumerate(plans) if len(pl) > 1)
+        plan_table = "\n".join("    dw " + ", ".join(f"PicPlanDmg{suffix}_{k}" if len(plans[k]) > 1 else "0"
+                                                     for k in range(i, min(n, i + 8))) for i in range(0, n, 8))
+        dpics_data = f"""
 SECTION "Data: Rival grey pictures{suffix}", ROMX[$4000]
 PicHeaderDmg{suffix}:           ; his pictures in greys: count, his guess at the next (FT_DPIC_GUESS); per picture its tiles
     db {n}                      ; (address, bank, count), his top rows' sprites; each picture's tiles, then his area's
-    jp PicGuessDmg{suffix}       ; rows for its tiles' first copy, then second
-    ds 12
+    jp PicGuessDmg{suffix}       ; rows for its tiles' first copy, then second; his skip plans (FT_DPIC_PLANS)
+    dw PicPlansDmg{suffix}
+    ds 10
 {entries}
     ds {6 * (128 - n)}
 PicNextDmg{suffix}:             ; per picture: its rules for the one likely next (PicGuessDmg)
@@ -3085,6 +3162,9 @@ PicPlaceDmg{suffix}:            ; per NES frame (then mirrored): where its grey 
 {heads}
 {guess[2]}
 {guess[1]}
+PicPlansDmg{suffix}:            ; per picture its skip plans (_pic_plans), 0 none
+{plan_table}
+{plan_lists}
 ASSERT PicHeaderDmg{suffix} == $4000
 ASSERT PicNextDmg{suffix} == $4310
 ASSERT PicLateDmg{suffix} == $4410
@@ -3098,12 +3178,12 @@ Scene{i}Update:
     jp FightUpdate
 {data}
 {cgb_data}
-{pics_data}
+{pics_data if own_pics else "; (his pictures, Color's: the first bout's, FtFights)"}{dpics_data if own_dpics else nl + "; (his pictures, the original's: the first bout's, FtFights)"}
 {heads_data}
 {checks}
 SECTION "Code: Scenes after fight {i}", ROM0
 """
-    return code + data + cgb_data + pics_data + heads_data + nes_shared + """
+    return code + data + cgb_data + pics_data + dpics_data + heads_data + nes_shared + """
 SECTION "Code: Scenes after the fight", ROM0   ; the next scenes' code must not land in the data bank
 """
 
@@ -4208,10 +4288,71 @@ def _menu_data(i, s, index_of):
     return "\n".join(lines)
 
 
+def _upload_shape(s):
+    """A scene's palettes' upload code's shape (_upload_runs): per run, whether HL skips to it, and its count."""
+    used = s.get("pal_used") or sorted(set(s["cell_pal"]))
+    slot = (s.get("pal_slots") or {}).get
+    out, pos = [], 0
+    for first, count in _runs(used, lambda g: slot(g, g)):
+        out.append((first != pos, count))
+        pos = first + count
+    return out
+
+
+def _rematch_pics(raw):
+    """Each scene in hardware palettes (hw_palettes), and the fights whose rival's pictures are an earlier fight's
+    (a rematch), stored once: {scene: the earlier one} for Color's pictures, and for the original's. Color's: his
+    palettes put in the slots the earlier one's are (cell for cell, his pictures' too), so the data is the same --
+    where that leaves the palettes' upload the same code (its time: the same)."""
+    scenes = [hw_palettes(s) for s in raw]
+    color, grey = {}, {}
+    pics = lambda sc: sc.get("fight") and sc.get("fight_pics") and sc.get("fight_pics_dmg")
+    nxt = lambda sc: (sc["fight"].get("nes") or {}).get("pictures", {}).get("next")
+
+    def laid_as(a, b):                  # scene a's palettes in the slots scene b's are (None: they don't fit, or
+        s, o = raw[a], scenes[b]        # the upload's code would change)
+        if len(o["fight_pics"]["attrs"]) != len(s["fight_pics"]["attrs"]) or len(s["cell_pal"]) != len(o["cell_pal"]):
+            return None
+        slot = lambda g: (o.get("pal_slots") or {}).get(g, g)
+        pairs = list(zip(s["cell_pal"], o["cell_pal"]))
+        pairs += [(s["fight"]["palettes"][k], slot(g)) for k, g in raw[b]["fight"]["palettes"].items() if k in s["fight"]["palettes"]]
+        pairs += [(x, y) for p, q in zip(s["fight_pics"]["attrs"], o["fight_pics"]["attrs"]) for x, y in zip(p, q)]
+        force = {}
+        if any(force.setdefault(x, y) != y for x, y in pairs) or len(set(force.values())) != len(force):
+            return None
+        try:
+            hw = hw_palettes(s, force)
+        except KeyError:
+            return None
+        return hw if hw["fight_pics"] == o["fight_pics"] and _upload_shape(hw) == _upload_shape(scenes[a]) else None
+
+    for j, s in enumerate(raw):
+        if not pics(s):
+            continue
+        for i in range(j):
+            if pics(raw[i]) and i not in grey and raw[i]["fight_pics_dmg"] == s["fight_pics_dmg"] \
+                    and raw[i]["fight_pics"]["order"] == s["fight_pics"]["order"] and nxt(raw[i]) == nxt(s):
+                grey[j] = i
+                break
+        for i in range(j):
+            if not pics(raw[i]) or i in color:
+                continue
+            hw = laid_as(j, i)
+            if hw is not None:
+                scenes[j], color[j] = hw, i
+                break
+            if i not in color.values():     # (or the first bout's laid out as the rematch's: his pictures its)
+                hw = laid_as(i, j)
+                if hw is not None:
+                    scenes[i], color[i] = hw, j
+                    break
+    return scenes, color, grey
+
+
 def generate_asm(project):
     keep = reachable_scenes(project)
     index_of = {orig: new for new, orig in enumerate(keep)}
-    scenes = [hw_palettes(project["scenes"][i]) for i in keep]
+    scenes, pic_share, dpic_share = _rematch_pics([project["scenes"][i] for i in keep])
     menus = any(s["menu"] for s in scenes)
     presses = any(s["press"] for s in scenes)
     options = any(s["options"] for s in scenes)
@@ -4543,8 +4684,10 @@ def generate_asm(project):
         for key in ("lose", "win", "win_tko"):
             if scenes[f]["fight"].get(key) is not None:
                 scenes[index_of[scenes[f]["fight"][key]]]["_rec_next"] = True
-    fight_table = "\n".join(_fight_entry(f, scenes[f], index_of, "" if k == 0 else f"_F{k}", _all_pics(project),
-                                         (career or {}).get(f)) for k, f in enumerate(fights))
+    fight_suffix = lambda f: "" if fights.index(f) == 0 else f"_F{fights.index(f)}"
+    fight_table = "\n".join(_fight_entry(f, scenes[f], index_of, fight_suffix(f), _all_pics(project),
+                                         (career or {}).get(f), fight_suffix(pic_share.get(f, f)),
+                                         fight_suffix(dpic_share.get(f, f))) for f in fights)
     fight_table += ("\nPOPS                        ; (back in ROM0: the pass keys read these from their own bank)"
                     "\nPwStarts::                  ; a pass key's starts: Major, World, the World title bout, Tyson, the"
                     "\n    db " + ", ".join(map(str, pw_starts)) + "      ; ending, Another World ($FF: none)")
@@ -4567,7 +4710,8 @@ def generate_asm(project):
         elif s.get("fight"):
             k = fights.index(i)
             scene_code.append(_fight_asm(i, s, index_of, project, banked, suffix="" if k == 0 else f"_F{k}",
-                                         shared=k == 0, pads=fight_pads, table=fight_table))
+                                         shared=k == 0, pads=fight_pads, table=fight_table, own_pics=i not in pic_share,
+                                         own_dpics=i not in dpic_share))
         elif s["back"] is not None:
             scene_code.append(f"""Scene{i}Update:              ; B goes back
     ldh a, [hPadNew]
@@ -4682,11 +4826,7 @@ Start:
     ld a, {index_of[project['start']]}
     call LoadScene
 MainLoop:
-{"    ldh a, [hFtActive]      ; a fight: interrupts on, each clears its own flag (clearing them here could drop" + nl + "    and a                   ; a mid-frame split just raised, leaving its scroll on to the bottom)" + nl + "    jr nz, .sleep" + nl if fights else ""}    xor a
-    ldh [rIF], a
-    halt                    ; sleep until VBlank
-    nop                     ; HALT may run the next byte twice if VBlank arrives just before it
-{"    jr .woken" + nl + ".sleep:                     ; a fight: asleep till VBlank, never through it -- interrupts held from the look at" + nl + "    di                      ;  the line to HALT (one serviced between them, VBlank's, would leave HALT sleeping" + nl + "    ldh a, [rLY]            ;  past it: the frame lost); in VBlank already, the work run on into it, on at once" + nl + "    cp 144" + nl + "    jr nc, .awake" + nl + "    halt                    ; (held, an interrupt still wakes it; serviced at EI)" + nl + "    nop" + nl + ".awake:" + nl + "    ei" + nl + ".woken:" + nl + "    ldh a, [rLY]            ; a fight's mid-frame scroll interrupt also wakes HALT: sleep on until VBlank" + nl + "    cp 144" + nl + "    jr c, MainLoop" + nl if fights else ""}{"    cp 147                  ; a frame that ran long: its VBlank work waits for the next VBlank's start (a lag frame," + nl + "    jr c, .onTime           ; never half of it done as the screen draws)" + nl + ".late:" + nl + "    ldh a, [rLY]" + nl + "    cp 144" + nl + "    jr nc, .late" + nl + "    jr MainLoop" + nl + ".onTime:" + nl if fights else ""}{"    ldh a, [hFtRingBgp]     ; (the original, a grey mat: above it the base greys again, his top rows' sprites in his)" + nl + "    and a" + nl + "    jr z, .noRing" + nl + "    ldh a, [hFtBgpBase]" + nl + "    ldh [rBGP], a" + nl + "    ldh a, [hFtRingNow]" + nl + "    ldh [rOBP0], a" + nl + ".noRing:" + nl if fights else ""}{nl.join(vblank_work)}
+{"    ldh a, [hFtActive]      ; a fight: interrupts on, each clears its own flag (clearing them here could drop" + nl + "    and a                   ; a mid-frame split just raised, leaving its scroll on to the bottom)" + nl + "    jr nz, .sleep" + nl if fights else ""}{IDLE_OFF_FIGHT if fights else IDLE_PLAIN}{".sleep:                     ; a fight: asleep till VBlank, never through it -- interrupts held from the look at" + nl + "    di                      ;  the line to HALT (one serviced between them, VBlank's, would leave HALT sleeping" + nl + "    ldh a, [rLY]            ;  past it: the frame lost); in VBlank already, the work run on into it, on at once" + nl + "    cp 144" + nl + "    jr nc, .awake" + nl + "    halt                    ; (held, an interrupt still wakes it; serviced at EI)" + nl + "    nop" + nl + ".awake:" + nl + "    ei" + nl + ".woken:" + nl + "    ldh a, [rLY]            ; a fight's mid-frame scroll interrupt also wakes HALT: sleep on until VBlank" + nl + "    cp 144" + nl + "    jr c, MainLoop" + nl if fights else ""}{"    cp 147                  ; a frame that ran long: its VBlank work waits for the next VBlank's start (a lag frame," + nl + "    jr c, .onTime           ; never half of it done as the screen draws)" + nl + ".late:" + nl + "    ldh a, [rLY]" + nl + "    cp 144" + nl + "    jr nc, .late" + nl + "    jr MainLoop" + nl + ".onTime:" + nl if fights else ""}{"    ldh a, [hFtRingBgp]     ; (the original, a grey mat: above it the base greys again, his top rows' sprites in his)" + nl + "    and a" + nl + "    jr z, .noRing" + nl + "    ldh a, [hFtBgpBase]" + nl + "    ldh [rBGP], a" + nl + "    ldh a, [hFtRingNow]" + nl + "    ldh [rOBP0], a" + nl + ".noRing:" + nl if fights else ""}{nl.join(vblank_work)}
 VBlankDone:                 ; everything that must happen during VBlank is done
     ld hl, hFrame
     inc [hl]

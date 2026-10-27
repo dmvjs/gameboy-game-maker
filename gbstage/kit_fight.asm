@@ -246,6 +246,13 @@ wRvPicPrev: db              ; (the original: the picture shown before the shown 
 wRvPicPrev2: db             ; (and the one before that)
 wFtEnd:
 
+SECTION "Fight grey plans", WRAMX, BANK[1]  ; (the original only: its $D000 on, always there)
+wRvPicNeed: db              ; the coming picture's tiles to be in before it's whole: its plan's last stretch's end
+wRvPicUnder: db             ; the copy not shown: the picture whole in it from its tile wRvPicUnderFrom on ($FF none)
+wRvPicUnderFrom: db
+wRvPicPlanN: db             ; the coming picture's plan: its stretches to stream, each its first tile and the one after its
+wRvPicPlan: ds 2 * FT_DPLAN_MAX + 2 ; last -- the rest already in that copy, the same tiles (FtDmgPlan)
+
 SECTION "Fight between rounds", WRAM0   ; kept while the corner scene shows
 wFtResume: db               ; coming back from the corner: carry on, don't start a new fight
 wFtSelectUsed: db           ; the corner's Select refill is once per match
@@ -1138,6 +1145,7 @@ DEF FT_MAC_PIC_ROOM EQU 32     ; Mac's: each copy's tiles (bank 1's sprite tiles
 DEF FT_DMG_MAC_ROOM EQU 18     ; the original's: each copy's (sprite tiles FT_OBJ_FIRST on)
 DEF FT_DPIC_LATE EQU $4410     ; (and per picture the last line his top rows' sprites may be built again for it: PicLateDmg)
 DEF FT_DPIC_GUESS EQU $4001    ; (and its guess at his next picture, A: PicGuessDmg, his rules from PicNextDmg)
+DEF FT_DPIC_PLANS EQU $4004    ; (and its skip plans' table's address: per picture its plans', 0 none -- FtDmgPlan)
 DEF FT_DPIC_PLACEX EQU $4490   ; (and per NES frame, then mirrored, where its grey picture sits: x, then y 512 on)
 DEF FT_DPIC_TABLE EQU $4010    ; the original's grey pictures: per picture its tiles (address, bank, count), sprites
 DEF FT_PIC_WHOLE EQU 60        ; a picture of up to this many tiles goes up in one VBlank, its tiles and all
@@ -1807,7 +1815,7 @@ ENDC
     inc a
     add e
     cp FT_PIC_WHOLE + 1
-    jp nc, .keep
+    jp nc, .big
 IF DEF(FT_MAC_PICS)
     ld hl, wPlPicGo         ; (Mac's going up then too, and no room for both: his wait a frame)
     add [hl]
@@ -1815,7 +1823,19 @@ IF DEF(FT_MAC_PICS)
     call nc, FtPlPicWait
 ENDC
     jp .up
-.loaded:                    ; the one coming in, not wanted now: up once its tiles are
+.big:                       ; too many for a VBlank: the few over its room in now, in this frame's HBlanks, and up
+    call FtPicPre           ; with the rest next VBlank, on time (else a VBlank's room at a time, a frame on)
+    jp nc, .keep
+.preUp:
+IF DEF(FT_MAC_PICS)
+    ld a, [wPlPicGo]        ; (a VBlank's room left for his: Mac's going up then too, his wait a frame)
+    and a
+    call nz, FtPlPicWait
+ENDC
+    jp .up
+.loaded:                    ; the one coming in, not wanted now: up once its tiles are (the one wanted first, if
+    call FtPicPre           ; the few over a VBlank's room go in now: up next VBlank, on time)
+    jp c, .preUp
     ld a, [wRvPicLoad]
     ld hl, wRvPicShown
     cp [hl]
@@ -1846,6 +1866,117 @@ ENDC
 .out:
     ld a, [wFtBankNes]
     ld [$2000], a
+    ret
+
+; Color, a picture over a VBlank's room (FT_PIC_WHOLE): its tiles over that room (the first to come, FT_PRE_MAX at
+; most: the NES's biggest are a few over) into the copy not shown now, before this frame's VBlank, so it all goes up
+; next VBlank (FtPicReady: the rest), the frame the NES asks: one DMA, its bank held mapped, begun as a line's
+; drawing ends (its HBlank and the next line's OAM scan: 167 dots at the least, the DMA 32 a tile).
+; Carry set if in (wRvPicLoad the one wanted, wRvPicDone its tiles in); clear if not, nothing changed (too late in
+; the frame, or too many).
+DEF FT_PRE_MAX EQU 4
+FtPicPre:
+    ldh a, [rIE]            ; (the fight under way, its splits' interrupt on, interrupts on: not as it sets up)
+    and %10
+    ret z
+    ldh a, [rLCDC]          ; (the screen off: no lines drawn)
+    add a
+    ret nc
+    ldh a, [rLY]            ; (a few lines to find a line's end in, before VBlank)
+    cp 144 - FT_PRE_MAX - 1
+    ret nc
+    ld a, [wRvPic]          ; from its first tile not in yet (its first, if it's not the one coming in)
+    ld hl, wRvPicLoad
+    cp [hl]
+    ld a, 0
+    jr nz, .from
+    ld a, [wRvPicDone]
+.from:
+    ld [wFtPicGo], a        ; (its first: that one)
+    ld a, [wRvPic]
+    call FtPicEntry         ; BC its tiles, D bank, E count
+    ld a, [wFtPicGo]
+    cpl
+    inc a
+    add e                   ; tiles to come, less a VBlank's room: those now
+    sub FT_PIC_WHOLE + 1
+    jr c, .no               ; (none over: not this way)
+    cp FT_PRE_MAX
+    jr nc, .no              ; (too many)
+    inc a
+    ld e, a                 ; E = tiles now
+    ld a, [wFtPicGo]
+    ld l, a
+    ld h, 0
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    add hl, hl
+    push hl
+    add hl, bc
+    ld a, d                 ; (its bank in till they're in: no interrupt's code in a bank)
+    ld [$2000], a
+    ld a, h
+    ldh [rHDMA1], a
+    ld a, l
+    ldh [rHDMA2], a
+    pop hl
+    ld a, [wRvPicBuf]       ; into the copy not shown
+    and a
+    ld bc, FT_PIC_VRAM2
+    jr z, .to
+    ld bc, FT_PIC_VRAM
+.to:
+    add hl, bc
+    ld a, h
+    ldh [rHDMA3], a
+    ld a, l
+    ldh [rHDMA4], a
+    ld a, 1                 ; (no interrupt's code touches video memory)
+    ldh [rVBK], a
+.again:
+    ei
+.drawn:                     ; a line being drawn (interrupts on: the screen's splits, the crowd's refills)
+    ldh a, [rLY]
+    cp 144 - 1
+    jr nc, .late
+    ldh a, [rSTAT]
+    and 3
+    cp 3
+    jr nz, .drawn
+    di                      ; (held from here to the DMA's start: under a line's drawing)
+    ldh a, [rSTAT]
+    and 3
+    cp 3
+    jr nz, .again           ; (an interrupt took the time between: that line's drawn)
+.end:
+    ldh a, [rSTAT]
+    and 3
+    jr nz, .end
+    ld a, e                 ; its HBlank's first dots: the DMA (its blocks, the CPU waiting)
+    dec a
+    ldh [rHDMA5], a
+    ei
+    xor a
+    ldh [rVBK], a
+    dec a                   ; (the copy not shown written over: its last picture gone)
+    ld [wRvPicHidden], a
+    ld a, [wRvPic]
+    ld [wRvPicLoad], a
+    ld a, [wFtPicGo]
+    add e
+    ld [wRvPicDone], a
+    ld a, [wRvPicWantX]
+    ld [wRvPicLoadX], a
+    ld a, [wRvPicWantY]
+    ld [wRvPicLoadY], a
+    scf
+    ret
+.late:                      ; (VBlank too near: not this way, nothing written)
+    xor a
+    ldh [rVBK], a
+.no:
+    and a                   ; (carry clear)
     ret
 
 ; VBlank's first, before the sprites: the picture FtPicDecide readied: its tiles, if not all in (FT_PIC_WHOLE at
@@ -2124,6 +2255,7 @@ FtDmgDecide:
     and a                   ; for two, his fists' roll; then the two flicker from the copies, whole)
     jp nz, .loading
 .another:
+    call FtDmgUnder         ; (what the copy not shown holds, before another starts into it)
     ld a, b
     ld [hl], a              ; another: from its first tile (the copy not shown), and where it'll sit
     ld a, 1
@@ -2137,6 +2269,7 @@ FtDmgDecide:
     ld a, [hl]
     cp b
     jp z, .whole
+    call FtDmgPlan          ; (its tiles not in that copy already)
     xor a
     ld [wRvPicDone], a
     dec a
@@ -2146,6 +2279,8 @@ FtDmgDecide:
     call FtDmgEntry
     ld a, e
     ld [wRvPicDone], a
+    xor a
+    ld [wRvPicPlanN], a     ; (no plan: its count)
     jp .loading
 .wanted:                    ; (the one coming in, perhaps early: where it sits now it's wanted)
     ld a, 1
@@ -2155,8 +2290,14 @@ FtDmgDecide:
     ld a, [wRvPicWantY]
     ld [wRvPicLoadY], a
 .loading:
-    ld a, [wRvPicLoad]      ; (its entry: its count)
+    ld a, [wRvPicLoad]      ; (its entry)
     call FtDmgEntry
+    ld a, [wRvPicPlanN]     ; (its plan's tiles, or all: in yet?)
+    and a
+    jr z, .count
+    ld a, [wRvPicNeed]
+    ld e, a
+.count:
     ld a, [wRvPicDone]
     cp e
     jp c, .keep             ; (not all in yet)
@@ -2205,11 +2346,195 @@ FtDmgPrefetch:
     cp [hl]
     ret z
     ld [wRvPicLoad], a
+    call FtDmgPlan.mapped   ; (its tiles not in that copy already: the one shown before under them, whole)
     xor a
     ld [wRvPicDone], a
     ld [wRvPicLoadWanted], a
     dec a
     ld [wRvPicHidden], a
+    ret
+
+; Another picture about to start into the copy not shown (B, HL kept): what's in it -- the one whole there (the last
+; shown, as the switch left it); or the one coming in till now, whole if all in; otherwise the one under that still,
+; from where it got to on.
+FtDmgUnder:
+    ld a, [wRvPicHidden]
+    inc a
+    ret nz                  ; (one whole there: as the last switch left it)
+    ld a, [wRvPicLoad]
+    ld c, a
+    ld a, [wRvPicShown]
+    cp c
+    ret z                   ; (none coming in: as it was)
+    ld a, [wRvPicNeed]      ; (all in: with no plan, as the stream found it)
+    ld c, a
+    ld a, [wRvPicDone]
+    cp c
+    jr c, .part
+    ld a, [wRvPicLoad]
+    ld [wRvPicUnder], a
+    xor a
+    ld [wRvPicUnderFrom], a
+    ret
+.part:
+    ld c, a
+    ld a, [wRvPicUnderFrom]
+    cp c
+    ret nc
+    ld a, c
+    ld [wRvPicUnderFrom], a
+    ret
+
+; The picture just set coming in (wRvPicLoad): its plan -- the stretches of its tiles to stream, those the same as the
+; one under them in that copy left out (FT_DPIC_PLANS: codegen's _pic_plans, per picture under it its stretches;
+; itself under it, none; below wRvPicUnderFrom, all), wRvPicNeed the last's end. None (wRvPicPlanN 0): all its tiles.
+; Leaves the header mapped.
+FtDmgPlan:
+    ld a, [wFtBankPicsDmg]
+    ld [$2000], a
+.mapped:                    ; (the header mapped already)
+    xor a
+    ld [wRvPicPlanN], a
+    dec a
+    ld [wRvPicNeed], a      ; (no plan: all its tiles -- in once the stream finds them all in)
+    ld a, [wRvPicUnder]
+    cp $FF
+    ret z
+    ld b, a
+    ld a, [wRvPicLoad]
+    cp b
+    jr z, .self
+    add a
+    ld e, a
+    ld d, 0
+    ld hl, FT_DPIC_PLANS
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    add hl, de
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    or h
+    ret z                   ; (none for it)
+.find:
+    ld a, [hl+]
+    cp $FF
+    ret z                   ; (none for the one under it)
+    cp b
+    jr z, .found
+    ld a, [hl+]             ; (past its stretches)
+    add a
+    add l
+    ld l, a
+    adc h
+    sub l
+    ld h, a
+    jr .find
+.self:
+    ld b, 0                 ; (itself under it: none but below where it starts)
+    jr .plan
+.found:
+    ld a, [hl+]
+    ld b, a                 ; (its stretches' count)
+.plan:
+    ld de, wRvPicPlan
+    ld a, [wRvPicUnderFrom] ; (below where the one under it starts: all)
+    and a
+    jr z, .seg
+    ld c, a
+    xor a
+    ld [de], a
+    inc de
+    ld a, c
+    ld [de], a
+    inc de
+.seg:
+    ld a, b
+    and a
+    jr z, .end
+    dec b
+    ld a, e
+    cp LOW(wRvPicPlan)
+    jr z, .new              ; (the first)
+    dec de
+    ld a, [de]              ; (the last one's end)
+    ld c, a
+    ld a, [hl]
+    cp c
+    jr z, .merge            ; (from there or before: the two one)
+    jr c, .merge
+    inc de
+.new:
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    ld a, [hl+]
+    ld [de], a
+    inc de
+    jr .seg
+.merge:
+    inc hl
+    ld a, [hl+]
+    cp c
+    jr nc, .further
+    ld a, c
+.further:
+    ld [de], a
+    inc de
+    jr .seg
+.end:
+    ld a, e
+    sub LOW(wRvPicPlan)
+    jr nz, .some
+    ld [de], a              ; (none: all in already -- one stretch, of none)
+    inc de
+    ld [de], a
+    inc de
+    ld a, 2
+.some:
+    srl a
+    ld [wRvPicPlanN], a
+    dec de
+    ld a, [de]
+    ld [wRvPicNeed], a
+    ret
+ASSERT HIGH(wRvPicPlan) == HIGH(wRvPicPlan + 2 * FT_DPLAN_MAX + 2)
+
+; The coming picture's plan (wRvPicPlanN not 0): C if tiles still to come, E the end of the stretch they're in
+; (wRvPicDone moved on to its first if before it). BC, D kept.
+FtDmgSeg:
+    ld a, [wRvPicNeed]
+    ld l, a
+    ld a, [wRvPicDone]
+    cp l
+    ret nc                  ; (all in)
+    push bc
+    ld c, a
+    ld a, [wRvPicPlanN]
+    ld b, a
+    ld hl, wRvPicPlan
+.s:
+    ld a, [hl+]
+    ld e, a
+    ld a, [hl+]
+    cp c
+    jr z, .next
+    jr nc, .this
+.next:
+    dec b
+    jr nz, .s
+.this:
+    ld h, a
+    ld a, c
+    cp e
+    jr nc, .in
+    ld a, e
+    ld [wRvPicDone], a
+.in:
+    ld e, h
+    pop bc
+    scf
     ret
 
 ; VBlank's first: the picture readied onto the map (its 12 rows of 8, from its tiles' copy's rows).
@@ -2248,6 +2573,9 @@ FtDmgSwitch:
     ld a, [wRvPicShown]     ; (the one going down: whole in the copy now not shown)
     ld [wRvPicHidden], a
     ld [wRvPicPrev], a
+    ld [wRvPicUnder], a
+    xor a
+    ld [wRvPicUnderFrom], a
     ld a, [wRvPicLoad]
     ld [wRvPicShown], a
     ld a, [wFtBankData]
@@ -2296,10 +2624,15 @@ FtDmgPicsStart:
     ld [wRvPicLoadWanted], a
     dec a
     ld [wRvPicHidden], a
+    ld [wRvPicUnder], a     ; (the second copy: nothing known in it)
+    xor a
+    ld [wRvPicUnderFrom], a
     ld a, [wRvPicLoad]
     call FtDmgEntry
     ld a, e
     ld [wRvPicDone], a
+    xor a
+    ld [wRvPicPlanN], a
     ld a, d
     ld [$2000], a
     ld h, b
@@ -2388,9 +2721,13 @@ ENDC
     cp [hl]
     jr z, .none
     call FtDmgEntry
+    ld a, [wRvPicPlanN]
+    and a
+    jr nz, .plan            ; (a plan: its next stretch)
     ld a, [wRvPicDone]
     cp e
-    jr nc, .none
+    jr nc, .rvAll
+.rvJob:
     ld hl, wRvPicDone
     call .job
     pop hl
@@ -2420,6 +2757,16 @@ ENDC
     pop hl
     ret
 .none:
+    xor a
+    ret
+.plan:
+    call FtDmgSeg           ; (E its end)
+    jr c, .rvJob
+    xor a
+    ret
+.rvAll:                     ; (all in, no plan: its count's its need, for FtDmgUnder)
+    ld a, e
+    ld [wRvPicNeed], a
     xor a
     ret
 .job:                       ; HL its count in; BC its tiles, D bank, E count: maps it, pushes the source (under the return)

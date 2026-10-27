@@ -13,6 +13,7 @@ REF = ROOT / "tests" / "qa_reference.json"
 GREY = ROOT / "tests" / "golden" / "grey-screens"
 UPDATE = os.environ.get("QA_UPDATE") == "1"
 LATE_MARGIN = 1.5                       # (picture-late %: the bot plays no part, but a picture's tiles can shift)
+LATE_MARGIN_CGB = 0.5                   # (Color: his pictures up the frame the NES asks, the big ones too)
 LAG_MARGIN = 1.0                        # (his poses up later on the original than on Color, % of them: Mac still, the
                                         #  same poses at the same frames on both, run to run; a frame's work can shift a few)
 GREY_SCREENS = ["Title", "Challenger", "Challenger: Tyson", "You win", "Joe wins", "You win (TKO): Bull",
@@ -159,7 +160,7 @@ def qa_perf(rom):
             delays[cgb] = _pose_delays(shown)
             lost = lost if cgb else frames_lost
             out[key] = round(late, 2)
-            ok = under == 0 and (UPDATE or late <= ref.get(key, 100) + LATE_MARGIN)
+            ok = under == 0 and (UPDATE or late <= ref.get(key, 100) + (LATE_MARGIN_CGB if cgb else LATE_MARGIN))
             good = good and ok
             if not ok or UPDATE:
                 lines.append(f"    {'✓' if ok else '✗'} {key}: {n} frames, crowd sound dry or broken {under}, pictures late {late:.2f}%"
@@ -178,6 +179,105 @@ def qa_perf(rom):
         _save_ref("lag", lag_out)
     lines.append(f"    {'✓' if good else '✗'} {len(out)} fights' frames within budget; the original's poses up later than"
                  f" Color's: {lag_later} of {lag_n} ({100 * lag_later / max(1, lag_n):.1f}%)")
+    return good, lines
+
+
+OFF_SCENES = ["Bells", "First screen", "Title", "Challenger", "You win", "Joe wins", "Pass key", "Corner", "Rematch",
+              "You win (TKO)", "Challenger: Bull", "Corner: Bull", "KO News", "Game over", "Credits",
+              "Title bout: Honda", "The dream fight"]
+
+
+def _off_frames(rom, cgb, scene, frames, every):
+    """Booted into SCENE (the first LoadScene's), FRAMES on, start pressed every EVERY frames (0: never): off the fight
+    (its screen on, no scene loading), each VBlank (line 144's start: lines counted on from frame to frame) and the
+    main loop's VBlank work (VBlankDone) -- {"n": VBlanks counted, "lost": one that found the loop waiting for it and
+    had no work run in it, "twice": two works begun in one VBlank, "crowd": counted with the crowd's recording playing
+    (its timer's interrupt on)}. A VBlank that came with the frame's own work still running (from VBlankDone to its
+    return to MainLoop) isn't the loop's to lose: not counted."""
+    from . import bot
+    from pyboy import PyBoy
+    S, B = bot._symbols(rom)
+    pb = PyBoy(str(rom), window="null", cgb=cgb, sound_emulated=False)
+    pb.set_emulation_speed(0)
+    m = pb.memory
+    if not cgb:                         # (as the original boots: A = $01; PyBoy gives $11)
+        pb.hook_register(B["Start"], S["Start"], lambda _: setattr(pb.register_file, "A", 1), None)
+    st = {"first": True, "loading": True, "line": 0, "ly": 0, "frame": -154}
+    events = []                         # (line, "work" | "wait" | "load" | "frame", off the fight, the crowd's timer on)
+
+    def at(kind):                       # (the line count on, by LY: a frame's end each 154 lines at least)
+        ly = m[0xFF44]
+        st["line"] += (ly - st["ly"]) % 154
+        st["ly"] = ly
+        if kind == "frame":
+            if st["line"] - st["frame"] < 77 and m[0xFF40] & 0x80:
+                st["line"] += 154       # (a whole frame between two ends, no event in it)
+            st["frame"] = st["line"]
+        events.append((st["line"], kind, not st["loading"] and m[S["hFtActive"]] == 0 and bool(m[0xFF40] & 0x80),
+                       bool(m[0xFFFF] & 4)))
+
+    def load(_):
+        if st["first"]:
+            st["first"] = False
+            pb.register_file.A = scene
+        st["loading"] = True
+        at("load")
+
+    def done(_):
+        st["loading"] = False
+        at("work")
+    pb.hook_register(B["LoadScene"], S["LoadScene"], load, None)
+    pb.hook_register(B["VBlankDone"], S["VBlankDone"], done, None)
+    pb.hook_register(B["MainLoop"], S["MainLoop"], lambda _: at("wait"), None)
+    held = False
+    for t in range(frames):
+        if every and (t % every < 3) != held:
+            held = not held
+            (pb.button_press if held else pb.button_release)("start")
+        pb.tick(1, False, False)
+        at("frame")
+    pb.stop(save=False)
+    out = {"n": 0, "lost": 0, "twice": 0, "crowd": 0}
+    first = (144 - events[0][0]) % 154 + events[0][0]
+    i, state = 0, None
+    for v in range(first, events[-1][0] - 154, 154):
+        while i < len(events) and events[i][0] < v:
+            if events[i][1] in ("work", "wait", "load"):
+                state = events[i]
+            i += 1
+        near = [e for e in events[max(0, i - 400):i + 400] if v - 154 <= e[0] < v + 154]
+        if not all(e[2] for e in near) or state is None:
+            continue                    # (a fight, a scene loading, the screen off near it)
+        out["n"] += 1
+        out["crowd"] += events[i - 1][3]
+        works = [e[0] for e in events[i:i + 400] if e[1] == "work" and e[0] < v + 154]
+        out["twice"] += sum(1 for w in works if w < v + 10) >= 2
+        if state[1] == "wait" and not any(w < v + 77 for w in works):
+            out["lost"] += 1
+    return out
+
+
+def qa_frames(rom):
+    """Off the fight, both machines (the boot, the title, the challengers, the corner, the results, idle and pressed
+    on): every VBlank's work run -- none lost to the crowd's timer interrupt returning just as VBlank begins, none
+    run twice in one VBlank (a screen's work can be short)."""
+    names = {n: i for i, n in enumerate(s["name"] for s in _project()["scenes"])}
+    lines, good = [], True
+    for cgb in (True, False):
+        tot = {"n": 0, "lost": 0, "twice": 0, "crowd": 0}
+        bad = []
+        for name in OFF_SCENES:
+            for every in (0, 150):
+                r = _off_frames(rom, cgb, names[name], 4000, every)
+                for k in tot:
+                    tot[k] += r[k]
+                if r["lost"] or r["twice"]:
+                    bad.append(f"{name}{' (pressed)' if every else ''}: lost {r['lost']}, twice {r['twice']}")
+        ok = tot["lost"] == 0 and tot["twice"] == 0 and tot["n"] > 0
+        good = good and ok
+        lines.append(f"    {'✓' if ok else '✗'} {'Color' if cgb else 'the original'}: {tot['n']} VBlanks off the fight"
+                     f" ({tot['crowd']} with the crowd's timer on), lost {tot['lost']}, worked twice {tot['twice']}")
+        lines += [f"      ✗ {b}" for b in bad]
     return good, lines
 
 

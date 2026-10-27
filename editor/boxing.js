@@ -676,10 +676,12 @@ export function boxingGame(pack) {
 
     // ---- The ring ----
     const sf = S[id.fight], ring = layer(id.fight);
+    const nesRing = ringOf(rv)?.wall;                       // Punch-Out!!'s: the HUD in boxes on its wall, the crowd
+                                                            // behind three ropes, posts with pads in its corners
     let crowd = 1;                                          // his crowd's color (Punch-Out!!'s differs by fight)
-    if (rv.crowdColor) {
-      const [c0, , c2, c3] = p.palettes[1].colors;
-      crowd = addPal(`${rv.short} crowd`, [c0, rv.crowdColor, c2, c3]);
+    if (rv.crowdColor || nesRing) {                         // (Punch-Out!!'s ring: the crowd's palette the posts' too,
+      const [c0, c1, c2, c3] = p.palettes[1].colors;        //  the NES's: the posts in the crowd's color, their pads
+      crowd = addPal(`${rv.short} crowd`, [c0, rv.crowdColor || c1, nesRing ? matOf(rv) : c2, c3]);   // the mat's)
     }
     let mat = 2;                                            // his ring's mat (another circuit's: its own)
     if (String(matOf(rv)) !== String(p.palettes[2].colors[0])) {
@@ -690,16 +692,14 @@ export function boxingGame(pack) {
     cellPalettes(sf, 0, 5, M.CW, 13, mat);
     let ropeRow = null, sideRope = null;                    // (Punch-Out!!'s: the crowd's last row, behind his head;
                                                             // the side ropes' ends below it)
-    const nesRing = ringOf(rv)?.wall;                       // Punch-Out!!'s: the HUD in boxes on its wall, the crowd
-    const hud = nesRing                                     // behind three ropes, red posts with blue pads
+    const hud = nesRing
       ? { stars: { x: 1, y: 1 }, hearts: { x: 3, y: 1 }, points: { x: 7, y: 1 }, clock: { x: 15, y: 1 },
           round: { x: 12, y: 2 }, playerBar: { x: 0, y: 2 }, rivalBar: { x: 14, y: 2 } }
       : { stars: { x: 1, y: 0 }, hearts: { x: 3, y: 0 }, points: { x: 6, y: 0 }, clock: { x: 15, y: 0 },
           round: { x: 13, y: 0 }, playerBar: { x: 1, y: 1 }, rivalBar: { x: 13, y: 1 } };
     if (nesRing) {
-      const r = ringOf(rv), [white, , , dark] = p.palettes[crowd].colors;
+      const r = ringOf(rv), [white] = p.palettes[crowd].colors;
       const wall = addPal(`${rv.short} wall`, [r.wall, white, r.wall, r.brick]);
-      const posts = addPal(`${rv.short} posts`, [white, matOf(rv), dark, r.post]);
       // The HUD as Punch-Out!!'s: boxes on the arena's wall (its lamps along the top). Left: stars, hearts, your
       // bar; middle: points, the round; right: the clock, his bar.
       const boxes = [[0, 5], [7, 12], [14, 19]];
@@ -714,8 +714,9 @@ export function boxingGame(pack) {
       icon(ring, 0, 1, STAR); icon(ring, 2, 1, HEART);
       M.drawText(ring, 'ROUND', 56, 16, 0);
       // The crowd: heads in rows behind three ropes, as tall as Punch-Out!!'s (to the fighter's head: he stands in
-      // front of them); the posts' cells their own (the floor's blue outside the ring). The bottom 8 lines are the
-      // rope row (the band over his area's first row, his head in front of it: sprites).
+      // front of them), right up to the posts; the posts' cells in its palette too, as the NES's (1 the crowd and the
+      // posts, 2 the pads, the mat's). The bottom 8 lines are the rope row (the band over his area's first row, his
+      // head in front of it: sprites).
       const CROWD = 24, crowdPx = new Uint8Array(M.W * CROWD).fill(3);
       const CROWD_REPEAT = 128;                             // (the crowd's art: the ring's width of it, 1:1)
       const put = (x, y, slot) => { crowdPx[(y - 24) * M.W + x] = slot; };
@@ -723,23 +724,23 @@ export function boxingGame(pack) {
       for (let y = 24; y < 24 + CROWD; y++) {
         if (ropes.includes(y)) continue;
         const art = pack.crowdArt?.[y - 24];              // Punch-Out!!'s own spectators (1:1), else a pattern
-        for (let x = 16; x < M.W - 16; x++) {
-          if (art) { if (art[(x - 16) % CROWD_REPEAT] === '1') put(x, y, 1); continue; }   // (its first stretch, again:
+        for (let x = 11; x < M.W - 11; x++) {
+          if (art) { if (art[(x - 16 + CROWD_REPEAT) % CROWD_REPEAT] === '1') put(x, y, 1); continue; }   // (its first stretch, again:
           const r4 = (y - 24) % 5, shift = Math.floor((y - 24) / 5) % 2 ? 2 : 0, k = (x + shift) % 4;
           if ((r4 < 2 && k < 2) || (r4 === 2 && k < 3) || (r4 === 3 && k === 1)) put(x, y, 1);
         }
       }
       for (const y of ropes) for (let x = 12; x < M.W - 12; x++) put(x, y, 0);
-      // The posts a tile in from the edges, as Punch-Out!!'s: red, a blue pad at each rope, the ring's sides off
-      // them down to the screen's edge (the last of them, past the crowd's rows, sprites: SIDE_ROPE)
+      // The posts a tile in from the edges, as Punch-Out!!'s: the crowd's color, a pad (the mat's) at each rope, the
+      // ring's sides off them down to the screen's edge (the last of them, past the crowd's rows, sprites: SIDE_ROPE)
       const sideY = (y0, x) => y0 + Math.round(1.8 * (8 - x));   // a side rope's line, x 0-7 (its post at 8)
       for (const side of [0, 1]) {
         const at = (x, y, slot) => put(side ? M.W - 1 - x : x, y, slot);
-        for (let y = 24; y < 24 + CROWD; y++) for (let x = 0; x < 16; x++) at(x, y, 2);   // outside the ring: dark
-        for (let y = 24; y < 24 + CROWD; y++) { at(8, y, 3); at(9, y, 3); at(10, y, 2); }   // the post (its edge dark)
+        for (let y = 24; y < 24 + CROWD; y++) for (let x = 0; x < 11; x++) at(x, y, 3);   // outside the ring: dark
+        for (let y = 24; y < 24 + CROWD; y++) { at(8, y, 1); at(9, y, 1); at(10, y, 3); }   // the post (its edge dark)
         for (const y of ropes) {
           for (let x = 11; x < 16; x++) at(x, y, 0);        // the rope to it
-          for (let x = 7; x < 11; x++) for (let dy = -1; dy <= 1; dy++) at(x, y + dy, 1);   // its pad
+          for (let x = 7; x < 11; x++) for (let dy = -1; dy <= 1; dy++) at(x, y + dy, 2);   // its pad
           for (let x = 0; x < 8; x++) {                     // and the ring's side, down off it (unbroken)
             for (let yy = sideY(y, x + 1) + 1; yy <= sideY(y, x); yy++) if (yy < 24 + CROWD) at(x, yy, 0);
           }
@@ -749,10 +750,9 @@ export function boxingGame(pack) {
         const x = i % 8, y = 48 + (i >> 3);
         return ropes.some(y0 => y > sideY(y0, x + 1) && y <= sideY(y0, x)) ? 2 : 0;
       }).join('');
-      cellPalettes(sf, 0, 3, 2, 2, posts); cellPalettes(sf, M.CW - 2, 3, 2, 2, posts);
       for (let i = 0; i < M.W * 16; i++) ring.pixels[24 * M.W + i] = crowdPx[i];   // two rows in the scene, the
       ropeRow = { pixels: [...crowdPx.slice(M.W * 16)].join(''),                    // third its own
-                  cells: [...Array(M.CW).keys()].map(c => (c < 2 || c >= M.CW - 2 ? posts : crowd)) };
+                  cells: [...Array(M.CW).keys()].map(() => crowd) };
         } else {
       if (ringOf(rv)?.post) {                               // the corner posts in the ring's colors, pads the mat's
         const [c0, , c2] = p.palettes[crowd].colors;

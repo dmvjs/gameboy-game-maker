@@ -9,7 +9,7 @@ from pathlib import Path
 
 from . import codegen
 from .build import build_rom
-from .qatests import qa_decision, qa_grey, qa_hud, qa_mac, qa_perf, qa_reset, qa_sgb, qa_star  # noqa: F401  (career jobs too)
+from .qatests import qa_decision, qa_frames, qa_grey, qa_hud, qa_mac, qa_perf, qa_reset, qa_sgb, qa_star  # noqa: F401  (career jobs too)
 
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLE = ROOT / "examples" / "joe-vs-mac.gbstage.json"
@@ -913,7 +913,8 @@ def run(log=print, only=None):
               "qa_hud": "Every fight's HUD from its first frame",
               "qa_reset": "The soft reset, both machines",
               "qa_sgb": "The Super Game Boy: its packets, the border",
-              "qa_decision": "A decision after the last round"}
+              "qa_decision": "A decision after the last round",
+              "qa_frames": "Off the fight, every VBlank's work (none lost, none run twice)"}
     if only:
         titles = {k: v for k, v in titles.items() if k in only}
     with ProcessPoolExecutor() as pool:
