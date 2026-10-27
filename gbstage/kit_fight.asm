@@ -252,6 +252,9 @@ wRvPicUnder: db             ; the copy not shown: the picture whole in it from i
 wRvPicUnderFrom: db
 wRvPicPlanN: db             ; the coming picture's plan: its stretches to stream, each its first tile and the one after its
 wRvPicPlan: ds 2 * FT_DPLAN_MAX + 2 ; last -- the rest already in that copy, the same tiles (FtDmgPlan)
+wRvGuessKey: ds 6            ; his guess at the next picture, the last asked (the one shown, the two before it, his state
+wRvGuessAns: db             ; script's $90, $93, its frames to go up to 2; $FF none yet) and its answer (FtDmgGuess)
+ASSERT HIGH(wRvGuessKey) == HIGH(wRvGuessAns)
 
 SECTION "Fight between rounds", WRAM0   ; kept while the corner scene shows
 wFtResume: db               ; coming back from the corner: carry on, don't start a new fight
@@ -855,6 +858,9 @@ IF DEF(FT_NES)
     ldh a, [hFtCueSrc]      ; (the original, his dodge cue: his black lighter in his band's lines)
     and a
     call nz, .cueBand
+    ldh a, [hFtCueOn]       ; (and his cue's OBP0 back once this line's drawn: his top rows' sprites end on it,
+    and 2                   ;  the side ropes' outside starts on the next -- black, not in his cue's greys)
+    call nz, .cueObjLate
 ENDC
 IF DEF(FT_ROPE)
     ld a, FT_DMA_LINE       ; then the lower part's sprites, where none are
@@ -867,10 +873,8 @@ IF DEF(FT_ROPE)
     pop af
     reti
 .dma:                       ; mid-frame: the lower part's 40 sprites in (his top rows' have all been drawn)
-IF DEF(FT_DMG_WHITE)
     ldh a, [hFtObp1]        ; (OBP1 as the referee's again)
     ldh [rOBP1], a
-ENDC
 IF DEF(FT_NES)
     ldh a, [hFtCueOn]       ; (his cue's OBP0 back: Mac's and the referee's below)
     and 2
@@ -944,6 +948,10 @@ IF DEF(FT_NES)
     ldh [hFtCueOn], a
     pop bc
     ret
+.cueObjLate:
+    ldh a, [rSTAT]
+    and 3
+    jr nz, .cueObjLate
 .cueObjOff:
     ldh a, [hFtObp]
     ldh [rOBP0], a
@@ -1146,6 +1154,8 @@ DEF FT_DMG_MAC_ROOM EQU 18     ; the original's: each copy's (sprite tiles FT_OB
 DEF FT_DPIC_LATE EQU $4410     ; (and per picture the last line his top rows' sprites may be built again for it: PicLateDmg)
 DEF FT_DPIC_GUESS EQU $4001    ; (and its guess at his next picture, A: PicGuessDmg, his rules from PicNextDmg)
 DEF FT_DPIC_PLANS EQU $4004    ; (and its skip plans' table's address: per picture its plans', 0 none -- FtDmgPlan)
+DEF FT_DPIC_STATES EQU $4006   ; (and its state rules' bank: PicStatesDmg at its $4000, PicGenDmg at FT_DSTATE_GEN -- FtDmgGuess)
+DEF FT_DSTATE_GEN EQU $4100
 DEF FT_DPIC_PLACEX EQU $4490   ; (and per NES frame, then mirrored, where its grey picture sits: x, then y 512 on)
 DEF FT_DPIC_TABLE EQU $4010    ; the original's grey pictures: per picture its tiles (address, bank, count), sprites
 DEF FT_PIC_WHOLE EQU 60        ; a picture of up to this many tiles goes up in one VBlank, its tiles and all
@@ -1175,18 +1185,10 @@ IF DEF(FT_NES)
     call FtPicSwitch        ; (his rival's: before the sprites built for both)
     ld [wFtPicDrew], a
 ENDC
-IF DEF(FT_DMG_WHITE)
-    ldh a, [hFtObp1]        ; (the original: OBP1's 1 the mat's white over his top rows, his eyes' whites; the
-    ld b, a                 ; lower sprites' back at FT_DMA_LINE)
-    and %11110011
-    ld c, a
-    ld a, b
-    and %11
-    add a
-    add a
-    or c
-    ldh [rOBP1], a
-ENDC
+IF DEF(FT_ROPE)
+    ldh a, [hFtObp1Top]     ; (the original: OBP1's 1 and 2 the mat's white over his top rows -- his eyes' whites, a
+    ldh [rOBP1], a          ; star's sparkle white over the crowd too, as the NES's; the lower sprites' back at
+ENDC                        ; FT_DMA_LINE)
     ldh a, [rIE]            ; (the crowd's timer held off through the DMA: mid-DMA the CPU can't fetch from ROM,
     push af                 ; where its handler is; it runs straight after)
     and ~%100
@@ -2327,31 +2329,201 @@ FtDmgDecide:
     ld [$2000], a
     ret
 
-; The one wanted up, the copy not shown idle: the picture likely next (FT_DPIC_GUESS: by the one up and the two
-; shown before it) into it, early.
+; The one wanted up: the picture likely next (FtDmgGuess: by his state now, and the one up and the two shown
+; before it) into the copy not shown, early -- or instead of the one guessed before, if the guess changed (what
+; that one left in the copy known: FtDmgUnder).
 FtDmgPrefetch:
-    ld a, [wRvPicLoad]
-    ld hl, wRvPicShown
-    cp [hl]
-    ret nz                  ; (one coming in, or in, already)
     ld a, [wFtBankPicsDmg]
     ld [$2000], a
-    call FT_DPIC_GUESS
+    call FtDmgGuess
+.guessed:
     cp $FF
     ret z
     ld hl, wRvPicShown
     cp [hl]
     ret z
-    ld hl, wRvPicHidden     ; (whole in that copy already)
+    ld b, a
+    ld a, [wRvPicLoad]
     cp [hl]
+    jr z, .idle
+    cp b
+    ret z                   ; (coming in, or in, already)
+    ld a, [wRvPicLoadWanted]
+    and a
+    ret nz                  ; (one the game drew coming in still: on in, in case it's back)
+    call FtDmgUnder         ; (another guessed before: what it left in the copy)
+    jr .start
+.idle:
+    ld a, [wRvPicHidden]    ; (whole in that copy already)
+    cp b
     ret z
+.start:
+    ld a, b
     ld [wRvPicLoad], a
-    call FtDmgPlan.mapped   ; (its tiles not in that copy already: the one shown before under them, whole)
+    call FtDmgPlan.mapped   ; (its tiles not in that copy already: the one under them, whole from where it is)
     xor a
     ld [wRvPicDone], a
     ld [wRvPicLoadWanted], a
     dec a
     ld [wRvPicHidden], a
+    ret
+
+; A: his picture likely next ($FF none), the header mapped: by his state script's place (his state rules, their bank:
+; the one shown, the one before it, $90, $93, $92 up to 2 -- else $90, $93 alone), else by the pictures shown
+; (FT_DPIC_GUESS). The last asked and its answer kept (wRvGuessKey): asked each frame, worked out only when one changes.
+FtDmgGuess:
+    ld a, [wNes + $92]      ; (his state's frames to go, up to 2)
+    cp 2
+    jr c, .few
+    ld a, 2
+.few:
+    ld d, a
+    ld hl, wRvGuessKey      ; (each part kept as it's looked at)
+    ld a, [wRvPicShown]
+    cp [hl]
+    ld [hl+], a
+    jr nz, .new1
+    ld a, [wRvPicPrev]
+    cp [hl]
+    ld [hl+], a
+    jr nz, .new2
+    ld a, [wRvPicPrev2]
+    cp [hl]
+    ld [hl+], a
+    jr nz, .new3
+    ld a, [wNes + $90]
+    cp [hl]
+    ld [hl+], a
+    jr nz, .new4
+    ld a, [wNes + $93]
+    cp [hl]
+    ld [hl+], a
+    jr nz, .new5
+    ld a, d
+    cp [hl]
+    ld [hl+], a
+    jr nz, .new6
+    ld a, [hl]
+    ret
+.new1:
+    ld a, [wRvPicPrev]
+    ld [hl+], a
+.new2:
+    ld a, [wRvPicPrev2]
+    ld [hl+], a
+.new3:
+    ld a, [wNes + $90]
+    ld [hl+], a
+.new4:
+    ld a, [wNes + $93]
+    ld [hl+], a
+.new5:
+    ld a, d
+    ld [hl+], a
+.new6:
+    ld a, [FT_DPIC_STATES]
+    ld [$2000], a
+    call .state
+    ld b, a
+    ld a, [wFtBankPicsDmg]
+    ld [$2000], a
+    ld a, b
+    call nc, FT_DPIC_GUESS  ; (none: by the pictures shown)
+    ld [wRvGuessAns], a
+    ret
+.state:                     ; (C, A: the one shown's rule that fits, else his state's; NC none)
+    ld a, [wNes + $90]
+    ld b, a
+    ld a, [wNes + $93]
+    ld c, a
+    ld a, [wRvPicPrev]
+    ld e, a
+    ld a, [wRvPicShown]
+    add a
+    ld l, a
+    ld h, HIGH(FT_DSTATE_GEN) - 1
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    or h
+    jr z, .gen
+    ld a, [hl+]
+    ld d, a                 ; (its states)
+.grp:
+    ld a, [hl+]
+    cp b
+    ld a, [hl+]
+    jr z, .in
+    push bc                 ; (past its rules, 4 bytes each)
+    ld c, a
+    ld b, 0
+    sla c
+    rl b
+    sla c
+    rl b
+    add hl, bc
+    pop bc
+    dec d
+    jr nz, .grp
+    jr .gen
+.in:
+    ld d, a                 ; (its rules: place, before ($FF any), frames to go, next)
+.rule:
+    ld a, [hl+]
+    cp c
+    jr nz, .r3
+    ld a, [hl+]
+    cp $FF
+    jr z, .anyBefore
+    cp e
+    jr nz, .r2
+.anyBefore:
+    ld a, [wRvGuessKey + 5]
+    cp [hl]
+    inc hl
+    jr nz, .r1
+    ld a, [hl]
+    scf
+    ret
+.r3:
+    inc hl
+.r2:
+    inc hl
+.r1:
+    inc hl
+    dec d
+    jr nz, .rule
+.gen:                       ; (his state's: per place from its first, its next -- $FF none)
+    ld a, b
+    add a
+    ld l, a
+    ld a, HIGH(FT_DSTATE_GEN)
+    adc 0
+    ld h, a
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a
+    or h
+    ret z                   ; (NC)
+    ld a, c
+    sub [hl]
+    jr c, .none
+    inc hl
+    cp [hl]
+    jr nc, .none
+    inc hl
+    add l
+    ld l, a
+    adc h
+    sub l
+    ld h, a
+    ld a, [hl]
+    cp $FF
+    jr z, .none
+    scf
+    ret
+.none:
+    and a
     ret
 
 ; Another picture about to start into the copy not shown (B, HL kept): what's in it -- the one whole there (the last
@@ -2625,6 +2797,7 @@ FtDmgPicsStart:
     dec a
     ld [wRvPicHidden], a
     ld [wRvPicUnder], a     ; (the second copy: nothing known in it)
+    ld [wRvGuessKey], a     ; (no guess asked yet)
     xor a
     ld [wRvPicUnderFrom], a
     ld a, [wRvPicLoad]

@@ -711,7 +711,7 @@ export function boxingGame(pack) {
         fillRect(ring, x, 0, 4, 3, 1); ring.pixels[x] = 3; ring.pixels[x + 3] = 3;
       }
       for (const [x0, x1] of boxes) fillRect(ring, x0 * 8, 8, (x1 - x0 + 1) * 8, 16, 3);
-      icon(ring, 0, 1, STAR); icon(ring, 2, 1, HEART);
+      icon(ring, 0, 1, STAR.map(r => r.replace(/1/g, '0'))); icon(ring, 2, 1, HEART);   // (its star white, the NES's)
       M.drawText(ring, 'ROUND', 56, 16, 0);
       // The crowd: heads in rows behind three ropes, as tall as Punch-Out!!'s (to the fighter's head: he stands in
       // front of them), right up to the posts; the posts' cells in its palette too, as the NES's (1 the crowd and the
@@ -788,7 +788,7 @@ export function boxingGame(pack) {
       referee: { palette: 1, poses: pack.referee?.poses || REF_POSES, ...(pack.referee?.words ? { words: pack.referee.words } : {}),
                  ...(pack.referee?.shirtColors ? { shirtPalette: P.downColors ? 4 : 3 } : {}) },
       hud, ...(ropeRow ? { ropeRow } : {}), ...(sideRope ? { sideRope } : {}),
-      textSlot: 0, barSlot: 2, crowdRow: 3,
+      textSlot: 0, barSlot: nesRing ? 0 : 2, crowdRow: 3,   // (the NES's bars white)
       opening: [['idle', 250], ['idle', 250], ['idle', 250], ['idle', 250]],      // does nothing for 40 seconds
       loop: [['idle', 90], ['jab', 0], ['idle', 60], ['guard', 90], ['jab', 0], ['idle', 40], ['hook', 0],
              ['idle', 70], ['guard', 60], ['jab', 0], ['idle', 30], ['jab', 0], ['idle', 50], ['hook', 0]],

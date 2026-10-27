@@ -2131,6 +2131,76 @@ def import_pictures(frames, palettes):
     return out
 
 
+def grey_inks(key, frames, pics, palettes):
+    """The original Game Boy's grey for some of a picture's pixels, as their own color's rather than the one their
+    tile's palette gave them on Color (the original has no palettes per tile): a glove's color (one of the glove
+    palette's not in the others) in a tile of his skin's or hair's, his glove's grey -- one look in every picture,
+    as the NES's -- and anything touchups/KEY/grey/FRAME.txt draws otherwise (a picture as the original shows it,
+    where Color's can't change: its pixels' nearest of his colors). Each picture's {"g1": [pixel, ...], ...}."""
+    gdir = TOUCHUPS / key / "grey"
+    over = {}
+    for path in sorted(gdir.glob("*.txt")) if gdir.exists() else ():
+        k = path.stem[:-1] + "|" if path.stem.endswith("m") else path.stem
+        over[k] = read_touchup(path)[1]
+    pal = [[tuple(c) for c in p] for p in palettes]
+    glove = pal[KINDS.index("g")]
+    others = {c for k in "sh" for c in pal[KINDS.index(k)][1:]}
+    every = [(b, s) for b in range(len(pal)) for s in (1, 2, 3)]
+    def gloves(fr):                     # (a glove's color in patches a glove's size: not Great Tiger's gem, say)
+        at = {(x, y) for y, row in enumerate(fr) for x, c in enumerate(row)
+              if c and min(dist(from8(c[:3]), glove[q]) for q in (1, 2, 3) if glove[q] not in others) <= 2} \
+            if any(glove[q] not in others for q in (1, 2, 3)) else set()
+        big, seen = set(), set()
+        for p0 in at:
+            if p0 in seen:
+                continue
+            g, st = {p0}, [p0]
+            while st:
+                x, y = st.pop()
+                for q in ((x + dx, y + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)):
+                    if q in at and q not in g:
+                        g.add(q); st.append(q)
+            seen |= g
+            ring = {(x + dx, y + dy) for x, y in g for dx in range(-2, 3) for dy in range(-2, 3)} - g
+            white = sum(1 for x, y in ring if 0 <= y < len(fr) and 0 <= x < len(fr[y]) and fr[y][x]
+                        and min(from8(fr[y][x][:3])) >= 26)
+            if len(g) > 16 or white * 2 < len(ring) * 0.6:  # (a gem: 16 at most in a turban's white, _jewel's)
+                big |= g
+        return big
+    for k, v in pics.items():
+        fr, gf = frames.get(k) or [], over.get(k)
+        ink, big = {}, gloves(fr)
+        for i, ch in enumerate(v["pixels"]):
+            if ch == "0":
+                continue
+            y, x = divmod(i, RW)
+            kind = v["cells"][(y // 8) * FIGHT_W + x // 8]
+            have = pal[KINDS.index(kind)][int(ch)]
+            src = fr[y][x] if y < len(fr) and x < len(fr[y]) and fr[y][x] else None
+            g = gf[y][x] if gf and y < len(gf) and x < len(gf[y]) and gf[y][x] else None
+            if g is not None and (src is None or tuple(g[:3]) != tuple(src[:3])):
+                c = from8(g[:3])
+                b, s = min(every, key=lambda t: dist(c, pal[t[0]][t[1]]))
+            elif src is not None and kind != "g" and (x, y) in big:
+                c = from8(src[:3])
+                s = min((1, 2, 3), key=lambda q: dist(c, glove[q]))
+                if dist(c, glove[s]) > 2 or glove[s] in others:
+                    continue
+                b = KINDS.index("g")
+            else:
+                continue
+            if pal[b][s] != have:
+                ink.setdefault(f"{KINDS[b]}{s}", []).append(i)
+        if ink:
+            v["greyInk"] = ink
+        elif "greyInk" in v:
+            del v["greyInk"]
+    for k in over:
+        if k not in pics:
+            print(f"  grey touch-up {k}: no picture {k}")
+    return pics
+
+
 def _jewel(shape, gem=(236, 106, 100), cloth=(236, 238, 236)):
     """A turban's gem in a frame (Great Tiger's): the smallest patch of its color mostly bordered by the turban's
     white (not a glove), as (x, y) at its middle; None if it isn't showing."""
@@ -2345,6 +2415,7 @@ def mac_down_colors(colors, inks=None):
 
 
 PIC_NEXT = HERE / "out" / "pic-next.json"     # per rival: per picture, the one likely after it (pic_next.py)
+PIC_STATE = HERE / "out" / "pic-state.json"   # per rival: his state rules for the one likely next (pic_next.py)
 
 
 def rival_art(key, s, colors, pposes, max_share=24):
@@ -2377,7 +2448,7 @@ def rival_art(key, s, colors, pposes, max_share=24):
             frames_ = despeckle(frames_)                 # (then the shrink's stray dots, the touch-ups' hashes kept)
         places = {k: [x - moved.get(k, (0, 0))[0], y - moved.get(k, (0, 0))[1]]
                   for k, (x, y) in {k: places.get(k, [0, 0]) for k in frames_}.items()}
-        art["pictures"] = {"poses": import_pictures(frames_, pals), "places": {k: v for k, v in places.items() if v != [0, 0]}}
+        art["pictures"] = {"poses": grey_inks(key, frames_, import_pictures(frames_, pals), pals), "places": {k: v for k, v in places.items() if v != [0, 0]}}
         dmg = sorted((TOUCHUPS / key / "dmg").glob("*.txt")) if (TOUCHUPS / key / "dmg").exists() else []
         if dmg:                         # (the original Game Boy: its own picture where full size streams too slow there
             dframes, dplaces = {}, dict(places)   #  -- the one drawn before, touchups/KEY/dmg -- and where it sits)
@@ -2405,6 +2476,12 @@ def rival_art(key, s, colors, pposes, max_share=24):
         if nxt:                         # (the original: the picture likely next, by the ones before it, loaded early:
             art["pictures"]["next"] = {k: [r for r in v if all(c in frames_ for c in r)]   # pic_next.py)
                                        for k, v in sorted(nxt.items()) if k in frames_}
+        nst = json.loads(PIC_STATE.read_text()).get(key) if PIC_STATE.exists() else None
+        if nst:                         # (and by his state script's place first: pic_next.py)
+            art["pictures"]["nextState"] = {
+                "spec": {k: [r for r in v if r[2] in frames_ and r[4] in frames_]
+                         for k, v in sorted(nst["spec"].items()) if k in frames_},
+                "general": [r for r in nst["general"] if r[2] in frames_]}
         write_sheet(HERE / "out" / f"{key}-pictures.png", [frames_[k] for k in sorted(frames_)], RW, RH, cols=13)
         print(f"{r['name']}: {len(frames_)} pictures, exact for Color")
     return art
@@ -2520,7 +2597,9 @@ def _rival_js(key, art):
     r, up = NES_RIVALS[key], key.upper()
     pose = lambda v: f"  {{ pixels: '{v['pixels']}', cells: '{v['cells']}' }},"
     pic = lambda v: (f"  {{ pixels: '{v['pixels']}', cells: '{v['cells']}'"      # (and an eye's white his tile
-                     + (f", whites: {json.dumps(v['whites'])}" if v.get("whites") else "") + " },")   # can't show)
+                     + (f", whites: {json.dumps(v['whites'])}" if v.get("whites") else "")      # can't show; the
+                     + (f", greyInk: {json.dumps(v['greyInk'], separators=(',', ':'))}" if v.get("greyInk") else "")   # original's
+                     + " },")                                                                  # greys of some)
     bank = (DISASM_BANK.with_name(f"PRG_Bank{r['bank']:03X}.bin")).read_bytes()
     return ([f"// {r['name']}: his poses and palettes (from the game's frames), his NES fighter bank (PRG bank {r['bank']}).",
              f"export const {up}_PALETTES = {json.dumps(art['pals'])};", f"export const {up}_POSES = {{"]
@@ -2532,6 +2611,7 @@ def _rival_js(key, art):
                + [f"  '{k}':" + pic(v)[1:] for k, v in sorted(art["pictures"]["poses"].items())]
                + [f"}}, places: {json.dumps(art['pictures']['places'])}"
                   + (f", next: {json.dumps(art['pictures']['next'])}" if art["pictures"].get("next") else "")
+                  + (f", nextState: {json.dumps(art['pictures']['nextState'], separators=(',', ':'))}" if art["pictures"].get("nextState") else "")
                   + (f", jewel: {json.dumps(art['pictures']['jewel'])}" if art["pictures"].get("jewel") else "")
                   + (", dmgPoses: { " + ", ".join(f"'{k}': " + pic(v)[2:].rstrip(",") for k, v in art["pictures"]["dmgPoses"].items())
                      + f" }}, dmgPlaces: {json.dumps(art['pictures']['dmgPlaces'])}" if art["pictures"].get("dmgPoses") else "") + " };"]

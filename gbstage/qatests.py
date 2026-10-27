@@ -257,12 +257,93 @@ def _off_frames(rom, cgb, scene, frames, every):
     return out
 
 
+FIGHT_START_FRAMES = 600
+
+
+def _fight_start(rom, scene, cgb, frames=FIGHT_START_FRAMES):
+    """A fight's start, Mac still: from its load (the title's way there, pointed at it) to FRAMES VBlanks past the
+    first one its frame's work ran in (the screen's first: its load before it on Color behind the faded-out black, on
+    the original with the screen off) -- the fade in, his walk in, the round's first seconds. Per VBlank (line 144 to
+    the next one's) the main loop's VBlank work (VBlankDone): {"load": VBlanks from its LoadScene to that first one,
+    "lost": VBlanks with none, "twice": with two, "first": the first few of them (VBlanks from the first)}. (A VBlank
+    with its work's MainLoop.late isn't one lost: a short frame's logic, the fade's, done in the VBlank it began in,
+    waits for the next.)"""
+    from . import bot
+    S, B = bot._symbols(rom)
+    g = _game(rom, scene, cgb)
+    m = g.pb.memory
+    st = {"t": -1, "on": False, "load": None}
+    hits = []                           # (frame, LY) at each VBlankDone; PyBoy's frames end at line 0
+
+    def load(_):                        # (Game's own, pointing the title's way at the fight; and its load noted)
+        if g.pb.register_file.A == 2:
+            g.pb.register_file.A = scene
+        if g.pb.register_file.A == scene and not st["on"]:
+            st["on"], st["load"] = True, st["t"]
+
+    def done(_):
+        g._vblank(_)
+        hits.append((st["t"], m[0xFF44]))
+    for label, fn in (("LoadScene", load), ("VBlankDone", done)):
+        g.pb.hook_deregister(B[label], S[label])
+        g.pb.hook_register(B[label], S[label], fn, None)
+    t = 0
+    while not st["on"] and t < 20000:
+        st["t"] = t
+        g.hold(["start"] if t % 50 < 3 else [])
+        g.tick(False)
+        t += 1
+    g.hold([])
+    hits.clear()
+    first, out = None, {"load": None, "lost": 0, "twice": 0, "first": []}
+    bad_edge = 0
+    for t in range(st["t"] + 1, st["t"] + 2000):
+        st["t"] = t
+        g.tick(False)
+        bad_edge += m[0xFF44] >= 144 and bool(m[0xFF40] & 0x80)
+        if first is None and m[S["hFtActive"]] == 1 and m[0xFF40] & 0x80 and any(f == t and ly >= 144 for f, ly in hits):
+            first = t
+        if first is not None and t > first + frames:
+            break
+    g.stop()
+    if first is None or bad_edge:
+        out["lost"] = frames             # (never shown, or PyBoy's frames not ending where counted: a failure)
+        return out
+    out["load"] = first - st["load"] if st["load"] is not None else None
+    per = {}
+    for f, ly in hits:                  # (the VBlank a work's in: from line 144 of frame f to line 143 of the next)
+        w = f if ly >= 144 else f - 1
+        per[w] = per.get(w, 0) + 1
+    for w in range(first, first + frames):
+        n = per.get(w, 0)
+        if n != 1:
+            out["lost" if n == 0 else "twice"] += 1
+            if len(out["first"]) < 6:
+                out["first"].append(w - first)
+    return out
+
+
 def qa_frames(rom):
     """Off the fight, both machines (the boot, the title, the challengers, the corner, the results, idle and pressed
     on): every VBlank's work run -- none lost to the crowd's timer interrupt returning just as VBlank begins, none
-    run twice in one VBlank (a screen's work can be short)."""
+    run twice in one VBlank (a screen's work can be short). Each fight's start, both machines: from its load through
+    its first FIGHT_START_FRAMES VBlanks (the fade in, his walk in), none lost, none run twice."""
     names = {n: i for i, n in enumerate(s["name"] for s in _project()["scenes"])}
     lines, good = [], True
+    for cgb in (True, False):
+        loads, bad = [], []
+        for scene, name in _fights():
+            r = _fight_start(rom, scene, cgb)
+            loads.append(r["load"])
+            if r["lost"] or r["twice"]:
+                bad.append(f"{name}: lost {r['lost']}, twice {r['twice']} (VBlanks {r['first']} from the first)")
+        ok = not bad
+        good = good and ok
+        known = [x for x in loads if x is not None] or [0]
+        lines.append(f"    {'✓' if ok else '✗'} {'Color' if cgb else 'the original'}: {len(loads)} fights' starts, "
+                     f"{FIGHT_START_FRAMES} VBlanks each from the first shown (their loads {min(known)}-{max(known)}"
+                     f" VBlanks before it): {len(bad)} with one lost or worked twice")
+        lines += [f"      ✗ {b}" for b in bad]
     for cgb in (True, False):
         tot = {"n": 0, "lost": 0, "twice": 0, "crowd": 0}
         bad = []

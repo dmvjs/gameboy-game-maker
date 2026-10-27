@@ -191,6 +191,20 @@ def _overlay_anim(s):
     return "".join(out)
 
 
+# A fade step on the original in a fight with a grey mat: his top rows' sprites (OBP0 above the mat's line) in his
+# ring's greys through it from the step's own frame, as MainLoop sets them each frame after -- not the plain greys for
+# one frame, his head a step behind the rest at each of the fade's steps. (A: BGP's, kept.)
+FADE_RING_OBP = """    ld c, a
+    ldh a, [hFtRingBgp]
+    and a
+    jr z, .plainObj
+    ldh a, [hFtRingNow]
+    ldh [rOBP0], a
+.plainObj:
+    ld a, c
+"""
+
+
 def _obp1(scenes, fights=False):
     """OBP1 at a fade step (A: BGP's): the same; or white for 1 (a scene's close-up sprites up on the original), or
     the lightest grey for 2 (a fight: the referee's shirt and words, the NES's white over its blue mat, on the
@@ -232,7 +246,21 @@ def _obp1(scenes, fights=False):
     or c
 .obp1:
     ldh [rOBP1], a
-""" + ("    ldh [hFtObp1], a\n" if fights else "")
+""" + ("""    ldh [hFtObp1], a
+    ld b, a                 ; (and over his top rows: 1 and 2 as 0 is -- his eyes' whites, a star's sparkle white
+    and %11                 ;  over the crowd, as the NES's -- set at VBlank)
+    add a
+    add a
+    ld c, a
+    add a
+    add a
+    or c
+    ld c, a
+    ld a, b
+    and %11000011
+    or c
+    ldh [hFtObp1Top], a
+""" if fights else "")
 
 
 def _ft_words(s):
@@ -607,12 +635,42 @@ def _db(values, per_line=16):
 
 
 def _pic_next(s, pics, suffix):
-    """The original's grey pictures: his guess at the next (FT_DPIC_GUESS: A, $FF none), by the one shown and the two
-    before it (pic_next.py's rules, from his fights: the longest that fits). Per picture its rules' address, then
-    each picture's rules: their count, then each its two before, before ($FF: any) and next."""
+    """The original's grey pictures: his guess at the next. By his state script's place first (FtDmgGuess, in their own
+    bank: pic_next.py's state rules, from his fights -- the NES's $90, $93 with the one shown, the one shown before it
+    and his state's frames to go, $92 up to 2, where those say otherwise; else $90, $93 alone): PicStatesDmg per picture
+    its state rules, their states' count, each state, its rules' count, each its place, before, frames to go and next;
+    PicGenDmg per state its rules (_gen_row). Else (FT_DPIC_GUESS: A, $FF none) by the one shown and the two before it
+    (pic_next.py's rules, from his fights: the longest that fits). Per picture its rules' address, then each picture's
+    rules: their count, then each its two before, before ($FF: any) and next."""
     order = pics["order"]
     nxt = (s["fight"].get("nes") or {}).get("pictures", {}).get("next") or {}
+    nst = (s["fight"].get("nes") or {}).get("pictures", {}).get("nextState") or {}
     num = lambda k: order.index(k) if k in order else None
+    sidx, slists = [], []
+    for k in range(len(order)):
+        groups = {}
+        for st, ix, pv, tb, nx in nst.get("spec", {}).get(order[k], []):
+            if (pv is None or num(pv) is not None) and num(nx) is not None:
+                groups.setdefault(st, []).append([ix, 0xFF if pv is None else num(pv), tb, num(nx)])
+        sidx.append(f"PicStateDmg{suffix}_{k}" if groups else "0")
+        if groups:
+            body = [len(groups)]
+            for st, rs in sorted(groups.items()):
+                body += [st, len(rs)] + [v for r in sorted(rs) for v in r]
+            slists.append(f"PicStateDmg{suffix}_{k}:\n" + _db(body, 16))
+    gen = {}
+    for st, ix, nx in nst.get("general", []):
+        if num(nx) is not None:
+            gen.setdefault(st, []).append([ix, num(nx)])
+    gidx = [f"PicGenDmg{suffix}_{st}" if st in gen else "0" for st in range(256)]
+    sidx += ["0"] * (128 - len(sidx))
+    states = (f'SECTION "Data: Rival grey state rules{suffix}", ROMX[$4000]\n'
+              f"PicStatesDmg{suffix}:            ; per picture its state rules (FtDmgGuess), 0 none\n"
+              + "\n".join("    dw " + ", ".join(sidx[i:i + 8]) for i in range(0, 128, 8))
+              + f"\nPicGenDmg{suffix}:               ; per state its rules (FtDmgGuess), 0 none\n"
+              + "\n".join("    dw " + ", ".join(gidx[i:i + 8]) for i in range(0, 256, 8)) + "\n"
+              + f"ASSERT PicGenDmg{suffix} == FT_DSTATE_GEN\n" + "\n".join(slists) + "\n"
+              + "\n".join(f"PicGenDmg{suffix}_{st}:\n" + _db(_gen_row(rs), 16) for st, rs in sorted(gen.items())))
     index, lists = [], []
     for k in range(128):
         rules = []
@@ -670,7 +728,17 @@ def _pic_next(s, pics, suffix):
     pop de
     ret
 """
-    return table, "\n".join(lists), code
+    return table, "\n".join(lists), code, states
+
+
+def _gen_row(rules):
+    """A state's general rules ([place, next]) as FtDmgGuess looks them up: its first place, how many, then per place from
+    it its next ($FF none)."""
+    lo, hi = min(r[0] for r in rules), max(r[0] for r in rules)
+    row = [0xFF] * (hi - lo + 1)
+    for ix, nx in rules:
+        row[ix - lo] = nx
+    return [lo, len(row)] + row
 
 
 def _pic_late(dpics):
@@ -2523,7 +2591,7 @@ def _rope_dmg(s):
             f"FtRopeDmgData:\n{_db(data, 16)}\n"
             f"FtSideTilesDmg:             ; (the side ropes' ends' two tiles: the original's copy, Color's being in bank 1)\n"
             f"{_db(_side_dmg(s), 16)}\n"
-            "FtRingSetupDmg:             ; (setup, screen off; this fight's data bank in) DE: the bottom rope's row's map row;\n    ld de, FtRopeTiles      ; the original with a grey mat: its copies in his ring's greys, the tell's\n    ldh a, [hFtRingBgp]     ; (the original, a grey mat: its copies in his ring's greys, and the tell's)\n    and a\n    ret z\n    ld a, [FtRopeDmgAt + 2]\n    and a\n    ret z\n    ld hl, FtRopeDmgAt\n    ld a, [hl+]\n    ld h, [hl]\n    ld l, a\n    ld a, [FtRopeDmgAt + 2]\n    swap a                  ; (16 bytes a tile: count * 16, at most 20 tiles)\n    ld c, a\n    and $0F\n    ld b, a\n    ld a, c\n    and $F0\n    ld c, a\n    ld de, FtRopeDmgData\n    call FtCopy\n    ld a, [wFtCueTile]\n    and a\n    jr z, .noCue\n    ld a, [FtRopeDmgAt + 3]\n    ld [wFtCueTile], a\n    ld a, [FtRopeDmgAt + 4]\n    ld [wFtCueOld], a\n.noCue:\nIF DEF(FT_SIDE_TILE)\n    ld de, FtSideTilesDmg   ; (and the side ropes' ends' tiles: the original's own copy)\n    ld hl, $8000 + FT_SIDE_TILE_DMG * 16\n    ld bc, 32\n    call FtCopy\nENDC\n    ld de, FtRopeTilesDmg\n    ret\n\n")
+            "FtRingSetupDmg:             ; (setup, screen off; this fight's data bank in) DE: the bottom rope's row's map row;\n    ld de, FtRopeTiles      ; the original with a grey mat: its copies in his ring's greys, the tell's\n    ldh a, [hFtRingBgp]     ; (the original, a grey mat: its copies in his ring's greys, and the tell's)\n    and a\n    ret z\n    ld a, [FtRopeDmgAt + 2]\n    and a\n    ret z\n    ld hl, FtRopeDmgAt\n    ld a, [hl+]\n    ld h, [hl]\n    ld l, a\n    ld a, [FtRopeDmgAt + 2]\n    swap a                  ; (16 bytes a tile: count * 16, at most 20 tiles)\n    ld c, a\n    and $0F\n    ld b, a\n    ld a, c\n    and $F0\n    ld c, a\n    ld de, FtRopeDmgData\n    call FtCopy\n    ld a, [wFtCueTile]\n    and a\n    jr z, .noCue\n    ld a, [FtRopeDmgAt + 3]\n    ld [wFtCueTile], a\n    ld a, [FtRopeDmgAt + 4]\n    ld [wFtCueOld], a\n    ld [wFtCue], a          ; (and up as it: the cell FtVBlank puts from the first frame, not the Color tile)\n.noCue:\nIF DEF(FT_SIDE_TILE)\n    ld de, FtSideTilesDmg   ; (and the side ropes' ends' tiles: the original's own copy)\n    ld hl, $8000 + FT_SIDE_TILE_DMG * 16\n    ld bc, 32\n    call FtCopy\nENDC\n    ld de, FtRopeTilesDmg\n    ret\n\n")
 
 
 def _side_dmg(s):
@@ -3147,9 +3215,10 @@ ASSERT PicHeader{suffix} == $4000
 SECTION "Data: Rival grey pictures{suffix}", ROMX[$4000]
 PicHeaderDmg{suffix}:           ; his pictures in greys: count, his guess at the next (FT_DPIC_GUESS); per picture its tiles
     db {n}                      ; (address, bank, count), his top rows' sprites; each picture's tiles, then his area's
-    jp PicGuessDmg{suffix}       ; rows for its tiles' first copy, then second; his skip plans (FT_DPIC_PLANS)
-    dw PicPlansDmg{suffix}
-    ds 10
+    jp PicGuessDmg{suffix}       ; rows for its tiles' first copy, then second; his skip plans (FT_DPIC_PLANS); his state
+    dw PicPlansDmg{suffix}       ; rules' bank (FT_DPIC_STATES: FtDmgGuess)
+    db BANK(PicStatesDmg{suffix})
+    ds 9
 {entries}
     ds {6 * (128 - n)}
 PicNextDmg{suffix}:             ; per picture: its rules for the one likely next (PicGuessDmg)
@@ -3169,6 +3238,7 @@ ASSERT PicHeaderDmg{suffix} == $4000
 ASSERT PicNextDmg{suffix} == $4310
 ASSERT PicLateDmg{suffix} == $4410
 ASSERT PicPlaceDmg{suffix} == $4490
+{guess[3]}
 {nl.join(body)}
 """
     if not shared:                      # a later fight: its scene's update, its own data under its own labels
@@ -4307,7 +4377,7 @@ def _rematch_pics(raw):
     scenes = [hw_palettes(s) for s in raw]
     color, grey = {}, {}
     pics = lambda sc: sc.get("fight") and sc.get("fight_pics") and sc.get("fight_pics_dmg")
-    nxt = lambda sc: (sc["fight"].get("nes") or {}).get("pictures", {}).get("next")
+    nxt = lambda sc: [(sc["fight"].get("nes") or {}).get("pictures", {}).get(k) for k in ("next", "nextState")]
 
     def laid_as(a, b):                  # scene a's palettes in the slots scene b's are (None: they don't fit, or
         s, o = raw[a], scenes[b]        # the upload's code would change)
@@ -4465,7 +4535,7 @@ def generate_asm(project):
                  "hFtPlY: db              ; (Mac's sprites: y, x, tiles' copy)", "hFtPlX: db", "hFtPlTile: db",
                  "hFtCueSrc: db           ; (the original) his dodge cue: 0 none, else 2/4, the shade his black takes (1's, 2's)",
                  "hFtCueOn: db            ; (its BGP up in his band: bit 0; OBP0 over his top rows: bit 1)", "hFtBgp: db", "hFtObp: db",
-                 "hFtObp1: db             ; (the original) OBP1 below his top rows, as the fade has it",
+                 "hFtObp1: db             ; (the original) OBP1 below his top rows, as the fade has it", "hFtObp1Top: db          ; (and over them)",
                  "hFtRingBgp: db          ; (the original, a grey mat) his ring's BGP from the mat's line on: 0 none",
                  "hFtRingNow: db          ; (it through the fade as it stands)", "hFtBgpBase: db          ; (BGP above it, as the fade has it)",
                  "hFtObpRaw: ds 2         ; (a grey mat: OBP0, OBP1 below it, raw greys: none of them the mat's)", "hFtObpLow: ds 2         ; (them through the fade)",
@@ -5028,7 +5098,7 @@ UploadPalettes:
     ld h, a
     ld a, [hl]
     ldh [rBGP], a
-{'    call FtRingBase' + nl if fights else ''}{'    ldh [rOBP0], a' + nl if sprites else ''}{_obp1(scenes, fights=True) if fights else ''}    ret
+{'    call FtRingBase' + nl if fights else ''}{'    ldh [rOBP0], a' + nl if sprites else ''}{FADE_RING_OBP if fights and sprites else ''}{_obp1(scenes, fights=True) if fights else ''}    ret
 
 {'SECTION "Data: Palettes", ROMX' + nl if banked else ""}ScenePalettes:
     dw {", ".join(f"Scene{i}Palettes" for i in range(len(scenes)))}

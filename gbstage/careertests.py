@@ -914,7 +914,7 @@ def run(log=print, only=None):
               "qa_reset": "The soft reset, both machines",
               "qa_sgb": "The Super Game Boy: its packets, the border",
               "qa_decision": "A decision after the last round",
-              "qa_frames": "Off the fight, every VBlank's work (none lost, none run twice)"}
+              "qa_frames": "Off the fight and each fight's start (its first 600 VBlanks), every VBlank's work (none lost, none run twice)"}
     if only:
         titles = {k: v for k, v in titles.items() if k in only}
     with ProcessPoolExecutor() as pool:

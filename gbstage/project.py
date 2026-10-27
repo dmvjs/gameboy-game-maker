@@ -1170,6 +1170,9 @@ def _nes_fighter(nes, where, errors):
                 and len(v["pixels"]) == area and set(v["pixels"]) <= set("0123") and isinstance(v.get("cells"), str)
                 and len(v["cells"]) == kit.REGION_W * kit.PIC_H and set(v["cells"]) <= set("sgh")
                 and all(isinstance(i, int) and 0 <= i < area for i in v.get("whites") or ())
+                and isinstance(v.get("greyInk") or {}, dict) and all(          # (the original's grey of some pixels:
+                    re.fullmatch(r"[sgh][123]", c) and isinstance(ii, list)     #  their own color's, "g1": [pixel, ...])
+                    and all(isinstance(i, int) and 0 <= i < area for i in ii) for c, ii in (v.get("greyInk") or {}).items())
                 for k, v in list(pp.items()) + list(dp.items()))
                 and all(k in pp for k in dp)
                 and isinstance(pl, dict) and all(k in pp and isinstance(v, list) and len(v) == 2
@@ -1181,6 +1184,15 @@ def _nes_fighter(nes, where, errors):
         nx = {k: [r for r in v if isinstance(r, list) and 1 <= len(r) <= 3 and all(c in pp for c in r)]  # it: pic_next.py)
               for k, v in nx.items() if k in pp and isinstance(v, list)} if isinstance(nx, dict) else {}
         nx = {k: v for k, v in nx.items() if v}
+        ns = (pictures or {}).get("nextState") or {}    # (and by his state script's place -- pic_next.py: per picture
+        byte = lambda c: isinstance(c, int) and 0 <= c < 256    # [$90, $93, the one shown before or None, $92 up to 2, next];
+        ns = {"spec": {k: [r for r in v if isinstance(r, list) and len(r) == 5 and byte(r[0]) and byte(r[1])   # in general
+                           and (r[2] is None or r[2] in pp) and r[3] in (0, 1, 2) and r[4] in pp]           # [$90, $93, next])
+                       for k, v in (ns.get("spec") or {}).items() if k in pp and isinstance(v, list)},
+              "general": [r for r in ns.get("general") or [] if isinstance(r, list) and len(r) == 3 and byte(r[0])
+                          and byte(r[1]) and r[2] in pp]} if isinstance(ns, dict) else {}
+        ns = {"spec": {k: v for k, v in ns["spec"].items() if v}, "general": ns["general"]} if ns else {}
+        ns = ns if ns and (ns["spec"] or ns["general"]) else {}
         gem = (pictures or {}).get("jewel") or {}      # (Great Tiger's: per picture, where his gem shows)
         if not (isinstance(gem, dict) and all(k in pp and isinstance(v, list) and len(v) == 2
                                               and all(isinstance(c, int) and 0 <= c < 80 for c in v) for k, v in gem.items())):
@@ -1190,7 +1202,7 @@ def _nes_fighter(nes, where, errors):
                 re.fullmatch(r"[0-9A-F]{2}", k) and isinstance(v, str) and v in pp for k, v in cue.items())):
             errors.append(f"{where}: the NES cue frames are each a frame (2 hex digits) and the picture it's drawn as."); return None
         pictures = {"poses": pp, "places": {k: tuple(v) for k, v in pl.items()}, **({"next": nx} if nx else {}),
-                    **({"jewel": {k: tuple(v) for k, v in gem.items()}} if gem else {}), **({"cue": cue} if cue else {})}
+                    **({"nextState": ns} if ns else {}), **({"jewel": {k: tuple(v) for k, v in gem.items()}} if gem else {}), **({"cue": cue} if cue else {})}
         dpl = (nes.get("pictures") or {}).get("dmgPlaces") or {}
         if dp:                                      # (the original's own pictures for some, and where each sits)
             if not (isinstance(dpl, dict) and all(k in pp and isinstance(v, list) and len(v) == 2 and
@@ -2632,6 +2644,7 @@ def _fight_pics_dmg(scene):
         px, cells = v["pixels"], v["cells"]
         rgb = lambda i: color[(cells[(i // W // CELL) * kit.REGION_W + (i % W) // CELL], int(px[i]))] if px[i] != "0" else None
         eyes = _face_whites(rgb, W, kit.PIC_H * CELL) if ft["nes"].get("eyes") else set()
+        ink = {i: (c[0], int(c[1])) for c, ii in (v.get("greyInk") or {}).items() for i in ii}   # (a glove's own grey)
         cell_tiles = []
         for r in range(kit.PIC_H):
             for c in range(kit.REGION_W):
@@ -2641,7 +2654,7 @@ def _fight_pics_dmg(scene):
                     for x in range(CELL):
                         i = (r * CELL + y) * W + c * CELL + x
                         sl = int(px[i])         # (his eyes' whites: white in his band; over the crowd, a sprite of their own)
-                        t.append(idx[0] if i in eyes else idx[grey.get(color[(kind, sl)], 3)] if sl else 0)
+                        t.append(idx[0] if i in eyes else idx[grey.get(color[ink.get(i, (kind, sl))], 3)] if sl else 0)
                 cell_tiles.append(tuple(t))
         rows = kit.HEAD_ROWS_TALL         # (any picture can rise into the crowd: his get-up, his walk-in)
         whites = {}                       # (his top rows' cells with an eye's white: its white as a sprite, OBP1's 1)
