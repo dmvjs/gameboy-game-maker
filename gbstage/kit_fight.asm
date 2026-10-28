@@ -7122,6 +7122,19 @@ FtHudCompute:
         and $0F
         ld [hl+], a
     ENDR
+    push hl                 ; (the points' leading zeros blank, the last digit always shown: the NES's "0")
+    ld hl, wFtHudVal + 3
+    ld b, 5
+.lead:
+    ld a, [hl]
+    and a
+    jr nz, .leadDone
+    ld [hl], 10
+    inc hl
+    dec b
+    jr nz, .lead
+.leadDone:
+    pop hl
     ld a, [wFtMin]
     ld [hl+], a
     ld a, [wFtSec]

@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test: [career, losses, routes, pass_key, another_world, original_flow, nes_keys, nes_flows, another_world_won, beat_mac, tells, glitches, another_world_played, random, qa_perf, qa_mac, qa_star, qa_grey, qa_hud, qa_reset, qa_sgb, qa_decision, qa_frames]
+        test: [career, losses, routes, pass_key, another_world, original_flow, nes_keys, nes_flows, another_world_won, beat_mac, tells, glitches, another_world_played, random, qa_perf, qa_mac, qa_star, qa_grey, qa_screens, qa_hud, qa_reset, qa_sgb, qa_decision, qa_frames]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -61,3 +61,46 @@ jobs:
       - run: python -m gbstage test --stage career --career ${{ matrix.test }}
         env:
           SDL_AUDIODRIVER: dummy
+          QA_DIFF_DIR: ${{ runner.temp }}/qa-diff    # (qa_screens: a mismatched screen, now and its diff)
+      - if: failure() && matrix.test == 'qa_screens'
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-screens-diff
+          path: ${{ runner.temp }}/qa-diff
+          if-no-files-found: ignore
+
+  # Every fight on SameBoy, Color and the original: what real hardware drops (VRAM written in mode 3, OAM in modes
+  # 2-3, Color palettes in mode 3), a GDMA over a line's drawing, a fight VBlank without its frame's work -- PyBoy is
+  # only frame-accurate (tools/sameboy/check.py; SameBoy pinned there, built headless with its own boot ROMs).
+  sameboy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SAMEBOY: /home/runner/.cache/sameboy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install $PYTHON_DEPS
+      - id: rgbds
+        uses: actions/cache@v4      # (RGBDS once, not downloaded by every job)
+        with:
+          path: ~/.gbstage
+          key: gbstage-rgbds-${{ runner.os }}-${{ hashFiles('gbstage/install.py', 'gbstage/deps.py') }}
+      - if: steps.rgbds.outputs.cache-hit != 'true'
+        run: python -m gbstage install rgbds
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - uses: actions/cache@v4      # (SameBoy's checkout, core objects and boot ROMs: built once per pin)
+        with:
+          path: /home/runner/.cache/sameboy
+          key: sameboy-${{ runner.os }}-${{ hashFiles('tools/sameboy/check.py', 'tools/sameboy/Makefile') }}
+      - run: python tools/sameboy/check.py --build-only
+      - run: python tools/sameboy/check.py --work ${{ runner.temp }}/sameboy
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sameboy-hardware
+          path: ${{ runner.temp }}/sameboy/*/hardware.txt
+          if-no-files-found: ignore

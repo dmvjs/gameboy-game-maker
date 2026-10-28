@@ -95,7 +95,8 @@ export function boxingGame(pack) {
   const p = {
     name: pack.name,
     palettes: [
-      pal('HUD', [[31, 31, 31], [25, 26, 15], [19, 4, 4], [0, 0, 0]], [0, 0, 2, 3]),   // (the original: its counts white)      // (its boxes black, as the NES's)
+      pal('HUD', [[1, 9, 24], [25, 26, 15], [19, 4, 4], [0, 0, 0]], [2, 0, 2, 3]),   // (the star and heart counts' cells: the boxes'
+                                                            //  NES blue edge, the counts' yellow, the heart's red, black; the original: counts white)
       pal('Crowd', [[31, 31, 31], [18, 16, 24], [26, 6, 8], [0, 0, 0]]),    // (behind the crowd, and outside the ring, black: the NES's)
       pal('Mat', [matOf(R), [20, 22, 28], [8, 12, 24], [3, 3, 6]]),
       ...['skin', 'gloves', 'hair'].map((part, k) => pal(`${R.short} ${part}`, [matOf(R), ...R.palettes[k].slice(1)])),
@@ -695,26 +696,43 @@ export function boxingGame(pack) {
     let ropeRow = null, sideRope = null;                    // (Punch-Out!!'s: the crowd's last row, behind his head;
                                                             // the side ropes' ends below it)
     const hud = nesRing
-      ? { stars: { x: 1, y: 1 }, hearts: { x: 3, y: 1 }, points: { x: 7, y: 1 }, clock: { x: 15, y: 1 },
+      ? { stars: { x: 2, y: 1 }, hearts: { x: 4, y: 1 }, points: { x: 7, y: 1 }, clock: { x: 15, y: 1 },   // (the star and hearts centered in their box)
           round: { x: 12, y: 2 }, playerBar: { x: 0, y: 2 }, rivalBar: { x: 14, y: 2 } }
       : { stars: { x: 1, y: 0 }, hearts: { x: 3, y: 0 }, points: { x: 6, y: 0 }, clock: { x: 15, y: 0 },
           round: { x: 13, y: 0 }, playerBar: { x: 1, y: 1 }, rivalBar: { x: 13, y: 1 } };
     if (nesRing) {
       const r = ringOf(rv), [white] = p.palettes[crowd].colors;
-      const wall = addPal(`${rv.short} wall`, [r.wall, white, r.wall, [0, 0, 0]]);
+      const wall = addPal(`${rv.short} wall`, [white, r.wall, [1, 9, 24], [0, 0, 0]]);   // (white text, the wall, the boxes' blue edge, black)
       // The HUD as Punch-Out!!'s: boxes on the arena's wall (its grid: 8-pixel squares, black lines). Left: stars, hearts, your
       // bar; middle: points, the round; right: the clock, his bar.
       const boxes = [[0, 5], [7, 12], [14, 19]];
       cellPalettes(sf, 0, 0, M.CW, 3, wall);
-      for (const [x0, x1] of boxes) cellPalettes(sf, x0, 1, x1 - x0 + 1, 2, 0);
+      const counts = [2, 3, 4, 5];                          // (row 1's cells holding the star and heart counts, the heart)
+      cellPalettes(sf, counts[0], 1, counts.length, 1, 0);
       const wallRows = [3, 11, 15, 18, 20, 22, 23];         // (the NES's rows in perspective, slimmer down to black: 8, 4, 3, 2, 2)
       for (let y = 0; y < 24; y++) for (let x = 0; x < M.W; x++)       // the wall's grid, as the NES's (lines on
-        ring.pixels[y * M.W + x] = x % 8 === 0 || wallRows.includes(y) ? 3 : 0;   //  x 0 of each 8, every row, as the NES's)
-      for (const [x0, x1] of boxes) fillRect(ring, x0 * 8, 8, (x1 - x0 + 1) * 8, 16, 3);
-      const low = rows => ['........', ...rows.slice(0, 7)];   // (the HUD's contents a line low in their boxes)
-      icon(ring, 0, 1, NES_STAR.map(r => r.replace(/1/g, '0')));   // (its star white and full height, the NES's)
-      icon(ring, 2, 1, low(NES_HEART));
-      M.drawText(ring, 'ROUND', 56, 17, 0);
+        ring.pixels[y * M.W + x] = x % 8 === 0 || wallRows.includes(y) ? 3 : 1;   //  x 0 of each 8, every row, as the NES's)
+      for (const [x0, x1] of boxes) {                       // the boxes: black, a 1px NES-blue edge, corners rounded 3px
+        const [l, rgt] = { 0: [0, 50], 7: [54, 105], 14: [109, M.W - 1] }[x0];   // (edges clear of the bars' cells: the bars
+        const top = 4, bot = 23;                            //  inside; the middle 2px wider each side; 3px of wall between
+                                                            //  them; up into the wall, room above the top row)
+        const openL = l === 0, openR = rgt === M.W - 1;     // (at the screen's edge: straight off it, no edge there)
+        const blue = x0 > 0;                                // (the NES's: the star and hearts' black, a blue rim; the
+        fillRect(ring, l, top, rgt - l + 1, bot - top + 1, blue ? 2 : 3);   //  points' and clock's blue, a black outline)
+        const edge = (x, y) => ring.pixels[y * M.W + x] = blue ? 3 : counts.includes(x >> 3) && (y >> 3) === 1 ? 0 : 2;
+        for (let x = openL ? l : l + 3; x <= (openR ? rgt : rgt - 3); x++) { edge(x, top); edge(x, bot); }
+        for (let y = top + 3; y <= bot - 3; y++) { if (!openL) edge(l, y); if (!openR) edge(rgt, y); }
+        for (const [cx, cy, sx, sy] of [[l, top, 1, 1], [rgt, top, -1, 1], [l, bot, 1, -1], [rgt, bot, -1, -1]]) {
+          if ((sx > 0 && openL) || (sx < 0 && openR)) continue;
+          for (const [dx, dy] of [[0, 0], [1, 0], [2, 0], [0, 1], [1, 1], [0, 2]])   // (outside the curve: the wall)
+            ring.pixels[(cy + sy * dy) * M.W + cx + sx * dx] = (cx + sx * dx) % 8 === 0 || wallRows.includes(cy + sy * dy) ? 3 : 1;
+          edge(cx + sx * 2, cy + sy * 1); edge(cx + sx * 1, cy + sy * 2);
+        }
+      }
+      const low = rows => rows;                             // (the HUD's top row's contents at the row's top: the boxes' edge above it)
+      icon(ring, 1, 1, low(NES_STAR.slice(1).map(r => r.replace(/1/g, '0'))));   // (its star white, the NES's)
+      icon(ring, 3, 1, low(NES_HEART));
+      M.drawText(ring, 'ROUND', 57, 16, 3); M.drawText(ring, 'ROUND', 56, 16, 0);   // (white, a black shadow: the NES's)
       // The crowd: heads in rows behind three ropes, as tall as Punch-Out!!'s (to the fighter's head: he stands in
       // front of them), right up to the posts; the posts' cells in its palette too, as the NES's (1 the crowd and the
       // posts, 2 the pads, the mat's). The bottom 8 lines are the rope row (the band over his area's first row, his
@@ -797,7 +815,7 @@ export function boxingGame(pack) {
       player: { palette: 0, tiredPalette: 2, ...(P.downColors ? { downPalette: 3 } : {}), poses: P.poses, ...(P.cgbPoses ? { cgbPoses: P.cgbPoses } : {}) },
       referee: { palette: 1, poses: pack.referee?.poses || REF_POSES, ...(pack.referee?.words ? { words: pack.referee.words } : {}),
                  ...(pack.referee?.shirtColors ? { shirtPalette: P.downColors ? 4 : 3 } : {}) },
-      hud, ...(nesRing ? { hudDy: 1, hudCountInk: [1, 2] } : {}), ...(ropeRow ? { ropeRow } : {}), ...(sideRope ? { sideRope } : {}),
+      hud, ...(nesRing ? { hudCountInk: [1, 2], hudTextShadow: 3 } : {}), ...(ropeRow ? { ropeRow } : {}), ...(sideRope ? { sideRope } : {}),
       textSlot: 0, barSlot: nesRing ? 0 : 2, crowdRow: 3,   // (the NES's bars white)
       opening: [['idle', 250], ['idle', 250], ['idle', 250], ['idle', 250]],      // does nothing for 40 seconds
       loop: [['idle', 90], ['jab', 0], ['idle', 60], ['guard', 90], ['jab', 0], ['idle', 40], ['hook', 0],

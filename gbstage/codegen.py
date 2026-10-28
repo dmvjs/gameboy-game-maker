@@ -2581,6 +2581,9 @@ def _rope_dmg(s):
                 copies.append([inv[v] for v in s["tiles"][t]])
         if len(copies) > ROPE_DMG_ROOM:
             raise ValueError(f"the rope row's grey-mat copies: {len(copies)} tiles, room for {ROPE_DMG_ROOM}")
+        if first + len(copies) > 128:           # (they go after the scene's tiles, below the map: room for them there)
+            raise ValueError(f'Scene "{s["name"]}" uses {first} background tiles; on the original with a grey mat its '
+                             f"{len(copies)} rope-row copies need {first + len(copies) - 128} more slots than tiles 0-127 have")
     data = [b for t in copies for b in encode_tile(t)] + [0] * (16 * (ROPE_DMG_ROOM - len(copies)))
     row = [slot.get(t, t) for t in rope] if copies else list(rope)
     cue_at = lambda t: slot.get(t, t)
@@ -3078,10 +3081,10 @@ RivalLoop:
 RivalTimed:                 ; round, minute, second (BCD), op, argument
 {timed}
     db $FF
-FtHudLUT:                   ; per HUD cell: its tile for each value (digits 0-9, bars 0-8)
-{_db(s['fight_lut'], 10)}
+FtHudLUT:                   ; per HUD cell: its tile for each value (digits 0-9 and 10 blank, bars 0-8)
+{_db(s['fight_lut'], 11)}
 FtHudMap:                   ; the HUD's values to tiles, through each cell's own table (its bank's, mapped)
-{nl.join(f"    ld a, [wFtHudVal + {k}]{nl}    add LOW(FtHudLUT + {10 * k}){nl}    ld l, a{nl}    adc HIGH(FtHudLUT + {10 * k})"
+{nl.join(f"    ld a, [wFtHudVal + {k}]{nl}    add LOW(FtHudLUT + {11 * k}){nl}    ld l, a{nl}    adc HIGH(FtHudLUT + {11 * k})"
          f"{nl}    sub l{nl}    ld h, a{nl}    ld a, [hl]{nl}    ld [wFtHud + {k}], a" for k in range(len(s['fight_hud_cells'])))}
     ret
 PlayerPoses:

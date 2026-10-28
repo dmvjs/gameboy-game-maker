@@ -352,7 +352,8 @@ def _dmg_greys(s, greys):
         hud = s["fight"]["hud"]["stars"]        #  its top in the screen's one set of greys, the crowd's among them)
         c = hud["y"] * CW + hud["x"]
         cd = code(c) if c < len(pal) else None
-        return [(tl, cd) for tl in s.get("fight_count_tiles") or []] if cd is not None else []
+        own = {s["cell_tiles"][k] for k in range(len(pal)) if pal[k] == pal[c]} | set(s.get("fight_count_tiles") or [])
+        return [(tl, cd) for tl in sorted(own)] if cd is not None else []   # (and the static cells in that palette: the heart's)
     if not any(code(c) is not None for c in range(len(cells))):
         return []
     owner = {}
@@ -963,6 +964,9 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
     if count_ink is not None and not (isinstance(count_ink, list) and len(count_ink) == 2   #  yellow, a dark red edge)
                                       and all(isinstance(v, int) and 0 <= v <= 3 for v in count_ink)):
         errors.append(f"{where}: the HUD's count ink is two color slots, 1-4."); count_ink = None
+    shadow = ft.get("hudTextShadow")            # (optional) the HUD's white digits' shadow on their right, a slot (the NES's)
+    if shadow is not None and not (isinstance(shadow, int) and 0 <= shadow <= 3):
+        errors.append(f"{where}: the HUD's text shadow is a color slot, 1-4."); shadow = None
     hud_dy = ft.get("hudDy", 0)                 # (optional) the HUD's digits and bars this many lines down in their cells
     if not (isinstance(hud_dy, int) and 0 <= hud_dy <= 2):
         errors.append(f"{where}: the HUD's offset (hudDy) is 0-2 lines."); hud_dy = 0
@@ -1025,7 +1029,8 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
                        "poses": pposes, **({"cgb_poses": pcgb} if pcgb else {})}, "hud": hud,
             "referee": {"palette": ref.get("palette"), "shirt_palette": shirt, "poses": rposes_ref,
                         **({"words": _ref_words(ref.get("words"), where, errors)} if ref.get("words") else {})},
-            "text_slot": slots[0], "bar_slot": slots[1], "hud_dy": hud_dy, **({"count_ink": count_ink} if count_ink else {}), "crowd_row": crowd, "opening": opening, "loop": loop, "timed": timed,
+            "text_slot": slots[0], "bar_slot": slots[1], "hud_dy": hud_dy, **({"count_ink": count_ink} if count_ink else {}),
+            **({"text_shadow": shadow} if shadow is not None else {}), "crowd_row": crowd, "opening": opening, "loop": loop, "timed": timed,
             **({"rope_row": rope} if rope else {}), **({"side_rope": [ord(c) - 48 for c in side]} if side else {}),
             "win": ft["win"], "lose": ft["lose"], "corner": corner, "win_tko": win_tko, "game_over": game_over,
             **({"another_world": aw} if aw else {}),
@@ -1887,8 +1892,11 @@ def _fight_compose_base(scene, composed):
     for c, pal in cells:
         scene["cell_pal"][c] = pal
     clock = ft["hud"]["clock"]
-    for x, y in text_ink(":", clock["x"] + 1, clock["y"]):
+    pts = {(x, y + ft.get("hud_dy", 0)) for x, y in text_ink(":", clock["x"] + 1, clock["y"])}   # (with the digits: as low,
+    for x, y in pts:                                                                            #  as shadowed)
         composed[y * W + x] = ft["text_slot"]
+        if ft.get("text_shadow") is not None and (x + 1, y) not in pts and (x + 1) % CELL:
+            composed[y * W + x + 1] = ft["text_shadow"]
 
 
 def bar_tile(pixels, c, level, slot, dy=0):
@@ -1916,26 +1924,33 @@ def _fight_compose_tiles(scene, tile_of):
     # HUD: each cell's tile for every value, drawn over that cell's painting
     hud, lut, cells, counts = ft["hud"], [], [], set()
     def digit_cells(key, offsets):
-        ink = ft.get("count_ink") if key in ("stars", "hearts") else None   # (the counts: a body and its shadow on the right)
+        ink = ft.get("count_ink") if key in ("stars", "hearts") else (     # (the counts: a body and its shadow on the right;
+            [ft["text_slot"], ft["text_shadow"]] if ft.get("text_shadow") is not None else None)   #  the rest: white, shadowed)
         for k in offsets:
             c = hud[key]["y"] * CW + hud[key]["x"] + k
             row = []
-            for d in range(10):
+            shown = {"stars": range(4), "round": range(1, 4)}.get(key, range(10))   # (stars 0-3, rounds 1-3: as the NES's;
+            for d in range(10):                         #  the values never shown take a shown one's tile, room saved)
+                if d not in shown:
+                    row.append(None); continue
                 img = list(scene["pixels"])
-                pts = {(x, y + ft.get("hud_dy", 0)) for x, y in text_ink(str(d), hud[key]["x"] + k, hud[key]["y"])}
+                dy = ft.get("hud_dy", 0) if key != "round" else 0     # (the round's below the top row: as drawn)
+                pts = {(x, y + dy) for x, y in text_ink(str(d), hud[key]["x"] + k, hud[key]["y"])}
                 for x, y in pts:
                     img[y * W + x] = ink[0] if ink else ft["text_slot"]
                     if ink and (x + 1, y) not in pts and (x + 1) % CELL:
                         img[y * W + x + 1] = ink[1]
                 row.append(tile_of(cell_key(img, c)))
+            row = [t if t is not None else row[min(max(d, shown[0]), shown[-1])] for d, t in enumerate(row)]
+            row.append(tile_of(cell_key(scene["pixels"], c)))   # (11: blank -- the points' leading zeros, as the NES's)
             lut.extend(row); cells.append(c)
-            if ink:
+            if key in ("stars", "hearts") and ft.get("count_ink"):
                 counts.update(row)
     def bar_cells(key):
         for k in range(kit.BAR_CELLS):
             c = hud[key]["y"] * CW + hud[key]["x"] + k
             row = [tile_of(bar_tile(scene["pixels"], c, lv, ft["bar_slot"], ft.get("hud_dy", 0))) for lv in range(9)]
-            lut.extend(row + [row[0]]); cells.append(c)
+            lut.extend(row + [row[0], row[0]]); cells.append(c)
     digit_cells("stars", [0]); digit_cells("hearts", [0, 1]); digit_cells("points", range(6))
     digit_cells("clock", [0, 2, 3]); digit_cells("round", [0])
     bar_cells("playerBar"); bar_cells("rivalBar")

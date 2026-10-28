@@ -513,6 +513,149 @@ def qa_grey(rom):
     return good, lines
 
 
+SCREENS = ROOT / "tests" / "golden" / "fight-screens"
+SCREENS_WALK = 150          # (his walk in: this many frames before the bell)
+SCREENS_TELL = 24           # (the punch that lands first: its wind-up, this many frames before Mac's hearts drop)
+SCREENS_LIMIT = 2500        # (frames past the bell, a knockdown not come)
+SCREENS_CARDS = [("Corner: Don", "Fight: Don", (60, 240)), ("Title bout: Honda", None, (90,))]
+
+
+def _slug(name):
+    return name.replace(":", "").replace(" ", "-").replace("(", "").replace(")", "").lower()
+
+
+def _fight_screens(rom, scene, cgb):
+    """A fight, Mac still, from its first frame (hFtActive): {moment: RGB screen}. The moments: "intro" (40 frames
+    in: the fade in done, the opponent idle in the ring), "walk-in" (SCREENS_WALK before the bell), "bell" (30 after
+    it, wFtSec first 1), "idle" (300 after), "tell" and "hit" (the first punch that lands: SCREENS_TELL before Mac's
+    hearts drop, and 4 after), "down" (Mac down, the count at 3) -- each only if it comes within SCREENS_LIMIT."""
+    from collections import deque
+    g = _game(rom, scene, cgb)
+    S = g.S
+    _to_fight(g, scene)
+    back, shots = deque(maxlen=SCREENS_WALK + 2), {}
+    bell = hit = None
+    hearts = g.m[S["wPlHearts"]]
+    for t in range(SCREENS_LIMIT + 2000):
+        g.hold([])
+        g.pb.tick(1, True, False)
+        if g.hram("hScene") != scene or g.hram("hFtActive") != 1:
+            break
+        px = g.pb.screen.ndarray[:, :, :3].copy()
+        back.append((t, px))
+        if t == 40:
+            shots["intro"] = px
+        if bell is None and g.m[S["wFtSec"]] == 1:
+            bell = t
+            shots["walk-in"] = next(p for u, p in back if u == t - SCREENS_WALK)
+        if bell is not None:
+            if t in (bell + 30, bell + 300):
+                shots["bell" if t == bell + 30 else "idle"] = px
+            if hit is None and g.m[S["wPlHearts"]] < hearts:
+                hit = t
+                shots["tell"] = next((p for u, p in back if u == t - SCREENS_TELL), None)
+            if hit is not None and t == hit + 4:
+                shots["hit"] = px
+            if "down" not in shots and g.m[S["wFtCount"]] == 3:
+                shots["down"] = px
+            if "down" in shots and "idle" in shots and (hit is None or "hit" in shots) or t > bell + SCREENS_LIMIT:
+                break
+    g.stop()
+    return {k: v for k, v in shots.items() if v is not None}
+
+
+def _card_screens(rom, scene, fight, frames, cgb):
+    """A screen between fights: reached from FIGHT (Mac still: the round over, his corner) or, with none, loaded
+    straight from the title; FRAMES on from its first frame, each an RGB screen."""
+    names = [s["name"] for s in _project()["scenes"]]
+    target = names.index(scene)
+    g = _game(rom, names.index(fight) if fight else target, cgb)
+    if fight:
+        _to_fight(g, names.index(fight))
+    at, out = None, {}
+    for t in range(12000):
+        g.hold(["start"] if at is None and not fight and t % 60 < 3 else [])
+        here = g.hram("hScene") == target
+        g.pb.tick(1, True, False)
+        if here and at is None:
+            at = t
+        if at is not None and t - at in frames:
+            out[t - at] = g.pb.screen.ndarray[:, :, :3].copy()
+            if len(out) == len(frames):
+                break
+    g.stop()
+    return out
+
+
+def _save_png(path, px):
+    """A screen as an indexed PNG (its own few colors: small, exact)."""
+    import numpy
+    from PIL import Image
+    colors, idx = numpy.unique(px.reshape(-1, 3), axis=0, return_inverse=True)
+    im = Image.fromarray(idx.reshape(px.shape[:2]).astype("uint8"), "P")
+    im.putpalette(colors.astype("uint8").flatten().tolist())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    im.save(path, optimize=True)
+
+
+def qa_screens(rom):
+    """Every fight's screens, Color and the original, pixel for pixel as saved (tests/golden/fight-screens/cgb|dmg):
+    Mac still from the fight's first frame, the intro (the fade in done), his walk in, the bell, a pose later, the first
+    punch that lands (its wind-up and Mac hit) and Mac down at the count of 3, each at the same frame every run
+    (_fight_screens); and the corner (after Don's first round, Mac still) and a title bout's card. A mismatch: the
+    pixels that differ, the screen and a diff (red where they differ) saved under $QA_DIFF_DIR (default: the temp
+    directory's gbstage-fight-screens).
+    Regenerate (after the fighters' art or placement changes, then look the PNGs over before committing):
+        QA_UPDATE=1 python -m gbstage test --stage career --career qa_screens"""
+    import tempfile
+    import numpy
+    from PIL import Image
+    diff_dir = Path(os.environ.get("QA_DIFF_DIR") or Path(tempfile.gettempdir()) / "gbstage-fight-screens")
+    lines, good, seen, n = [], True, set(), 0
+    shots = []
+    for cgb in (True, False):
+        machine = "cgb" if cgb else "dmg"
+        for scene, name in _fights():
+            fighter = "joe" if name == "Fight" else _slug(name.replace("Fight: ", ""))
+            for moment, px in _fight_screens(rom, scene, cgb).items():
+                shots.append((f"{machine}/{fighter}-{moment}.png", px))
+        for scene, fight, frames in SCREENS_CARDS:
+            for f, px in _card_screens(rom, scene, fight, frames, cgb).items():
+                shots.append((f"{machine}/{_slug(scene)}-{f}.png", px))
+    for rel, px in shots:
+        path = SCREENS / rel
+        seen.add(path)
+        n += 1
+        if UPDATE:
+            _save_png(path, px)
+            continue
+        if not path.exists():
+            good = False
+            lines.append(f"    ✗ {rel}: no saved screen")
+            continue
+        want = numpy.array(Image.open(path).convert("RGB"))
+        bad = (want != px).any(axis=2)
+        if bad.any():
+            good = False
+            diff_dir.joinpath(rel).parent.mkdir(parents=True, exist_ok=True)
+            Image.fromarray(px).save(diff_dir / rel)
+            mark = (px // 3 + 128).astype("uint8")
+            mark[bad] = (255, 0, 0)
+            Image.fromarray(mark).save(diff_dir / rel.replace(".png", "-diff.png"))
+            lines.append(f"    ✗ {rel}: {int(bad.sum())} pixels differ (now and the diff: {diff_dir / rel})")
+    gone = sorted(p for p in SCREENS.rglob("*.png") if p not in seen)
+    if UPDATE:
+        for p in gone:
+            p.unlink()
+        lines.append(f"    ✓ {n} screens saved ({len(gone)} no longer made removed)")
+        return True, lines
+    for p in gone:
+        good = False
+        lines.append(f"    ✗ {p.relative_to(SCREENS)}: saved, not reached now")
+    lines.append(f"    {'✓' if good else '✗'} {n} fight screens as saved")
+    return good, lines
+
+
 def qa_hud(rom):
     """Each fight's first frame, Color and the original: Mac's hearts the NES's he starts with, the clock and points
     the NES's (not the last fight's or round's)."""
