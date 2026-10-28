@@ -5,13 +5,21 @@ A Flash-style editor for making Game Boy games. It generates assembly and builds
 ## Joe vs Mac
 
 Mike Tyson's Punch-Out!! on the Game Boy, built with gbstage: all 14 fights of the NES game, Glass Joe to Mike
-Tyson, on Game Boy Color and the original Game Boy.
+Tyson, on Game Boy Color, the original Game Boy and the Super Game Boy (the ROM is "Mike Tyson's Punch-Out!! rev 0.5").
+It is faithful to the NES game: nothing added, only fixed.
 
 - **The NES game's own fight logic.** Each opponent's moves, tells, timing and AI run as the NES's do, so the
   patterns you know from the original work here.
-- **Every frame as the NES draws it.** Each opponent's and Little Mac's frames are captured from the NES game
-  itself and shown as they are, mirrored ones included. On the original Game Boy, each fighter gets his own grey
-  shading.
+- **Every frame from the NES's own.** Each opponent's and Little Mac's frames are captured from the NES game and
+  fitted to the Game Boy's smaller screen: heads at the NES's full size, every eye and brow its own pixel, bodies
+  scaled to fit, outlines redrawn solid; each frame was compared with the NES's and approved. Colors follow the NES's,
+  down to the gloves, the HUD's white star and bars and the arena wall's grid. On the original Game Boy, each fighter
+  gets his own grey shading, at full size too.
+- **Smooth.** No fight drops a frame on either machine, and on Color every pose shows on the frame the NES shows it
+  (on the original Game Boy about 9 in 10 do; the rest come a frame later).
+- **The NES's own bugs fixed**, each reproduced on the NES first: the clock that stops for good after a mistimed
+  punch (proved on every stop in a TASVideos run) and Super Macho Man's frozen crowd. The "midget" Sandman can't
+  happen here, and a test proves it.
 - **The NES's music and sound effects**, played on the Game Boy's own sound channels, and the NES's own recorded
   crowd (its sample, streamed through the wave channel; in the fight on Color with the bass mixed in). Measured
   against the NES rendered by blargg's Nes_Apu (`tools/sound_ab.py`): every channel within about 1 dB of the NES's
@@ -27,10 +35,13 @@ Tyson, on Game Boy Color and the original Game Boy.
   by the NES's own algorithm (ported, and checked against the original). Keys from the NES work on CONTINUE: try
   005 737 5423, or 007 373 5963 for Mike Tyson. The NES's secrets too: 135 792 4680 (hold Select as you enter the last
   digit) for the Another World Circuit, and the busy signals (075 541 6113).
+- **The Super Game Boy** frames the game in a Punch-Out!! border (the NES title's logo over its crowd). A+B+Select+Start
+  restarts from any screen, as Nintendo's games do.
 - **Checked against real hardware timing.** Every fight runs in SameBoy with no video writes outside the time the
   hardware allows, on both machines. In the test suite, a bot that only presses buttons beats every fighter within
   two rounds, then plays the whole game from power-on to THE END; every opponent frame is compared with what the
-  NES draws (`tools/punchout_art/frame_audit.py`).
+  NES draws (`tools/punchout_art/frame_audit.py`). The suite has 27 test groups, from the NES's own logic byte for
+  byte to every fight's frame budget, pose timing, sound and screens; CI runs all but the two that need the NES files.
 
 It's a 4 MB MBC5 cartridge (`joe-vs-mac.gb`) that runs in any Game Boy emulator.
 

@@ -348,7 +348,12 @@ def _dmg_greys(s, greys):
     def code(c):
         g = greys[pal[c]] if pal[c] < len(greys) else None
         return None if not g or g == [0, 1, 2, 3] else sum(((g[k] & 1) | (g[k] >> 1) << 1) << (2 * k) for k in range(4))
-    if s.get("fight") or not any(code(c) is not None for c in range(len(cells))):
+    if s.get("fight"):                          # (a fight: only the HUD's counts, in their palette's greys -- the rest of
+        hud = s["fight"]["hud"]["stars"]        #  its top in the screen's one set of greys, the crowd's among them)
+        c = hud["y"] * CW + hud["x"]
+        cd = code(c) if c < len(pal) else None
+        return [(tl, cd) for tl in s.get("fight_count_tiles") or []] if cd is not None else []
+    if not any(code(c) is not None for c in range(len(cells))):
         return []
     owner = {}
     for c, tl in enumerate(cells):
@@ -954,6 +959,13 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
     crowd = ft.get("crowdRow", 0)
     if not (isinstance(crowd, int) and 0 <= crowd < CH):
         errors.append(f"{where}: the crowd row (where cameras flash) must be on screen.")
+    count_ink = ft.get("hudCountInk")           # (optional) the star and heart counts' ink: [body, shadow] slots (the NES's
+    if count_ink is not None and not (isinstance(count_ink, list) and len(count_ink) == 2   #  yellow, a dark red edge)
+                                      and all(isinstance(v, int) and 0 <= v <= 3 for v in count_ink)):
+        errors.append(f"{where}: the HUD's count ink is two color slots, 1-4."); count_ink = None
+    hud_dy = ft.get("hudDy", 0)                 # (optional) the HUD's digits and bars this many lines down in their cells
+    if not (isinstance(hud_dy, int) and 0 <= hud_dy <= 2):
+        errors.append(f"{where}: the HUD's offset (hudDy) is 0-2 lines."); hud_dy = 0
     slots = [ft.get("textSlot", 3), ft.get("barSlot", 3)]
     if not all(isinstance(v, int) and 0 <= v <= 3 for v in slots):
         errors.append(f"{where}: the HUD text and bar slots must be 1-4.")
@@ -1013,7 +1025,7 @@ def _fight(ft, where, index, scene_count, n_bg, n_obj, errors):
                        "poses": pposes, **({"cgb_poses": pcgb} if pcgb else {})}, "hud": hud,
             "referee": {"palette": ref.get("palette"), "shirt_palette": shirt, "poses": rposes_ref,
                         **({"words": _ref_words(ref.get("words"), where, errors)} if ref.get("words") else {})},
-            "text_slot": slots[0], "bar_slot": slots[1], "crowd_row": crowd, "opening": opening, "loop": loop, "timed": timed,
+            "text_slot": slots[0], "bar_slot": slots[1], "hud_dy": hud_dy, **({"count_ink": count_ink} if count_ink else {}), "crowd_row": crowd, "opening": opening, "loop": loop, "timed": timed,
             **({"rope_row": rope} if rope else {}), **({"side_rope": [ord(c) - 48 for c in side]} if side else {}),
             "win": ft["win"], "lose": ft["lose"], "corner": corner, "win_tko": win_tko, "game_over": game_over,
             **({"another_world": aw} if aw else {}),
@@ -1879,10 +1891,10 @@ def _fight_compose_base(scene, composed):
         composed[y * W + x] = ft["text_slot"]
 
 
-def bar_tile(pixels, c, level, slot):
-    """A health bar cell filled `level` pixels (0-8) from the left, rows 2-5, over what's painted."""
+def bar_tile(pixels, c, level, slot, dy=0):
+    """A health bar cell filled `level` pixels (0-8) from the left, rows 2-5 (dy lower), over what's painted."""
     key = list(cell_key(pixels, c))
-    for y in range(2, 6):
+    for y in range(2 + dy, 6 + dy):
         for x in range(level):
             key[y * CELL + x] = slot
     return tuple(key)
@@ -1902,26 +1914,33 @@ def _fight_compose_tiles(scene, tile_of):
         attrs[pose] = [pal for _, pal in cells]
     scene["fight_maps"], scene["fight_attrs"] = maps, attrs
     # HUD: each cell's tile for every value, drawn over that cell's painting
-    hud, lut, cells = ft["hud"], [], []
+    hud, lut, cells, counts = ft["hud"], [], [], set()
     def digit_cells(key, offsets):
+        ink = ft.get("count_ink") if key in ("stars", "hearts") else None   # (the counts: a body and its shadow on the right)
         for k in offsets:
             c = hud[key]["y"] * CW + hud[key]["x"] + k
             row = []
             for d in range(10):
                 img = list(scene["pixels"])
-                for x, y in text_ink(str(d), hud[key]["x"] + k, hud[key]["y"]):
-                    img[y * W + x] = ft["text_slot"]
+                pts = {(x, y + ft.get("hud_dy", 0)) for x, y in text_ink(str(d), hud[key]["x"] + k, hud[key]["y"])}
+                for x, y in pts:
+                    img[y * W + x] = ink[0] if ink else ft["text_slot"]
+                    if ink and (x + 1, y) not in pts and (x + 1) % CELL:
+                        img[y * W + x + 1] = ink[1]
                 row.append(tile_of(cell_key(img, c)))
             lut.extend(row); cells.append(c)
+            if ink:
+                counts.update(row)
     def bar_cells(key):
         for k in range(kit.BAR_CELLS):
             c = hud[key]["y"] * CW + hud[key]["x"] + k
-            row = [tile_of(bar_tile(scene["pixels"], c, lv, ft["bar_slot"])) for lv in range(9)]
+            row = [tile_of(bar_tile(scene["pixels"], c, lv, ft["bar_slot"], ft.get("hud_dy", 0))) for lv in range(9)]
             lut.extend(row + [row[0]]); cells.append(c)
     digit_cells("stars", [0]); digit_cells("hearts", [0, 1]); digit_cells("points", range(6))
     digit_cells("clock", [0, 2, 3]); digit_cells("round", [0])
     bar_cells("playerBar"); bar_cells("rivalBar")
     scene["fight_lut"], scene["fight_hud_cells"] = lut, cells
+    scene["fight_count_tiles"] = sorted(counts)     # (the counts' tiles: the original puts them in their palette's greys)
     # sprite tiles: the player's poses (mirrored copies shared) and the count's glyphs
     obj, index = [], {}
     def obj_tile(key):
@@ -2233,6 +2252,7 @@ def _fight_swap(scene):
     scene["tiles"] = base + padded["attack"] + high       # the attack set is loaded with the scene
     scene["cell_tiles"] = [base_index.get(tiles[t], high_index.get(tiles[t])) for t in scene["cell_tiles"]]
     scene["fight_lut"] = [base_index[tiles[t]] for t in scene["fight_lut"]]
+    scene["fight_count_tiles"] = sorted({base_index[tiles[t]] for t in scene.get("fight_count_tiles") or []})
     scene["fight_flash_tile"] = base_index[tiles[scene["fight_flash_tile"]]]
     if scene.get("fight_cue"):
         scene["fight_cue"] = (scene["fight_cue"][0], base_index[tiles[scene["fight_cue"][1]]])

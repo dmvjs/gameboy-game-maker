@@ -49,6 +49,8 @@ function cellPalettes(scene, cx, cy, cw, ch, palette) {
 // Small 8x8 icons for the HUD, slots as digits.
 const STAR = ['...1....', '...1....', '..111...', '1111111.', '.11111..', '..1.1...', '.1...1..', '........'];
 const HEART = ['.22.22..', '2222222.', '2222222.', '.22222..', '..222...', '...2....', '........', '........'];
+const NES_STAR = ['...1....', '...1....', '..111...', '1111111.', '.11111..', '.11111..', '.11.11..', '11...11.'];   // (the NES's, 11x12, to 7x8)
+const NES_HEART = ['.22.22..', '2222222.', '2222222.', '2222222.', '.22222..', '..222...', '...2....', '........'];   // (the NES's, 9x11, to 7x7)
 function icon(layer, cx, cy, rows) {
   rows.forEach((r, y) => [...r].forEach((ch, x) => { if (ch !== '.') layer.pixels[(cy * 8 + y) * M.W + cx * 8 + x] = +ch; }));
 }
@@ -93,8 +95,8 @@ export function boxingGame(pack) {
   const p = {
     name: pack.name,
     palettes: [
-      pal('HUD', [[31, 31, 31], [31, 26, 6], [28, 6, 6], [3, 4, 10]]),
-      pal('Crowd', [[31, 31, 31], [18, 16, 24], [26, 6, 8], [4, 4, 10]]),
+      pal('HUD', [[31, 31, 31], [25, 26, 15], [19, 4, 4], [0, 0, 0]], [0, 0, 2, 3]),   // (the original: its counts white)      // (its boxes black, as the NES's)
+      pal('Crowd', [[31, 31, 31], [18, 16, 24], [26, 6, 8], [0, 0, 0]]),    // (behind the crowd, and outside the ring, black: the NES's)
       pal('Mat', [matOf(R), [20, 22, 28], [8, 12, 24], [3, 3, 6]]),
       ...['skin', 'gloves', 'hair'].map((part, k) => pal(`${R.short} ${part}`, [matOf(R), ...R.palettes[k].slice(1)])),
       pal('Text', pack.textPalette, [0, 1, 1, 3]),        // (the original: its green as light as its orange, over black)
@@ -104,7 +106,7 @@ export function boxingGame(pack) {
                   pal('Referee', [[0, 0, 0], ...(pack.referee?.colors || [[31, 24, 18], [26, 29, 31], [3, 3, 6]])]),
                   pal('Player tired', [[0, 0, 0], ...P.tiredColors]),
                   ...(P.downColors ? [pal('Player down', [[0, 0, 0], ...P.downColors])] : []),
-                  ...(pack.referee?.shirtColors ? [pal('Referee shirt', [[0, 0, 0], ...pack.referee.shirtColors.slice(0, 2), [4, 4, 10]])] : [])],   // (its dark the crowd's: the side ropes' outside, as over the mat)
+                  ...(pack.referee?.shirtColors ? [pal('Referee shirt', [[0, 0, 0], ...pack.referee.shirtColors.slice(0, 2), [0, 0, 0]])] : [])],   // (its dark the crowd's: the side ropes' outside, as over the mat)
     cursor: { palette: 0, pixels: Uint8Array.from(
       '00333000' + '03313300' + '33133330' + '33333330' + '33333330' + '03333300' + '00222000' + '00000000', ch => +ch) },
     scenes: ['Title', 'Challenger', 'Fight', 'You win', `${R.short} wins`, 'Pass key', 'Corner', 'Rematch',
@@ -699,20 +701,20 @@ export function boxingGame(pack) {
           round: { x: 13, y: 0 }, playerBar: { x: 1, y: 1 }, rivalBar: { x: 13, y: 1 } };
     if (nesRing) {
       const r = ringOf(rv), [white] = p.palettes[crowd].colors;
-      const wall = addPal(`${rv.short} wall`, [r.wall, white, r.wall, r.brick]);
-      // The HUD as Punch-Out!!'s: boxes on the arena's wall (its lamps along the top). Left: stars, hearts, your
+      const wall = addPal(`${rv.short} wall`, [r.wall, white, r.wall, [0, 0, 0]]);
+      // The HUD as Punch-Out!!'s: boxes on the arena's wall (its grid: 8-pixel squares, black lines). Left: stars, hearts, your
       // bar; middle: points, the round; right: the clock, his bar.
       const boxes = [[0, 5], [7, 12], [14, 19]];
       cellPalettes(sf, 0, 0, M.CW, 3, wall);
       for (const [x0, x1] of boxes) cellPalettes(sf, x0, 1, x1 - x0 + 1, 2, 0);
-      for (let y = 0; y < 24; y++) for (let x = 0; x < M.W; x++)       // bricks, joints staggered
-        ring.pixels[y * M.W + x] = y % 4 === 3 || x % 8 === (y % 8 >= 4 ? 4 : 0) ? 3 : 0;
-      for (let x = 2; x < M.W; x += 8) {                    // the lamps
-        fillRect(ring, x, 0, 4, 3, 1); ring.pixels[x] = 3; ring.pixels[x + 3] = 3;
-      }
+      const wallRows = [3, 11, 15, 18, 20, 22, 23];         // (the NES's rows in perspective, slimmer down to black: 8, 4, 3, 2, 2)
+      for (let y = 0; y < 24; y++) for (let x = 0; x < M.W; x++)       // the wall's grid, as the NES's (lines on
+        ring.pixels[y * M.W + x] = x % 8 === 0 || wallRows.includes(y) ? 3 : 0;   //  x 0 of each 8, every row, as the NES's)
       for (const [x0, x1] of boxes) fillRect(ring, x0 * 8, 8, (x1 - x0 + 1) * 8, 16, 3);
-      icon(ring, 0, 1, STAR.map(r => r.replace(/1/g, '0'))); icon(ring, 2, 1, HEART);   // (its star white, the NES's)
-      M.drawText(ring, 'ROUND', 56, 16, 0);
+      const low = rows => ['........', ...rows.slice(0, 7)];   // (the HUD's contents a line low in their boxes)
+      icon(ring, 0, 1, NES_STAR.map(r => r.replace(/1/g, '0')));   // (its star white and full height, the NES's)
+      icon(ring, 2, 1, low(NES_HEART));
+      M.drawText(ring, 'ROUND', 56, 17, 0);
       // The crowd: heads in rows behind three ropes, as tall as Punch-Out!!'s (to the fighter's head: he stands in
       // front of them), right up to the posts; the posts' cells in its palette too, as the NES's (1 the crowd and the
       // posts, 2 the pads, the mat's). The bottom 8 lines are the rope row (the band over his area's first row, his
@@ -737,10 +739,16 @@ export function boxingGame(pack) {
       for (const side of [0, 1]) {
         const at = (x, y, slot) => put(side ? M.W - 1 - x : x, y, slot);
         for (let y = 24; y < 24 + CROWD; y++) for (let x = 0; x < 11; x++) at(x, y, 3);   // outside the ring: dark
-        for (let y = 24; y < 24 + CROWD; y++) { at(8, y, 1); at(9, y, 1); at(10, y, 3); }   // the post (its edge dark)
-        for (const y of ropes) {
+        for (let y = 25; y < 24 + CROWD; y++) { at(7, y, 1); at(8, y, 0); at(9, y, 1); }   // the post, as the NES's:
+        at(8, 24, 1); at(9, 24, 1);                         //  the crowd's color, a white highlight, a rounded top, black
+        for (const y of ropes) {                            //  round it
           for (let x = 11; x < 16; x++) at(x, y, 0);        // the rope to it
-          for (let x = 7; x < 11; x++) for (let dy = -1; dy <= 1; dy++) at(x, y + dy, 2);   // its pad
+          for (let x = 7; x < 13; x++) { at(x, y - 2, 3); at(x, y + 2, 3); }   // its pad: a rounded capsule (the mat's
+          for (const dy of [-1, 1]) { at(6, y + dy, 3); at(13, y + dy, 3); }   //  color) round the post, more of it inside,
+          at(5, y, 3);                                              //  a 1px black outline (none where the rope
+          for (let x = 6; x < 14; x++) for (let dy = -1; dy <= 1; dy++)   //  comes out of it, in front)
+            if (!((x === 6 || x === 13) && dy)) at(x, y + dy, 2);
+          at(8, y - 1, 0); at(9, y - 1, 0); at(10, y - 1, 0);             //  a white dash on top
           for (let x = 0; x < 8; x++) {                     // and the ring's side, down off it (unbroken)
             for (let yy = sideY(y, x + 1) + 1; yy <= sideY(y, x); yy++) if (yy < 24 + CROWD) at(x, yy, 0);
           }
@@ -748,7 +756,9 @@ export function boxingGame(pack) {
       }
       sideRope = [...Array(8 * 16)].map((_, i) => {        // (below the crowd's rows: the side ropes' ends, 8x16)
         const x = i % 8, y = 48 + (i >> 3);
-        return ropes.some(y0 => y > sideY(y0, x + 1) && y <= sideY(y0, x)) ? 2 : 0;
+        if (ropes.some(y0 => y > sideY(y0, x + 1) && y <= sideY(y0, x))) return 2;
+        const low = ropes[ropes.length - 1];                // (and a thin black line under the bottom one, as
+        return y > sideY(low, x + 1) + 1 && y <= sideY(low, x) + 1 ? 3 : 0;   //  between the ropes above it)
       }).join('');
       for (let i = 0; i < M.W * 16; i++) ring.pixels[24 * M.W + i] = crowdPx[i];   // two rows in the scene, the
       ropeRow = { pixels: [...crowdPx.slice(M.W * 16)].join(''),                    // third its own
@@ -787,7 +797,7 @@ export function boxingGame(pack) {
       player: { palette: 0, tiredPalette: 2, ...(P.downColors ? { downPalette: 3 } : {}), poses: P.poses, ...(P.cgbPoses ? { cgbPoses: P.cgbPoses } : {}) },
       referee: { palette: 1, poses: pack.referee?.poses || REF_POSES, ...(pack.referee?.words ? { words: pack.referee.words } : {}),
                  ...(pack.referee?.shirtColors ? { shirtPalette: P.downColors ? 4 : 3 } : {}) },
-      hud, ...(ropeRow ? { ropeRow } : {}), ...(sideRope ? { sideRope } : {}),
+      hud, ...(nesRing ? { hudDy: 1, hudCountInk: [1, 2] } : {}), ...(ropeRow ? { ropeRow } : {}), ...(sideRope ? { sideRope } : {}),
       textSlot: 0, barSlot: nesRing ? 0 : 2, crowdRow: 3,   // (the NES's bars white)
       opening: [['idle', 250], ['idle', 250], ['idle', 250], ['idle', 250]],      // does nothing for 40 seconds
       loop: [['idle', 90], ['jab', 0], ['idle', 60], ['guard', 90], ['jab', 0], ['idle', 40], ['hook', 0],

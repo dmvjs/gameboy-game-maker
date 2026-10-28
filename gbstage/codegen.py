@@ -2612,7 +2612,7 @@ def _side_dmg(s, obp1=False):
         row = px[y * 8:(y + 1) * 8]
         last = max((x for x, v in enumerate(row) if v == 2), default=None)     # (the innermost rope: outside it,
         if obp1:                                # (OBP1 over his top rows: 1 white, 3 black)
-            out += [1 if v == 2 else (3 if last is not None and x < last else 0) for x, v in enumerate(row)]
+            out += [1 if v == 2 else (3 if v == 3 or (last is not None and x < last) else 0) for x, v in enumerate(row)]
             continue
         out += [ring.index(0) if v == 2 else (fill if last is not None and x < last else v) for x, v in enumerate(row)]   # between the ropes too)
     return [b for k in (0, 1) for b in encode_tile(out[k * 64:(k + 1) * 64])]   # (OBP0, his ring's greys above: the
