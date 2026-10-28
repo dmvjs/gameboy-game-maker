@@ -2590,11 +2590,13 @@ def _rope_dmg(s):
             f"{cue_at(cue[1]) if cue else 0}, {cue_at(s['fight_cue_old']) if cue else 0}\n"
             f"FtRopeDmgData:\n{_db(data, 16)}\n"
             f"FtSideTilesDmg:             ; (the side ropes' ends' two tiles: the original's copy, Color's being in bank 1)\n"
-            f"{_db(_side_dmg(s), 16)}\n"
+            "IF DEF(FT_DMG_WHITE)        ; (OBP1, over his top rows white and black whatever his cue: his flash leaves them be)\n"
+            f"{_db(_side_dmg(s, obp1=True), 16)}\nELSE\n"
+            f"{_db(_side_dmg(s), 16)}\nENDC\n"
             "FtRingSetupDmg:             ; (setup, screen off; this fight's data bank in) DE: the bottom rope's row's map row;\n    ld de, FtRopeTiles      ; the original with a grey mat: its copies in his ring's greys, the tell's\n    ldh a, [hFtRingBgp]     ; (the original, a grey mat: its copies in his ring's greys, and the tell's)\n    and a\n    ret z\n    ld a, [FtRopeDmgAt + 2]\n    and a\n    ret z\n    ld hl, FtRopeDmgAt\n    ld a, [hl+]\n    ld h, [hl]\n    ld l, a\n    ld a, [FtRopeDmgAt + 2]\n    swap a                  ; (16 bytes a tile: count * 16, at most 20 tiles)\n    ld c, a\n    and $0F\n    ld b, a\n    ld a, c\n    and $F0\n    ld c, a\n    ld de, FtRopeDmgData\n    call FtCopy\n    ld a, [wFtCueTile]\n    and a\n    jr z, .noCue\n    ld a, [FtRopeDmgAt + 3]\n    ld [wFtCueTile], a\n    ld a, [FtRopeDmgAt + 4]\n    ld [wFtCueOld], a\n    ld [wFtCue], a          ; (and up as it: the cell FtVBlank puts from the first frame, not the Color tile)\n.noCue:\nIF DEF(FT_SIDE_TILE)\n    ld de, FtSideTilesDmg   ; (and the side ropes' ends' tiles: the original's own copy)\n    ld hl, $8000 + FT_SIDE_TILE_DMG * 16\n    ld bc, 32\n    call FtCopy\nENDC\n    ld de, FtRopeTilesDmg\n    ret\n\n")
 
 
-def _side_dmg(s):
+def _side_dmg(s, obp1=False):
     t = s.get("fight_side_tile")
     tiles = (s.get("fight_pl_cgb") or {}).get("tiles") or []
     pair = tiles[t:t + 2] if t is not None and len(tiles) >= t + 2 else []
@@ -2609,6 +2611,9 @@ def _side_dmg(s):
     for y in range(16):
         row = px[y * 8:(y + 1) * 8]
         last = max((x for x, v in enumerate(row) if v == 2), default=None)     # (the innermost rope: outside it,
+        if obp1:                                # (OBP1 over his top rows: 1 white, 3 black)
+            out += [1 if v == 2 else (3 if last is not None and x < last else 0) for x, v in enumerate(row)]
+            continue
         out += [ring.index(0) if v == 2 else (fill if last is not None and x < last else v) for x, v in enumerate(row)]   # between the ropes too)
     return [b for k in (0, 1) for b in encode_tile(out[k * 64:(k + 1) * 64])]   # (OBP0, his ring's greys above: the
                                                                                #  rope white, outside it his ring's outside)

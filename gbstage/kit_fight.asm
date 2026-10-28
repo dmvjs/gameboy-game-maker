@@ -948,7 +948,10 @@ IF DEF(FT_NES)
     ldh [hFtCueOn], a
     pop bc
     ret
-.cueObjLate:
+.cueObjLate:                ; (his top rows' last line, FT_BAND_TOP, drawn: back now; still drawing, at its end)
+    ldh a, [rLY]
+    cp FT_BAND_TOP
+    jr nz, .cueObjOff
     ldh a, [rSTAT]
     and 3
     jr nz, .cueObjLate
@@ -1139,6 +1142,11 @@ ENDC
 
 ; ---- VBlank: sprites, then the rival's pose or the HUD ----
 
+IF DEF(FT_DMG_WHITE)
+DEF FT_SIDE_ATTR_DMG EQU $90     ; (the original: behind his band's colors, OBP1 -- white and black over his top rows, his cue's OBP0 aside)
+ELSE
+DEF FT_SIDE_ATTR_DMG EQU $80
+ENDC
 DEF FT_PIC_IDLE EQU $4001
 DEF FT_PIC_FRAMES EQU $4010
 DEF FT_PIC_PLACEX EQU $4210
@@ -7871,7 +7879,7 @@ FtSideRopes:
     ld [hl+], a
     ld a, FT_SIDE_TILE_DMG
     ld [hl+], a
-    ld a, $80
+    ld a, FT_SIDE_ATTR_DMG
     ld [hl+], a
     ld a, FT_SIDE_Y + 8
     ld [hl+], a
@@ -7879,7 +7887,7 @@ FtSideRopes:
     ld [hl+], a
     ld a, FT_SIDE_TILE_DMG + 1
     ld [hl+], a
-    ld a, $80
+    ld a, FT_SIDE_ATTR_DMG
     ld [hl+], a
     ld a, FT_SIDE_Y
     ld [hl+], a
@@ -7887,7 +7895,7 @@ FtSideRopes:
     ld [hl+], a
     ld a, FT_SIDE_TILE_DMG
     ld [hl+], a
-    ld a, $A0
+    ld a, FT_SIDE_ATTR_DMG | $20
     ld [hl+], a
     ld a, FT_SIDE_Y + 8
     ld [hl+], a
@@ -7895,7 +7903,7 @@ FtSideRopes:
     ld [hl+], a
     ld a, FT_SIDE_TILE_DMG + 1
     ld [hl+], a
-    ld a, $A0
+    ld a, FT_SIDE_ATTR_DMG | $20
     ld [hl+], a
     ret
 .cgb:
