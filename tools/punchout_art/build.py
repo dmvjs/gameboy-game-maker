@@ -2098,10 +2098,14 @@ def align_pictures(frames, palettes, reach=7):
     return out, moved
 
 
-def import_pictures(frames, palettes):
-    """The pictures in his own palettes (the poses'): {key: {"pixels", "cells"}} as import_rival gives poses."""
+def import_pictures(frames, palettes, base=None):
+    """The pictures in his own palettes (the poses'): {key: {"pixels", "cells"}} as import_rival gives poses. With
+    base (the palettes his poses chose, one since replaced: PICTURE_PALETTES), a tile takes a palette keeping every
+    pixel base showed exactly as it was (a glove's red gained, never a belt's black lost for it)."""
     def near(c, pal):
         return min((1, 2, 3), key=lambda k: dist(c, pal[k]))
+    def exact(cell, px, pal):
+        return {i for i in cell if px[i] and pal[near(px[i], pal)] == px[i]}
     out = {}
     for key, fr in frames.items():
         RH = max(globals()["RH"], len(fr))   # (a picture taller than his frame, his feet below it: all its rows)
@@ -2113,7 +2117,13 @@ def import_pictures(frames, palettes):
                 cell = [(cy * 8 + y) * RW + cx * 8 + x for y in range(8) for x in range(8)]
                 errs = [sum(min(dist(px[i], pal[k]) for k in (1, 2, 3)) * (WHITE_DEAR if i in small else 1)
                             for i in cell if px[i]) for pal in palettes]
-                bp = min(range(len(palettes)), key=lambda k: errs[k])
+                ok = range(len(palettes))
+                if base:                    # (only those keeping what base's best showed exactly)
+                    be = [sum(min(dist(px[i], pal[k]) for k in (1, 2, 3)) * (WHITE_DEAR if i in small else 1)
+                              for i in cell if px[i]) for pal in base]
+                    kept = exact(cell, px, base[min(range(len(base)), key=lambda k: be[k])])
+                    ok = [k for k in ok if kept <= exact(cell, px, palettes[k])] or ok
+                bp = min(ok, key=lambda k: errs[k])
                 for i in cell:
                     if px[i]:
                         pix[i] = near(px[i], palettes[bp])
@@ -2199,6 +2209,66 @@ def grey_inks(key, frames, pics, palettes):
         if k not in pics:
             print(f"  grey touch-up {k}: no picture {k}")
     return pics
+
+
+INK_ROWS = 3                            # (a picture's tile rows whose inks show: his top three, the sprites' upper list's)
+
+
+def color_inks(key, frames, pics, palettes):
+    """Color: pixels touchups/KEY/ink/FRAME.txt draws in an NES color their tile's palette can't show (where the warp
+    left them dark): drawn over by sprites, as an eye's white is, in his palette that has it -- his top rows only.
+    Each picture's {"g2": [pixel, ...], ...}."""
+    idir = TOUCHUPS / key / "ink"
+    for path in sorted(idir.glob("*.txt")) if idir.exists() else ():
+        k = path.stem[:-1] + "|" if path.stem.endswith("m") else path.stem
+        if k not in pics:
+            print(f"  ink touch-up {k}: no picture {k}")
+            continue
+        drawn, fr, v = read_touchup(path)[1], frames[k], pics[k]
+        ink = {}
+        for y, row in enumerate(drawn[:INK_ROWS * 8]):
+            for x, c in enumerate(row):
+                if c is None or fr[y][x] is None or tuple(c[:3]) == tuple(fr[y][x][:3]):
+                    continue
+                c5 = from8(c[:3])
+                i = y * RW + x
+                kind = v["cells"][(y // 8) * FIGHT_W + x // 8]
+                if palettes[KINDS.index(kind)][int(v["pixels"][i])] == c5:
+                    continue
+                at = [f"{KINDS[b]}{s}" for b in range(len(palettes)) for s in (1, 2, 3) if palettes[b][s] == c5]
+                if at:
+                    ink.setdefault(at[0], []).append(i)
+        if ink:
+            v["inks"] = ink
+    return pics
+
+
+def keep_greys(old, old_pals, new, new_pals):
+    """The original Game Boy's pictures kept as they were when Color's palettes change (PICTURE_PALETTES): each pixel
+    whose color for its grey (its greyInk's, else its tile's) now differs, inked to the one it had."""
+    def colors(v, pals):
+        ink = {i: c for c, ii in (v.get("greyInk") or {}).items() for i in ii}
+        out = {}
+        for i, ch in enumerate(v["pixels"]):
+            if ch != "0":
+                kind = v["cells"][(i // RW // 8) * FIGHT_W + (i % RW) // 8]
+                c = ink.get(i, f"{kind}{ch}")
+                out[i] = tuple(pals[KINDS.index(c[0])][int(c[1])])
+        return out
+    for k, v in new.items():
+        was, now = colors(old[k], old_pals), colors(v, new_pals)
+        ink = {i: c for c, ii in (v.get("greyInk") or {}).items() for i in ii}
+        for i, c in was.items():
+            if now[i] != c:
+                ink[i] = next(f"{KINDS[b]}{s}" for b in range(len(new_pals)) for s in (1, 2, 3) if tuple(new_pals[b][s]) == c)
+        kind_of = lambda i: v["cells"][(i // RW // 8) * FIGHT_W + (i % RW) // 8]
+        ink = {i: c for i, c in ink.items()        # (one its own tile's palette gives it anyway: none)
+               if tuple(new_pals[KINDS.index(c[0])][int(c[1])]) != tuple(new_pals[KINDS.index(kind_of(i))][int(v["pixels"][i])])}
+        if ink:
+            v["greyInk"] = {c: sorted(i for i, cc in ink.items() if cc == c) for c in sorted(set(ink.values()))}
+        else:
+            v.pop("greyInk", None)
+    return new
 
 
 def _jewel(shape, gem=(236, 106, 100), cloth=(236, 238, 236)):
@@ -2448,7 +2518,16 @@ def rival_art(key, s, colors, pposes, max_share=24):
             frames_ = despeckle(frames_)                 # (then the shrink's stray dots, the touch-ups' hashes kept)
         places = {k: [x - moved.get(k, (0, 0))[0], y - moved.get(k, (0, 0))[1]]
                   for k, (x, y) in {k: places.get(k, [0, 0]) for k in frames_}.items()}
-        art["pictures"] = {"poses": grey_inks(key, frames_, import_pictures(frames_, pals), pals), "places": {k: v for k, v in places.items() if v != [0, 0]}}
+        pics = grey_inks(key, frames_, import_pictures(frames_, pals), pals)
+        if key in PICTURE_PALETTES:     # (Color: a palette his pictures show better with, nothing shown worse for
+            cpals = [list(p) for p in pals]   #  it; the original's greys as they were)
+            for n, p in PICTURE_PALETTES[key].items():
+                cpals[n] = p
+            new = grey_inks(key, frames_, import_pictures(frames_, cpals, base=pals), cpals)
+            pics = keep_greys(pics, pals, new, cpals)
+            art["pals"] = cpals
+        pics = color_inks(key, frames_, pics, art["pals"])   # (and an NES color his tile can't show: a sprite's)
+        art["pictures"] = {"poses": pics, "places": {k: v for k, v in places.items() if v != [0, 0]}}
         dmg = sorted((TOUCHUPS / key / "dmg").glob("*.txt")) if (TOUCHUPS / key / "dmg").exists() else []
         if dmg:                         # (the original Game Boy: its own picture where full size streams too slow there
             dframes, dplaces = {}, dict(places)   #  -- the one drawn before, touchups/KEY/dmg -- and where it sits)
@@ -2599,7 +2678,8 @@ def _rival_js(key, art):
     pic = lambda v: (f"  {{ pixels: '{v['pixels']}', cells: '{v['cells']}'"      # (and an eye's white his tile
                      + (f", whites: {json.dumps(v['whites'])}" if v.get("whites") else "")      # can't show; the
                      + (f", greyInk: {json.dumps(v['greyInk'], separators=(',', ':'))}" if v.get("greyInk") else "")   # original's
-                     + " },")                                                                  # greys of some)
+                     + (f", inks: {json.dumps(v['inks'], separators=(',', ':'))}" if v.get("inks") else "")   # greys of some;
+                     + " },")                                                                  # Color's inks)
     bank = (DISASM_BANK.with_name(f"PRG_Bank{r['bank']:03X}.bin")).read_bytes()
     return ([f"// {r['name']}: his poses and palettes (from the game's frames), his NES fighter bank (PRG bank {r['bank']}).",
              f"export const {up}_PALETTES = {json.dumps(art['pals'])};", f"export const {up}_POSES = {{"]
@@ -2840,6 +2920,12 @@ def write_example(strict=True):
     print("(" + msg.strip() + "; measuring against the last one)")
 
 
+PICTURE_PALETTES = {             # Color: a rival's palette replaced for his pictures (his poses never use it), where
+    # one shows them nearer the NES -- Von Kaiser: his third a copy of his first (skin, brown, black), instead skin,
+    # glove red and brown, so a glove beside his skin is red, not brown (a tile that also has his belt's black keeps
+    # its palette: import_pictures' base)
+    "kaiser": {2: [[26, 28, 31], [29, 22, 21], [18, 4, 4], [7, 3, 0]]},
+}
 DESPECKLE = set()                # (rivals whose shrink leaves stray dots: their pictures cleaned of them)
 LINE_REDRAW = set()                   # (opponents whose inner lines the shrink breaks to dashes: drawn whole again)
 
@@ -2924,12 +3010,16 @@ def preview_only(key, s):
     if key in DESPECKLE:
         frames_ = despeckle(frames_)
     write_sheet(out / f"{key}-pictures.png", [frames_[k] for k in sorted(frames_)], RW, RH, cols=13)
-    pics = import_pictures(frames_, pals)
+    base = None
+    if key in PICTURE_PALETTES:         # (Color's own palette for his pictures, as rival_art's)
+        base, pals = pals, [PICTURE_PALETTES[key].get(n, p) for n, p in enumerate(pals)]
+    pics = color_inks(key, frames_, import_pictures(frames_, pals, base), pals)
     shown = []
     for k in sorted(pics):
         px, cells = pics[k]["pixels"], pics[k]["cells"]
         pal = lambda i: pals[KINDS.index(cells[(i // RW // 8) * FIGHT_W + (i % RW) // 8])]
-        shown.append([[rgba(pal(y * RW + x)[int(px[y * RW + x])]) if px[y * RW + x] != "0" else None
+        ink = {i: pals[KINDS.index(c[0])][int(c[1])] for c, ii in (pics[k].get("inks") or {}).items() for i in ii}
+        shown.append([[rgba(ink.get(y * RW + x) or pal(y * RW + x)[int(px[y * RW + x])]) if px[y * RW + x] != "0" else None
                        for x in range(RW)] for y in range(RH)])
     write_sheet(out / f"{key}-preview-color.png", shown, RW, RH, cols=13)
     print(f"{r['name']}: {len(pics)} pictures ->", (out / f"{key}-pictures.png").relative_to(ROOT), "and",

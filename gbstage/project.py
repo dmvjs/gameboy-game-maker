@@ -1173,6 +1173,9 @@ def _nes_fighter(nes, where, errors):
                 and isinstance(v.get("greyInk") or {}, dict) and all(          # (the original's grey of some pixels:
                     re.fullmatch(r"[sgh][123]", c) and isinstance(ii, list)     #  their own color's, "g1": [pixel, ...])
                     and all(isinstance(i, int) and 0 <= i < area for i in ii) for c, ii in (v.get("greyInk") or {}).items())
+                and isinstance(v.get("inks") or {}, dict) and all(             # (Color: pixels his tile can't show,
+                    re.fullmatch(r"[sgh][123]", c) and isinstance(ii, list)     #  a sprite's in his palette that can:
+                    and all(isinstance(i, int) and 0 <= i < area for i in ii) for c, ii in (v.get("inks") or {}).items())   # "g2": [pixel, ...])
                 for k, v in list(pp.items()) + list(dp.items()))
                 and all(k in pp for k in dp)
                 and isinstance(pl, dict) and all(k in pp and isinstance(v, list) and len(v) == 2
@@ -2477,8 +2480,14 @@ def _fight_pics(scene):
                 c = (i // pw // CELL) * kit.REGION_W + (i % pw) // CELL
                 whites.setdefault(c, [0] * 64)[(i // pw % CELL) * CELL + i % CELL] = white[1]
         whites = {c: tuple(t) for c, t in whites.items()}
+        inks = {}                       # (an NES color his tile can't show: a sprite's, in his palette that has it)
+        for ck, ii in sorted((p.get("inks") or {}).items()):
+            for i in ii:
+                c = (i // pw // CELL) * kit.REGION_W + (i % pw) // CELL
+                inks.setdefault((c, ft["palettes"][ck[0]]), [0] * 64)[(i // pw % CELL) * CELL + i % CELL] = int(ck[1])
+        inks = {c: tuple(t) for c, t in inks.items()}
         own = []
-        for k in head + canon + list(whites.values()):   # (his top rows' first: copied first, where sprites find them)
+        for k in head + canon + list(whites.values()) + list(inks.values()):   # (his top rows' first: copied first,
             if k not in own:
                 own.append(k)
         if len(own) > PIC_ROOM:
@@ -2492,6 +2501,8 @@ def _fight_pics(scene):
         out["flips"].append(fl)
         out["heads"].append([(c // kit.REGION_W * 8, c % kit.REGION_W * 8, PIC_BASE + local[t], white[0], 2)
                              for c, t in sorted(whites.items())]       # (the whites first: in front, and drawn
+                            + [(c // kit.REGION_W * 8, c % kit.REGION_W * 8, PIC_BASE + local[t], g, 2)
+                               for (c, g), t in sorted(inks.items())]  # (then the inks, drawn so too)
                             + [(i // kit.REGION_W * 8, i % kit.REGION_W * 8, PIC_BASE + local[canon[i]], attrs[i], fl[i])
                                for i in range(rows * kit.REGION_W) if canon[i] != blank])   # wherever they are: f's 2)
     index = {k: n for n, k in enumerate(order)}
