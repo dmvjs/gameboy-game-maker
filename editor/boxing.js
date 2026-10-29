@@ -713,7 +713,7 @@ export function boxingGame(pack) {
       const wallRows = [3, 11, 15, 18, 20, 22, 23];         // (the NES's rows in perspective, slimmer down to black: 8, 4, 3, 2, 2)
       for (let y = 0; y < 24; y++) for (let x = 0; x < M.W; x++)       // the wall's grid, as the NES's (lines on
         ring.pixels[y * M.W + x] = x % 8 === 0 || wallRows.includes(y) ? 3 : 1;   //  x 0 of each 8, every row, as the NES's)
-      for (const [x0, x1] of boxes) {                       // the boxes: black, a 1px NES-blue edge, corners rounded 3px
+      for (const [x0] of boxes) {                           // the boxes: black or blue, a 1px edge, corners rounded 3px
         const [l, rgt] = { 0: [0, 50], 7: [54, 105], 14: [109, M.W - 1] }[x0];   // (edges clear of the bars' cells: the bars
         const top = 6, bot = 23;                            //  inside; the middle 2px wider each side; 3px of wall between
                                                             //  them; up into the wall, room above the top row)
