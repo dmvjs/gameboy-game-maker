@@ -45,6 +45,7 @@ KIT_FIGHT_ROM0, KIT_FIGHT_BANK = _kit_split(KIT_FIGHT)
 KIT_NES = __import__("pathlib").Path(__file__).with_name("kit_nes.asm").read_text()
 KIT_NES_SOUND = __import__("pathlib").Path(__file__).with_name("kit_nes_sound.asm").read_text()
 KIT_PASSKEY = __import__("pathlib").Path(__file__).with_name("kit_passkey.asm").read_text()
+KIT_SAVE = __import__("pathlib").Path(__file__).with_name("kit_save.asm").read_text()
 KIT_PCM = __import__("pathlib").Path(__file__).with_name("kit_pcm.asm").read_text()
 KIT_SGB = __import__("pathlib").Path(__file__).with_name("kit_sgb.asm").read_text()
 SGB_BORDER = __import__("pathlib").Path(__file__).with_name("sgb_border.hex")
@@ -964,7 +965,12 @@ Scene{i}Attr:               ; palette number per tile (Game Boy Color only)
         f"Scene{i}AwRecord{n}:           ; (the Another World Circuit's record's glyphs)\n    db {', '.join(map(str, g))}\n"
         for n, (_, _, g) in enumerate(s.get("aw_record_glyphs") or ())) + _far(
         f"Scene{i}Time{n}:               ; the fight's time's glyphs: each digit's cell, 0-9\n    db {', '.join(str(v) for g in cells for v in g)}\n"
-        for n, (_, _, cells, _) in enumerate(s.get("time_glyphs") or ())) + (
+        for n, (_, _, cells, _) in enumerate(s.get("time_glyphs") or ())) + _far(
+        f"Scene{i}Best{n}:               ; his best's glyphs: each cell's (a digit's 0-9)\n    db {', '.join(map(str, g))}\n"
+        for n, (_, _, g) in enumerate(s.get("best_glyphs") or ()) if s.get("_save_fight") is not None) + _far(
+        [f"Scene{i}NewBest:            ; NEW RECORD!: cells, then each's address and tile (AwPatch's)\n    db {len(s['new_best'])}\n"
+         + "".join(f"    dw $9800 + {c // CW * 32 + c % CW}\n    db {tile}\n" for c, tile in s["new_best"])]
+        if s.get("new_best") and s.get("_save_fight") is not None else []) + (
         f"Scene{i}Greys:              ; the original's: tiles whose palette has greys of its own, each's map (2 bits a slot)\n"
         f"    db {len(s['dmg_remap'])}\n" + "".join(f"    db {tl}, ${m:02X}\n" for tl, m in s["dmg_remap"]) if s.get("dmg_remap") else "") + (
         "PUSHS\nSECTION FRAGMENT \"Screens far\", ROMX     ; (with DocLoadIn: read in its bank)\n"
@@ -1536,6 +1542,14 @@ def _scene_load(i, s, sprites, opt_index=None, markers=False):
             lines += ["    xor a                   ; no menu: cursor off screen", "    ldh [hCursorY], a"]
         if markers and not s["options"]:
             lines += ["    xor a", "    ldh [hMarkerY], a"]
+    if s.get("_save_fight") is not None:    # (Punch-Out!!'s battery save: a fight's result kept, once the screen's in;
+        k = s["_save_fight"]                #  a win's: NEW RECORD! if it was his best KO of him, else his best, if any)
+        lines += [f"    ld a, {k}", "    call SaveResult"]
+        if s.get("new_best"):
+            lines += ["    and a", "    jr z, .best", f"    ld hl, Scene{i}NewBest", "    call AwPatch", "    jr .bestDone", ".best:"]
+        for n, (x, y, _) in enumerate(s.get("best_glyphs") or ()):
+            lines += [f"    ld a, {k}", f"    ld hl, $9800 + {y * 32 + x}", f"    ld de, Scene{i}Best{n}", "    call BestDraw"]
+        lines += [".bestDone:"] if s.get("new_best") else []
     lines.append("    ret")
     return "\n".join(lines)
 
@@ -2681,22 +2695,8 @@ def _pic_rise(s, ft):
     head: the picture showing, not the pose it stands for -- the pictures' heads are their own)."""
     pics = s.get("fight_pics")
     rise = [_blank_top(ft["nes"]["pictures"]["poses"][k]["pixels"]) for k in pics["order"]] if pics else []
-    idle = pics["frame_map"][0xC0] & 0x7F if pics and pics["frame_map"][0xC0] != 0xFF else pics["idle"] if pics else None
-    ref = []
-    if pics:                            # (his top to hold under the HUD: his stance's -- the idle picture's, place and
-        np_ = ft["nes"]["pictures"]     #  blank rows -- or, a picture lower than that, the higher of it and the one it
-        top = [tuple(np_["places"].get(k, (0, 0)))[1] + r          # alternates with (a laugh, a hop):
-               for k, r in zip(pics["order"], rise)]
-        succ = {k: {r[-1] for r in (np_.get("next") or {}).get(k, ())} for k in pics["order"]}   # each moved alike,
-        at = {k: n for n, k in enumerate(pics["order"])}                                          # his feet the NES's)
-        stance = pics["places"][0xC0][1] + rise[idle]
-        for n, k in enumerate(pics["order"]):
-            mut = min([top[n]] + [top[at[j]] for j in succ[k] if j in at and k in succ[j]])
-            ref.append(max(stance, mut))
     return ("RivalPicRise:               ; per picture: its blank rows on top (128 of them, every fight's alike)\n    db "
-            + ", ".join(str(v) for v in (rise + [0] * 128)[:128]) + "\n"
-            "RivalPicRef:                ; per picture: the top held under the HUD (its place's y and blank rows: his stance's,\n"
-            "    db " + ", ".join(str(v & 0xFF) for v in (ref + [0] * 128)[:128]) + "   ; or its and its partner's)\n")
+            + ", ".join(str(v) for v in (rise + [0] * 128)[:128]) + "\n")
 
 
 def _blank_top(pixels):
@@ -3392,9 +3392,7 @@ def _pk_menu_code(i, pk, beep=True):
     ld a, [wPkEdit]
     and a
     jp nz, .pkNext
-    bit PAD_START, b        ; (Start before a digit: nothing)
-    jp nz, .cursor
-.pkStart:                   ; the first digit: 0, its blip
+{_pk_start(pk.get("_nes"))}.pkStart:                   ; the first digit: 0, its blip
     ld a, 1
     ld [wPkEdit], a
     xor a
@@ -4097,6 +4095,23 @@ TypeStep::
 """
 
 
+def _pk_start(saved):
+    """The pass key's item, Start before a digit: nothing; or (Punch-Out!!'s battery save) the career it kept, if
+    there's one, played out as a code is (kit_save.asm)."""
+    if not saved:
+        return "    bit PAD_START, b        ; (Start before a digit: nothing)\n    jp nz, .cursor\n"
+    return """    bit PAD_START, b        ; (Start before a digit: the saved career, if there's one)
+    jp z, .pkStart
+    call SaveContinue
+    cp $FF
+    jp z, .cursor
+    ld [wPkTarget], a
+    ld a, SFX_MENU_CONFIRM
+    call PlaySfx
+    jp .choose
+"""
+
+
 def _pk_nes():
     """The title's pass key as Punch-Out!!'s: the NES's own (PwContinue), when none of the menu's codes matched."""
     return """    call PwContinueFar
@@ -4787,10 +4802,10 @@ def generate_asm(project):
     for f in fights:                    # (the corner: Punch-Out!!'s Select armed as it comes up)
         if scenes[f]["fight"].get("corner") is not None and (scenes[f]["fight"].get("nes") or {}):
             scenes[index_of[scenes[f]["fight"]["corner"]]]["_corner"] = True
-    for f in career or ():              # (a loss's screen, a win's, go where FtCareerResult says)
-        for key in ("lose", "win", "win_tko"):
+    for f in career or ():              # (a loss's screen, a win's, go where FtCareerResult says, the result kept on
+        for key in ("lose", "win", "win_tko"):      #  the battery as it loads)
             if scenes[f]["fight"].get(key) is not None:
-                scenes[index_of[scenes[f]["fight"][key]]]["_rec_next"] = True
+                scenes[index_of[scenes[f]["fight"][key]]].update(_rec_next=True, _save_fight=fights.index(f))
     fight_suffix = lambda f: "" if fights.index(f) == 0 else f"_F{fights.index(f)}"
     fight_table = "\n".join(_fight_entry(f, scenes[f], index_of, fight_suffix(f), _all_pics(project),
                                          (career or {}).get(f), fight_suffix(pic_share.get(f, f)),
@@ -5533,6 +5548,8 @@ OptionDefaults:
         if banked and not s.get("fight"):
             in_bank[i].insert(0, _scene_load_banked(i, s, cursor_on, opt_index, markers))
     out += [_scene_data(i, s, banked) + ("\n".join(in_bank[i]) + "\n" if in_bank[i] else "") for i, s in enumerate(scenes)]
+    if career:
+        out.append(_save(career))
     if sgb:
         out.append(_sgb())
     if banked:                      # every bank switch noted (hBank), for what maps a bank of its own and puts back
@@ -5545,6 +5562,23 @@ OptionDefaults:
 # Super Game Boy: every screen in the grey look's four greens (fight_videos.DMG_LCD), lightest first; the border
 # (tools/punchout_art/sgb_border.py) in color.
 SGB_GREENS = [(0xE0, 0xF8, 0xD0), (0x88, 0xC0, 0x70), (0x34, 0x68, 0x56), (0x08, 0x18, 0x20)]
+
+
+def _save(career):
+    """kit_save.asm (Punch-Out!!'s battery save) and the scenes a saved career can go on at: wherever FtCareerResult
+    sends Mac on (the next challenger, a rematch, down the ranks, a title bout's, a training run) but game over or
+    past the last fight."""
+    on, over = set(), set()
+    for flags, rematch, drop, game_over, win_next, aw_flags, aw_next, aw_drop in career.values():
+        on |= {rematch, drop, aw_drop} | ({win_next} if not flags & 4 else set()) | ({aw_next} if not aw_flags & 4 else set())
+        over.add(game_over)
+    on = sorted(on - over - {255})
+    return f"""DEF SAVE_FIGHTS EQU {len(career)}
+{KIT_SAVE}
+SaveResumes:                ; how many, each a scene
+    db {len(on)}, {', '.join(map(str, on))}
+DEF SAVE_SRAM EQU 1         ; (build.py: a battery-backed cartridge)
+"""
 
 
 def _sgb():

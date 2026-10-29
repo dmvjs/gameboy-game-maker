@@ -41,6 +41,8 @@ def build_rom(asm_source, title, cgb=False, info=None):
         if rom.stat().st_size > 256 * 0x4000:   # (every switch writes $2000 only, the bank's low 8 bits: past 255,
             raise BuildError("rgblink", "ROM past 4 MB: banks over 255 need MBC5's ninth bank bit ($3000)")  # the wrong one)
         fix = [deps.rgbds_tool(info, "rgbfix"), "-v", "-p", "0xFF", "-t", title] + (["-m", "0x19"] if banked else [])
+        if "DEF SAVE_SRAM EQU 1" in asm_source:     # a battery save: MBC5+RAM+BATTERY, its 8 KB of RAM
+            fix += ["-m", "0x1B", "-r", "0x02"]
         if cgb:
             fix.append("-c")
         if "DEF SGB_SUPPORT EQU 1" in asm_source:   # Super Game Boy functions: the SGB flag and old licensee $33

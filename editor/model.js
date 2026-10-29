@@ -583,7 +583,7 @@ export function composed(scene, frame = 'normal') {
   if (!scene.menu && !pr && !scene.options && !scene.puzzle && !scene.fight && !scene.passKey && !scene.texts?.length && frame === 'normal') return scene.pixels;
   const out = scene.pixels.slice();
   if (scene.fight) fightInto(out, scene, typeof frame === 'string' && frame.startsWith('pose:') ? frame.slice(5) : 'idle');
-  for (const t of scene.texts || []) for (const i of textInk(t.label, t.x, t.y)) out[i] = t.textSlot;
+  for (const t of scene.texts || []) if (!t.bestTime && !t.newBest) for (const i of textInk(t.label, t.x, t.y)) out[i] = t.textSlot;   // (his best, NEW RECORD!: as they come)
   if (scene.puzzle) {
     const pz = scene.puzzle, hud = puzzleHud(pz);
     for (const c of [...puzzleCells(pz), ...hud.next]) for (const i of cellPixels(c)) out[i] = 3;
@@ -858,7 +858,8 @@ const cloneMenu = m => m && { ...m, items: m.items.map(it => ({ ...it })) };
 const clonePress = ps => ps && { ...ps, area: ps.area && { ...ps.area }, prompt: ps.prompt && { ...ps.prompt } };
 const cloneTexts = t => (Array.isArray(t) ? t : []).map(x => ({ label: String(x.label), x: x.x, y: x.y, textSlot: x.textSlot,
                                                                    ...(x.record ? { record: true } : {}), ...(x.fightTime ? { fightTime: true } : {}),
-                                                                   ...(Number.isInteger(x.passKey) ? { passKey: x.passKey } : {}) }));   // (live: the player's record, the fight's time, a pass key)
+                                                                   ...(Number.isInteger(x.passKey) ? { passKey: x.passKey } : {}),
+                                                                   ...(x.bestTime ? { bestTime: true } : {}), ...(x.newBest ? { newBest: true } : {}) }));   // (live: the player's record, the fight's time, a pass key, his best)
 const clonePuzzle = pz => pz && JSON.parse(JSON.stringify(pz));
 const POSE_FALLBACK = { idle2: 'idle', idle3: 'idle', hit_back: 'hit_l', slip: 'idle', jab_mid: 'jab_tell', hook_mid: 'hook_tell', kd_stagger: 'hit_body', kd_fall: 'fall',
                         kd_down: 'down', kd_kneel: 'fall', arm_pop: 'hit_body', guard_low: 'guard',

@@ -58,7 +58,9 @@ function icon(layer, cx, cy, rows) {
 const notes = rival => ({
   'Title': `A menu, as Punch-Out!!'s: Select or up/down moves, Start (or A) chooses. NEW goes to the challenger
 screen, CONTINUE to the pass key.
-• The cursor is a little glove in the player's sprite palette.`,
+• The cursor is a little glove in the player's sprite palette.
+• Punch-Out!!'s circuits keep Mac's career on the cartridge's battery, each fight's result as its screen comes up:
+on CONTINUE, Start goes on with it (A types a pass key, as ever). NEW starts another; his best times stay.`,
   'Pass key': `A pass key: left/right picks a digit, up/down changes it, Start goes on to the challenger screen
 (the key isn't checked yet), B back to the title. The digits stay as entered.`,
   'Challenger': `A press-start screen that slides up from the bottom (Slides in, under the scene's settings). Every line of text is a text label: click one under "Text" to change a name, hometown or record.`,
@@ -70,7 +72,9 @@ screen, CONTINUE to the pass key.
 • A star punch that doesn't drop him pops his arm out of its socket. He snaps it back in with a click.
 • ${rival} is an 8x10-tile area of the map. His tiles stay in video memory, and a pose change rewrites that area during VBlank. While he's down, the tiles only his attack poses use are swapped for the knockdown set.
 • The player is sprites. The HUD's digits and bars are tiles picked from per-cell tables.`,
-  'You win': `A press-start screen: Punch-Out!!'s "GREAT FIGHTING" with its glove (when the pack has one). Start goes back to the title.`,
+  'You win': `A press-start screen: Punch-Out!!'s "GREAT FIGHTING" with its glove (when the pack has one). Start goes back to the title.
+• With Punch-Out!!'s circuits, the fight's time and Mac's best KO of him (kept on the battery) under it, or NEW RECORD!
+when this one was faster.`,
   'You win (TKO)': `The same, after a TKO ("YOU WON BY TKO!").`,
   [`${rival} wins`]: `A press-start screen: Punch-Out!!'s "DON'T CRY, MAC!" with its glove (when the pack has one). Start goes on to the rematch.`,
   'Rematch': `The challenger screen again after a loss, as Punch-Out!!'s: REMATCH under the circuit, the player's record with the loss.`,
@@ -219,7 +223,7 @@ export function boxingGame(pack) {
   // Punch-Out!!'s screens after the fight: blue, the W.V.B.A. header, a word for Mac, the big glove, the next
   // challenge. LOSS and its glove's palette, then each screen's lines (rows; the glove covers the one at row 10).
   let LOSS = null;
-  function nesScreen(scene, layer, lines, gloveAt, gloveX, circuit = pack.circuit) {   // (gloveX: the glove's own place)
+  function nesScreen(scene, layer, lines, gloveAt, gloveX, circuit = pack.circuit, raise = 0) {   // (gloveX: the glove's own place; raise: the header's, up)
     if (LOSS === null) {
       LOSS = p.palettes.length;
       p.palettes.push(pal('Loss', [[1, 2, 18], [7, 22, 25], [29, 29, 29], [0, 0, 0]], [3, 1, 0, 3]),   // NES $02, $2C, $30 (the original: light on black)
@@ -229,8 +233,8 @@ export function boxingGame(pack) {
     cellPalettes(scene, 0, 0, M.CW, M.CH, LOSS);
     fillRect(layer, 0, 0, M.W, M.H, 0);
     const line = (text, y, slot) => M.drawText(layer, text, centered(text) >> 3 << 3, y, slot);   // (on whole tiles, as the NES's)
-    line('THE W.V.B.A.', 8, 1); line(circuit, 16, 1);
-    for (let x = 0; x < M.W; x += 8) fillRect(layer, x + 1, 27, 5, 1, 1);
+    line('THE W.V.B.A.', 8 - raise, 1); line(circuit, 16 - raise, 1);
+    for (let x = 0; x < M.W; x += 8) fillRect(layer, x + 1, 27 - raise, 5, 1, 1);
     for (const [text, y, x] of lines) x === undefined ? line(text, y, 2) : M.drawText(layer, text, x, y, 2);
     if (gloveAt === null) return;                        // (a title won: Mac and the trophy instead, as the NES's)
     const g = pack.loseGlove, gx = gloveX ?? (centered(gloveAt) >> 3 << 3) + 5 * 8, gy = 8 * 8;
@@ -845,8 +849,16 @@ export function boxingGame(pack) {
           continue;
         }
         const champ = rv.winRank ? [ranked, 80, M.W - 8 - ranked.length * 8] : [ranked, 80];   // a title: the glove
-        nesScreen(S[sc], layer(sc), [['"GREAT FIGHTING"', 40], [`YOU WON BY ${how}!`, 56], champ, ...NEXT], ranked,
-                  rv.winRank ? 8 : undefined, circuitOf(rv));                                                  // beside the line
+        if (rv.nes) {                                    // (Punch-Out!!'s circuits: the fight's time and Mac's best KO of
+          nesScreen(S[sc], layer(sc), [['"GREAT FIGHTING"', 28], [`YOU WON BY ${how}!`, 38], champ, ...NEXT], ranked,   // him
+                    rv.winRank ? 8 : undefined, circuitOf(rv), 4);   // under its words, those and the header closer up;
+          S[sc].texts = [{ label: 'TIME 0:00.00,R1', x: 3, y: 6, textSlot: 2, fightTime: true },   // his best written once
+                         { label: 'BEST 0:00.00,R1', x: 3, y: 7, textSlot: 2, bestTime: true },     // there's one)
+                         { label: 'NEW RECORD!', x: 5, y: 7, textSlot: 1, newBest: true }];
+        } else {
+          nesScreen(S[sc], layer(sc), [['"GREAT FIGHTING"', 40], [`YOU WON BY ${how}!`, 56], champ, ...NEXT], ranked,
+                    rv.winRank ? 8 : undefined, circuitOf(rv));                                                // beside the line
+        }
         S[sc].pressStart = { target: next, flashes: 3, area: null, quiet: true, prompt: { label: 'PUSH START!', x: 4, y: 17, textSlot: 1, blink: true } };
       }
       const rematch = "LET'S REMATCH!";                  // "DON'T CRY, MAC!", then the rematch

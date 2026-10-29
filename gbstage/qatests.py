@@ -3,6 +3,7 @@ budget (the crowd's sound never runs dry, his pictures up no later than they wer
 from a round's first frame, low through a count, walked up by the NES's $70), the star's sparkle over his head when
 the NES has no spot of its own for it, the original Game Boy's screens as they were (their words readable), and the
 HUD's first frame each round (the NES's numbers, not the last round's), the Super Game Boy's packets. QA_UPDATE=1 writes the references instead."""
+import io
 import json
 import os
 from pathlib import Path
@@ -750,7 +751,7 @@ def _sgb_boot(rom, c, cgb=False, frames=150):
     if st["bits"] is not None and len(st["bits"]) >= 128:
         done()
     up = pb.memory[S["hScene"]] == _project()["start"]
-    pb.stop()
+    pb.stop(save=False)
     return st["packets"], st["shown"], up
 
 
@@ -834,4 +835,177 @@ def qa_decision(rom):
             if not ok:
                 lines.append(f"    ✗ {'cgb' if cgb else 'dmg'}, Mac {'ahead' if ahead else 'behind'}: {end}")
     lines.append(f"    {'✓' if good else '✗'} a decision after round 3, both ways, both machines")
+    return good, lines
+
+
+SAVE_TAG = b"PO!!\x01"                  # (kit_save.asm: its tag and format)
+TIME_CENTS = (0, 0, 2, 5, 4, 8, 6, 1, 8, 2, 9, 7, 9, 9)    # (kit_fight.asm's TimeCents: the hundredths' digits)
+
+
+def _save_block(sram, fights):
+    """The battery's block (kit_save.asm), from cartridge RAM: (good, the career's scene, its record, each fight's best)."""
+    n = 11 + 6 * fights
+    good = sram[:5] == SAVE_TAG and int.from_bytes(sram[n:n + 2], "little") == sum(sram[:n]) & 0xFFFF
+    return good, sram[5], list(sram[6:11]), [list(sram[11 + 6 * k:17 + 6 * k]) for k in range(fights)]
+
+
+def _save_sum(sram, fights):
+    """The block again, its check worked out (a test's own edit to it)."""
+    n = 11 + 6 * fights
+    return sram[:n] + (sum(sram[:n]) & 0xFFFF).to_bytes(2, "little") + sram[n + 2:]
+
+
+class _Cart:
+    """The ROM in PyBoy from power-on to the title, the cartridge's RAM what its battery kept (PyBoy's ram_file);
+    off() powers it down, keeping it again. time: the fight's clock as its result is kept (round, M, S, S, the
+    hundredths' step), so its best is known."""
+
+    def __init__(self, rom, cgb, sram):
+        from pyboy import PyBoy
+        from . import bot
+        self.S, self.B = bot._symbols(rom)
+        self.rom = open(rom, "rb").read()
+        self.pb = PyBoy(str(rom), window="null", cgb=cgb, sound_emulated=False, ram_file=io.BytesIO(sram))
+        self.pb.set_emulation_speed(0)
+        self.m = self.pb.memory
+        if not cgb:                     # (as the original boots: A = $01; PyBoy gives $11)
+            self.pb.hook_register(self.B["Start"], self.S["Start"], lambda _: setattr(self.pb.register_file, "A", 1), None)
+        self.time = self.fight = None
+        self.pb.hook_register(self.B["LoadScene"], self.S["LoadScene"], self._clock, None)
+        self.wait(lambda: self.scene() == 0 and self.t >= 400, 6000)
+        self.ticks(240)
+
+    def _clock(self, _):
+        if self.time and self.scene() == self.fight:      # (leaving the fight: its result loading)
+            w = self.S["wNes"]
+            r, mn, s10, s1, step = self.time
+            self.m[w + 0x06], self.m[w + 0x302], self.m[w + 0x304], self.m[w + 0x305], self.m[w + 0x306] = r, mn, s10, s1, step << 4
+
+    def scene(self):
+        return self.m[self.S["hScene"]]
+
+    def ticks(self, n):
+        self.pb.tick(n, False)
+
+    def wait(self, done, limit, start_every=0):
+        self.t = 0
+        while not done() and self.t < limit:
+            press = start_every and self.t % start_every < 3
+            (self.pb.button_press if press else self.pb.button_release)("start")
+            self.pb.tick(1, False)
+            self.t += 1
+        self.pb.button_release("start")
+        return done()
+
+    def tap(self, b):
+        self.pb.button_press(b)
+        self.ticks(3)
+        self.pb.button_release(b)
+        self.ticks(20)
+
+    def win(self, fight, time):
+        """On (Start) into the fight, won there by a KO (the NES's own result, as careertests._forced has it) at this
+        time; its result screen up."""
+        self.time, self.fight = time, fight
+        self.wait(lambda: self.scene() == fight and self.m[self.S["hFtActive"]] == 1, 4000, 90)
+        self.ticks(200)
+        self.m[self.S["wNes"]] = 0xFC
+        self.wait(lambda: self.scene() != fight, 3000)
+        self.ticks(120)
+        return self.m[self.S["wFtCount"]] >= 0xFE
+
+    def sram(self):
+        return bytes(self.m[0, 0xA000:0xA200])
+
+    def ram_on(self):
+        return self.m[0xA000] != 0xFF or self.m[0xA001] != 0xFF       # (the RAM off: $FF read back)
+
+    def best_line(self, time):
+        """The win screen up, its best's line: "NEW RECORD!", "BEST" (this time, as its glyphs in the ROM write it:
+        BEST, a space, M, ":", S, S, ".", C, C, ",", R, N) or "something else"."""
+        scene = self.scene()
+        t = next(t for t in _project()["scenes"][scene]["texts"] if t.get("bestTime"))
+        new = self._rom(f"Scene{scene}NewBest", 0, 64)
+        if all(self.m[0, new[1 + 3 * k] | new[2 + 3 * k] << 8] == new[3 + 3 * k] for k in range(new[0])):
+            return "NEW RECORD!"
+        g = self._rom(f"Scene{scene}Best0", 0, 69)
+        r, mn, s10, s1, step = time
+        c10, c1 = TIME_CENTS[2 * step:2 * step + 2]
+        want = bytes(list(g[:5]) + [g[5 + mn], g[15], g[16 + s10], g[26 + s1], g[36], g[37 + c10], g[47 + c1], g[57], g[58], g[59 + r]])
+        at = 0x9800 + 32 * t["y"] + t["x"]
+        return "BEST" if bytes(self.m[0, at:at + 15]) == want else "something else"
+
+    def _rom(self, label, at, n):
+        a = self.B[label] * 0x4000 + self.S[label] - (0x4000 if self.B[label] else 0) + at
+        return self.rom[a:a + n]
+
+    def off(self):
+        f = io.BytesIO()
+        self.pb.stop(save=True, ram_file=f)
+        return f.getvalue()
+
+
+
+
+def qa_save(rom):
+    """Punch-Out!!'s battery save (kit_save.asm), Color and the original: a KO kept as its result screen comes up (the
+    career's next scene, Mac's record, his best for that fight, the block's check), the RAM off again, NEW RECORD! on
+    the win screen; powered off and on, CONTINUE's Start goes on at the next challenger, the record as it was; NEW
+    keeps the bests: a slower KO shows his BEST and keeps it, a faster one NEW RECORD!; a corrupt save, or another
+    format's, is none."""
+    names = [s["name"] for s in _project()["scenes"]]
+    fights = [i for i, _ in _fights()]
+    kaiser = names.index("Challenger: Kaiser")
+    first, slower, faster = (1, 1, 3, 0, 2), (2, 0, 1, 0, 0), (1, 0, 4, 5, 1)     # (R1 1:30.48, R2 0:10.00, R1 0:45.25)
+    best = lambda t: list(t[:4]) + list(TIME_CENTS[2 * t[4]:2 * t[4] + 2])
+    none = [0xFF] * 6
+    lines, good = [], True
+
+    def check(ok, what):
+        nonlocal good
+        good = good and ok
+        lines.append(f"    {'✓' if ok else '✗'} {what}")
+
+    def kept(c, ko, best_time, shown, what):
+        ok, scene, rec, bests = _save_block(c.sram(), len(fights))
+        line = c.best_line(best_time)
+        check(ko and ok and scene == kaiser and rec == [1, 0, 1, 0, 0] and bests == [best(best_time)] + [none] * (len(fights) - 1)
+              and not c.ram_on() and line == shown,
+              f"{what}: {'KO' if ko else 'no KO'}, {'good' if ok else 'bad'} block, on at {names[scene] if scene < len(names) else scene}"
+              f", record {rec}, best {bests[0]}, RAM {'on' if c.ram_on() else 'off'}, the win screen: {line}")
+
+    for cgb in (True, False):
+        m = "cgb" if cgb else "dmg"
+        c = _Cart(rom, cgb, bytes(0x2000))                 # a new cartridge: NEW, Glass Joe KO'd
+        kept(c, c.win(fights[0], first), first, "NEW RECORD!", f"{m}: a new cartridge, Glass Joe KO'd")
+        sram = c.off()
+        c = _Cart(rom, cgb, sram)                          # on again: CONTINUE, Start
+        c.tap("down")
+        c.tap("start")
+        c.wait(lambda: c.scene() != 0, 600)
+        c.ticks(120)
+        rec = [c.m[c.S[n]] for n in ("wRecWins", "wRecLosses", "wRecKOs")]
+        check(c.scene() == kaiser and rec == [1, 0, 1] and not c.ram_on(),
+              f"{m}: on again, CONTINUE's Start: {names[c.scene()]}, {rec[0]}-{rec[1]} {rec[2]}KO")
+        c.off()
+        c = _Cart(rom, cgb, sram)                          # NEW: a slower KO, his best kept and shown
+        kept(c, c.win(fights[0], slower), first, "BEST", f"{m}: NEW, a slower KO")
+        sram = c.off()
+        c = _Cart(rom, cgb, sram)                          # a faster one replaces it
+        kept(c, c.win(fights[0], faster), faster, "NEW RECORD!", f"{m}: a faster KO")
+        sram = c.off()
+        flipped = bytearray(sram)
+        flipped[11 + 6 * 5] ^= 1
+        old = bytearray(sram)
+        old[4] = SAVE_TAG[4] + 1
+        for what, bad in (("a byte flipped", bytes(flipped)), ("another format", _save_sum(bytes(old), len(fights)))):
+            c = _Cart(rom, cgb, bad)                       # none: CONTINUE's Start does nothing; a KO's a new record
+            c.tap("down")
+            c.tap("start")
+            c.ticks(300)
+            stays = c.scene() == 0
+            check(stays, f"{m}: {what}: CONTINUE's Start {'stays on the title' if stays else 'went on'}")
+            c.tap("up")
+            kept(c, c.win(fights[0], slower), slower, "NEW RECORD!", f"{m}: {what}: a new save")
+            c.off()
     return good, lines

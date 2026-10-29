@@ -1,8 +1,8 @@
 # Joe vs Mac on real hardware
 
 Every fight already runs clean in SameBoy (no video writes outside the time the hardware allows, Color and the
-original), but nothing beats a real console. With a flash cart that takes 4 MB MBC5 ROMs (EverDrive GB X5/X7, a
-GB Operator flash cart, or similar):
+original), but nothing beats a real console. With a flash cart that takes 4 MB MBC5 ROMs with save RAM (EverDrive
+GB X5/X7, a GB Operator flash cart, or similar):
 
 1. Build the ROM: `npm start` writes `joe-vs-mac.gb` (or `python3 tools/fight_videos.py rom joe-vs-mac.gb`).
 2. Copy it to the cart. Test on as many of these as you have: Game Boy (DMG), Pocket, Color, Advance / SP.

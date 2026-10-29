@@ -4302,77 +4302,19 @@ FtAnimate:
 IF DEF(FT_NES)
     ld a, [wRvState]        ; standing: where his own script has put him
     cp RV_FALL
-    jp nc, .scripted
+    jr nc, .scripted
     ld a, [wRvNesX]
     ld b, a
     ld a, [wRvNesY]         ; up as far as the HUD, down a little (his band moves with him)
     bit 7, a
     jr nz, .up
     cp FT_NES_DOWN_MAX + 1
-    jp c, .y
+    jr c, .y
     ld a, FT_NES_DOWN_MAX
-    jp .y
+    jr .y
 .up:
 IF DEF(FT_ROPE)
-    ld c, a
-    ld a, [wFtBankPics]     ; his NES pictures: held under the HUD by his stance (or a picture's and the one it
-    and a                   ; alternates with), not each picture's head -- moved down alike, so his feet stay where
-    jp z, .poseCap          ; the NES's are as his head bobs (a laugh, a hop): RivalPicRef, its top's line
-    ld hl, wRvPicShown      ; (the picture showing's, or the one going up at this VBlank's)
-    ld a, [wRvPicSwitch]
-    and a
-    jr z, .stancePic
-    ld hl, wRvPicLoad
-.stancePic:
-    ld a, [hl]
-    and $7F                 ; (none yet, $FF: kept in the table)
-    ld e, a
-    ld d, 0
-    ld a, [wRvPlaceY]
-    cpl
-    inc a
-    add c                   ; (the NES's own offset, the picture's place out)
-    ld hl, RivalPicRef
-    add hl, de
-    add [hl]
-    ld l, a                 ; L: that top there
-    ld a, [wNes + $90]      ; (his walk in before the bell: 16 more, over the HUD, as the NES's)
-    and $3F
-    ld a, LOW(-FT_HEAD_ROOM)
-    jr nz, .stanceLine
-    ld a, LOW(-FT_HEAD_ROOM - 16)
-.stanceLine:
-    sub l                   ; (how far below the line he must come: none if he's under it)
-    bit 7, a
-    jr nz, .stanceOk
-    add c
-    ld c, a
-.stanceOk:
-    ld hl, RivalPicRise     ; and no picture's top off the screen's
-    add hl, de
-    ld a, LOW(16 - FT_HEAD_Y0)
-    sub [hl]
-    ld e, a                 ; E: the highest his picture may sit
-    ld a, c
-    sub e
-    bit 7, a
-    jr z, .stanceOn
-    ld c, e
-.stanceOn:
-    ld a, c
-    bit 7, a
-    jr z, .stanceDown       ; (moved down past his place: no further than his band goes)
-    cp LOW(-FT_NES_UP_MAX)
-    jp nc, .y
-    ld a, LOW(-FT_NES_UP_MAX)
-    jp .y
-.stanceDown:
-    cp FT_NES_DOWN_MAX + 1
-    jp c, .y
-    ld a, FT_NES_DOWN_MAX
-    jp .y
-.poseCap:
-    ld a, c                 ; as far up as the NES puts him (over the ropes and crowd: his top rows are sprites),
+    ld c, a                 ; as far up as the NES puts him (over the ropes and crowd: his top rows are sprites),
     ld hl, wRvPicShown      ; (his new pose's limit only once its picture is up -- or going up at this VBlank: till
     ld a, [wRvPicSwitch]    ;  then the one showing's, kept)
     and a

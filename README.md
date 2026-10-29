@@ -6,7 +6,7 @@ A Flash-style editor for making Game Boy games. It generates assembly and builds
 
 Mike Tyson's Punch-Out!! on the Game Boy, built with gbstage: all 14 fights of the NES game, Glass Joe to Mike
 Tyson, on Game Boy Color, the original Game Boy and the Super Game Boy (the ROM is "Mike Tyson's Punch-Out!! rev 0.5").
-It is faithful to the NES game: nothing added, only fixed.
+It is faithful to the NES game: nothing added but a battery save, only fixed.
 
 - **The NES game's own fight logic.** Each opponent's moves, tells, timing and AI run as the NES's do, so the
   patterns you know from the original work here.
@@ -35,15 +35,19 @@ It is faithful to the NES game: nothing added, only fixed.
   by the NES's own algorithm (ported, and checked against the original). Keys from the NES work on CONTINUE: try
   005 737 5423, or 007 373 5963 for Mike Tyson. The NES's secrets too: 135 792 4680 (hold Select as you enter the last
   digit) for the Another World Circuit, and the busy signals (075 541 6113).
+- **A battery save.** The cartridge keeps Mac's career, each fight's result as its screen comes up: on the title,
+  Start on CONTINUE goes on from there (A types a pass key, as ever). NEW starts another career and keeps his best
+  times, his fastest KO of each opponent (the round and the clock, as the NES times the Another World Circuit's):
+  the win screen shows the fight's TIME and his BEST under it, or NEW RECORD! (a title won keeps the NES's own screen).
 - **The Super Game Boy** frames the game in a Punch-Out!! border (the NES title's logo over its crowd). A+B+Select+Start
   restarts from any screen, as Nintendo's games do.
 - **Checked against real hardware timing.** Every fight runs in SameBoy with no video writes outside the time the
   hardware allows, on both machines. In the test suite, a bot that only presses buttons beats every fighter within
   two rounds, then plays the whole game from power-on to THE END; every opponent frame is compared with what the
-  NES draws (`tools/punchout_art/frame_audit.py`). The suite has 27 test groups, from the NES's own logic byte for
+  NES draws (`tools/punchout_art/frame_audit.py`). The suite has 28 test groups, from the NES's own logic byte for
   byte to every fight's frame budget, pose timing, sound and screens; CI runs all but the two that need the NES files.
 
-It's a 4 MB MBC5 cartridge (`joe-vs-mac.gb`) that runs in any Game Boy emulator.
+It's a 4 MB MBC5 cartridge with 8 KB of battery-backed RAM (`joe-vs-mac.gb`) that runs in any Game Boy emulator.
 
 ```sh
 git clone https://github.com/dmvjs/gameboy-game-maker.git
@@ -218,6 +222,8 @@ NES does, as `tests/nes_reference.json` records it (played once in the real game
   KO News page and THE DREAM FIGHT!!) and the next challenger.
 - **Mike Tyson:** beaten, to THE END, which stays when Start is pressed.
 - **Another World Circuit:** won through (its TITLE BOUT!! before Mike Tyson) to its ending.
+- **The battery save:** a KO kept (the save's bytes and check), CONTINUE after a power cycle, the win screen's BEST
+  or NEW RECORD!, a best beaten only by a faster KO, NEW keeping them, a corrupt save or another format's read as none.
 
 CI (`.github/workflows/tests.yml`) runs the golden cases, the kit checks and each career test on every push.
 

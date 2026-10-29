@@ -385,6 +385,11 @@ def _dmg_greys(s, greys):
         if s.get(key):
             at = s[key]["cells"]
             s[key]["tiles"] = [[use(tl, code(at[j])) for j, tl in enumerate(row)] for row in s[key]["tiles"]]
+    # the glyphs written live over a label (the fight's time, his best, NEW RECORD!): in its cells' greys too
+    s["time_glyphs"] = [(x, y, [[use(tl, code(y * CW + x + k)) for tl in g] for k, g in zip((5, 7, 8, 10, 11, 14), cells)], aw)
+                        for x, y, cells, aw in s.get("time_glyphs") or ()]
+    s["best_glyphs"] = [(x, y, [use(tl, code(y * CW + x)) for tl in g]) for x, y, g in s.get("best_glyphs") or ()]
+    s["new_best"] = [(c, use(tl, code(c))) for c, tl in s.get("new_best") or ()]
     return [(tl, cd) for tl, cd in owner.items() if cd is not None]
 
 
@@ -1390,8 +1395,12 @@ def _texts(texts, where, errors):
             if key is not None and not (key in (0, 1, 2) and re.fullmatch(r"\d{3} \d{3} \d{4}", label)):
                 errors.append(f'{where}: the text "{label}" is a pass key: ten digits as 000 000 0000, and a circuit 0-2.')
                 continue
+            if t.get("bestTime") and not re.fullmatch(r"BEST \d:\d\d\.\d\d,R\d", label):   # (Punch-Out!!'s battery save:
+                errors.append(f'{where}: the text "{label}" is a best time: BEST 0:00.00,R0.')  #  his best KO of him)
+                continue
             out.append({"label": label, "x": x, "y": y, "text_slot": slot, **({"record": True} if t.get("record") else {}),
-                        **({"fight_time": True} if t.get("fightTime") else {}), **({"pass_key": key} if key is not None else {})})
+                        **({"fight_time": True} if t.get("fightTime") else {}), **({"pass_key": key} if key is not None else {}),
+                        **({"best_time": True} if t.get("bestTime") else {}), **({"new_best": True} if t.get("newBest") else {})})
     return out
 
 
@@ -1616,6 +1625,8 @@ def compose(scene):
         return _compose_cutscene(scene)
     composed = list(scene["pixels"])
     for t in scene.get("texts") or []:
+        if t.get("best_time") or t.get("new_best"):    # (written as they come: best_glyphs, new_best)
+            continue
         for x, y in text_ink(t["label"], t["x"], t["y"]):
             composed[y * W + x] = t["text_slot"]
     ft = scene.get("fight")
@@ -1790,6 +1801,27 @@ def compose(scene):
                 cells.append(glyphs)
             times.append((t["x"], t["y"], cells, aw))
     scene["time_glyphs"] = times
+    best, new = [], []              # his best KO of him (Punch-Out!!'s battery save), "BEST M:SS.CC,RN": each cell's glyph,
+    for t in scene.get("texts") or []:  # a digit's cell its ten; NEW RECORD! instead, cell by cell
+        if t.get("new_best"):
+            for k, ch in enumerate(t["label"]):
+                c0 = t["y"] * CW + t["x"] + k
+                img = list(scene["pixels"])
+                for x, y in text_ink(ch, t["x"] + k, t["y"]):
+                    img[y * W + x] = t["text_slot"]
+                new.append((c0, tile_of(cell_key(img, c0))))
+        if t.get("best_time"):
+            glyphs = []
+            for k, at in enumerate(t["label"]):
+                c0 = t["y"] * CW + t["x"] + k
+                for ch in "0123456789" if at.isdigit() else at:
+                    img = list(scene["pixels"])
+                    for x, y in text_ink(ch, t["x"] + k, t["y"]):
+                        img[y * W + x] = t["text_slot"]
+                    glyphs.append(tile_of(cell_key(img, c0)))
+            best.append((t["x"], t["y"], glyphs))
+    scene["best_glyphs"] = best
+    scene["new_best"] = new
     scene["aw_patch"] = []          # Punch-Out!!'s Another World Circuit: its words over these, cell by cell
     if scene.get("aw_texts"):
         aw = list(scene["pixels"])
