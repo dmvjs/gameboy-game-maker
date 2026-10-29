@@ -1011,7 +1011,8 @@ def hw_palettes(s, force=None):
         if s.get("fight_pics"):         # (his NES pictures' cells, and their top rows' sprites)
             pc = s["fight_pics"]
             out["fight_pics"] = dict(pc, attrs=[[slots[g] for g in cells] for cells in pc["attrs"]],
-                                     heads=[[(dy, dx, t, slots[a], f) for dy, dx, t, a, f in hl] for hl in pc["heads"]])
+                                     heads=[[(dy, dx, t, slots[a], f) for dy, dx, t, a, f in hl] for hl in pc["heads"]],
+                                     inks=[[(dy, dx, t, slots[a]) for dy, dx, t, a in il] for il in pc.get("inks") or []])
     return out
 
 
@@ -1712,7 +1713,8 @@ def _press_code(i, s, index_of, corner=False):
             "    ld a, [hl+]", "    ld [wCardRows], a", "    ld a, [hl]", "    ld [wCardRows + 1], a",
             "    xor a", "    ld [wCardY], a", "    ld [wCardRow], a", f"    ld a, {c['hold']}", "    ld [wCardHold], a",
             "    ld a, 1", "    ld [wCardOn], a",
-            "    QUEUE_PATCH ResetOAM    ; (the screen's sprites -- Doc, the divide -- gone as the card comes over it)",
+            "    call ResetOAMShadow     ; (the screen's sprites -- Doc, the divide -- gone as the card comes over it:",
+            "    QUEUE_PATCH ResetOAMDMA ;  hidden here, up in VBlank's last job by DMA)",
             f"    SET_UPDATE Scene{i}Card", "    ret"]) + "\n"
         card_code = f"""Scene{i}Card:                ; the screen scrolls up 4 pixels a frame, the card's rows drawn below a row ahead
     ld a, [wCardY]
@@ -2679,8 +2681,22 @@ def _pic_rise(s, ft):
     head: the picture showing, not the pose it stands for -- the pictures' heads are their own)."""
     pics = s.get("fight_pics")
     rise = [_blank_top(ft["nes"]["pictures"]["poses"][k]["pixels"]) for k in pics["order"]] if pics else []
+    idle = pics["frame_map"][0xC0] & 0x7F if pics and pics["frame_map"][0xC0] != 0xFF else pics["idle"] if pics else None
+    ref = []
+    if pics:                            # (his top to hold under the HUD: his stance's -- the idle picture's, place and
+        np_ = ft["nes"]["pictures"]     #  blank rows -- or, a picture lower than that, the higher of it and the one it
+        top = [tuple(np_["places"].get(k, (0, 0)))[1] + r          # alternates with (a laugh, a hop):
+               for k, r in zip(pics["order"], rise)]
+        succ = {k: {r[-1] for r in (np_.get("next") or {}).get(k, ())} for k in pics["order"]}   # each moved alike,
+        at = {k: n for n, k in enumerate(pics["order"])}                                          # his feet the NES's)
+        stance = pics["places"][0xC0][1] + rise[idle]
+        for n, k in enumerate(pics["order"]):
+            mut = min([top[n]] + [top[at[j]] for j in succ[k] if j in at and k in succ[j]])
+            ref.append(max(stance, mut))
     return ("RivalPicRise:               ; per picture: its blank rows on top (128 of them, every fight's alike)\n    db "
-            + ", ".join(str(v) for v in (rise + [0] * 128)[:128]) + "\n")
+            + ", ".join(str(v) for v in (rise + [0] * 128)[:128]) + "\n"
+            "RivalPicRef:                ; per picture: the top held under the HUD (its place's y and blank rows: his stance's,\n"
+            "    db " + ", ".join(str(v & 0xFF) for v in (ref + [0] * 128)[:128]) + "   ; or its and its partner's)\n")
 
 
 def _blank_top(pixels):
@@ -3184,6 +3200,14 @@ ASSERT (CgbMap{suffix}_idle | CgbSwap{suffix}.set0) & 15 == 0, "GDMA copies from
         gem = (f"PicJewel{suffix}:                ; (his gem: per picture where it shows, its middle in his area; $FF not)\n"
                "    db " + ", ".join(f"{x}, {y}" for x, y in pics["jewel"]) + f"\n    ds {2 * (128 - n)}\n"
                f"ASSERT PicJewel{suffix} == FT_PIC_JEWEL\n") if pics.get("jewel") else ""
+        if _inks_any(project["scenes"]):   # (Color's inks: every fight's table where the kit finds it, past the gem's
+            inks = pics.get("inks") or [[]] * n          # room; per picture its inks, top row first)
+            gem = (gem or "    ds 256                      ; (no gem)\n") + (
+                f"PicInks{suffix}:                 ; (per picture its inks: sprites of their own, in the list that shows them)\n"
+                f"    dw {', '.join(f'PicInk{suffix}_{k}' for k in range(n))}\n    ds {2 * (128 - n)}\n"
+                f"ASSERT PicInks{suffix} == FT_PIC_INKS\n" + "".join(
+                    f"PicInk{suffix}_{k}:\n    db {len(il)}" + "".join(f"\n    db {dy}, {dx}, {t}, ${obj[a] | 1 << 3:02X}"
+                                                              for dy, dx, t, a in il) + "\n" for k, il in enumerate(inks)))
         pics_data = f"""
 SECTION "Data: Rival pictures{suffix}", ROMX[$4000]
 PicHeader{suffix}:              ; his NES pictures: count, the idle one's; per NES frame (then mirrored) its picture (bit 7:
@@ -4377,6 +4401,11 @@ def _upload_shape(s):
     return out
 
 
+def _inks_any(scenes):
+    """Color: any fight's rival with inks (pixels his tiles can't show, sprites of their own): FT_INKS."""
+    return any(il for sc in scenes for il in (sc.get("fight_pics") or {}).get("inks") or ())
+
+
 def _rematch_pics(raw):
     """Each scene in hardware palettes (hw_palettes), and the fights whose rival's pictures are an earlier fight's
     (a rematch), stored once: {scene: the earlier one} for Color's pictures, and for the original's. Color's: his
@@ -4813,7 +4842,7 @@ DEF FADE_FRAMES EQU {fade['frames'] if fade else 1}
 DEF BLINK_FRAMES EQU {BLINK_FRAMES}
 DEF LCDC_ON EQU %{lcdc:08b}
 {SLIDE_DEFS if slides else ""}
-{"DEF FT_LOAD_ON EQU 1           ; fights load with the display on, on Color (VWait)" + nl if fight_on else ""}{"DEF FT_ALL_PICS EQU 1          ; every fight's rival in pictures, Color's and the original's: no pose sets" + nl if fights and all(scenes[i].get("fight_pics") and scenes[i].get("fight_pics_dmg") for i in fights) else ""}{"DEF FT_NES_SOUND EQU 1         ; the fight's NES sound engine plays the game's sounds" + nl if nes_sound_any else ""}{"DEF FT_DMG_WHITE EQU 1         ; the original: his eyes' whites over the crowd, OBP1's 1 white above the lower sprites" + nl if any((scenes[i].get("fight_pics_dmg") or {}).get("white") for i in fights) else ""}; joypad bits in hPad / hPadNew (d-pad in the high nibble)
+{"DEF FT_LOAD_ON EQU 1           ; fights load with the display on, on Color (VWait)" + nl if fight_on else ""}{"DEF FT_ALL_PICS EQU 1          ; every fight's rival in pictures, Color's and the original's: no pose sets" + nl if fights and all(scenes[i].get("fight_pics") and scenes[i].get("fight_pics_dmg") for i in fights) else ""}{"DEF FT_NES_SOUND EQU 1         ; the fight's NES sound engine plays the game's sounds" + nl if nes_sound_any else ""}{"DEF FT_INKS EQU 1              ; Color: a rival's inks, sprites of their own over his tiles (FtInks)" + nl if _inks_any(scenes) else ""}{"DEF FT_DMG_WHITE EQU 1         ; the original: his eyes' whites over the crowd, OBP1's 1 white above the lower sprites" + nl if any((scenes[i].get("fight_pics_dmg") or {}).get("white") for i in fights) else ""}; joypad bits in hPad / hPadNew (d-pad in the high nibble)
 DEF PAD_A EQU 0
 DEF PAD_B EQU 1
 DEF PAD_START EQU 3
@@ -5300,7 +5329,13 @@ GloveSprites:               ; per sprite: its OAM entry, y under hGloveY, x, til
         if markers:
             reset += ["    ld a, 1", "    ld [OAM_CURSOR + 6], a  ; slider marker: tile 1", f"    ld a, {project['cursor']['palette']}",
                       "    ld [OAM_CURSOR + 7], a"]
-        out.append('SECTION "Code: OAM", ROM0\nResetOAM:                   ; screen off or VBlank: every sprite hidden\n'
+        late = ("ResetOAMShadow:             ; (outside VBlank) every sprite hidden in wFtOAM, free outside a fight...\n"
+                + nl.join(r.replace("$FE00", "wFtOAM").replace("OAM_CURSOR", "wFtOAM") for r in reset)
+                + "\n    ret\nResetOAMDMA:                ; (VBlank) ...then up: all of OAM in 160 cycles, where ResetOAM's ~1,000"
+                "\n    ld a, HIGH(wFtOAM)      ;  from VBlank's last job runs into the next frame's drawing on the original"
+                "\n    jp hOAMDMA              ;  (its OAM writes then dropped)\n"
+                if fights else "ResetOAMShadow:\n    ret\nResetOAMDMA:\n") if cards else ""
+        out.append('SECTION "Code: OAM", ROM0\n' + late + 'ResetOAM:                   ; screen off or VBlank: every sprite hidden\n'
                    + ("    call VWait\n" if load_on else "") + nl.join(reset) + "\n    ret\n")
     if cursor_on:
         out.append(f"""SECTION "Data: Sprites", ROM0

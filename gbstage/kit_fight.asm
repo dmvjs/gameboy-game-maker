@@ -123,6 +123,7 @@ wRvSwTiles: ds 4            ; blocks: 0 none), its rows' and attributes' sources
 wRvSwN: db
 wRvSwRows: dw
 wRvSwAttr: dw
+wRvSwLeft: db               ; (its rows' and attributes' DMA blocks still to go: FtPicCopy, FtPicRest)
 wPlSwBank: db               ; Mac's: bank, source, destination, blocks
 wPlSwTiles: ds 4
 wPlSwN: db
@@ -245,6 +246,7 @@ wFtOAMEnd: ds 3             ; per sprite list (wFtOAM, wFtOAM2, wFtOAM3): where 
 wRvPicPrev: db              ; (the original: the picture shown before the shown one)
 wRvPicPrev2: db             ; (and the one before that)
 wFtEnd:
+wFtInkLast: db              ; (Color, his inks: the last row down from his area's top this list shows; FtInks)
 
 SECTION "Fight grey plans", WRAMX, BANK[1]  ; (the original only: its $D000 on, always there)
 wRvPicNeed: db              ; the coming picture's tiles to be in before it's whole: its plan's last stretch's end
@@ -1154,6 +1156,7 @@ DEF FT_PIC_PLACEY EQU $4410
 DEF FT_PIC_TABLE EQU $4610
 DEF FT_PIC_HEADS EQU $4810
 DEF FT_PIC_JEWEL EQU $4910     ; (Great Tiger's: per picture where his gem shows: x, y, $FF not)
+DEF FT_PIC_INKS EQU $4A10      ; (FT_INKS: per picture its inks' list -- FtInks)
 DEF FT_PIC_VRAM EQU $8800      ; his tiles' two copies (bank 1: tiles 128-191, 192-255)
 DEF FT_PIC_VRAM2 EQU $8C00
 DEF FT_VBL_LAST EQU 149        ; the last line VBlank's lesser work (a HUD redraw, 4 tiles of the referee's) may start
@@ -1268,9 +1271,9 @@ IF DEF(FT_NES)
 ENDC
 .pose:
 IF DEF(FT_NES)
-    ld a, [wFtPicDrew]      ; (a picture drawn: this VBlank's spent, the rest in the next)
-    and a
-    ret nz
+    ld a, [wFtPicDrew]      ; (a picture drawn: this VBlank's spent, the rest in the next -- his rows' last, if
+    and a                   ;  VBlank ran out, in this frame's top lines)
+    jp nz, FtPicRest
 ENDC
     ldh a, [rLY]            ; (what's left takes a few lines: too late in this VBlank, or past it, the next
     sub 144                 ; one's; a fade's palettes, say, went first)
@@ -2017,14 +2020,10 @@ FtPicSwitch:
     ld a, [wRvSwN]
     dec a
     ldh [rHDMA5], a
-.rows:                      ; then his rows, then their attributes
-    xor a
-    ldh [rVBK], a
-    ld hl, wRvSwRows
-    call .copy
-    ld a, 1
-    ldh [rVBK], a
-    call .copy
+.rows:                      ; then his rows, then their attributes (as VBlank has room: the rest FtPicRest's)
+    ld a, 2 * FT_PIC_BLOCKS
+    ld [wRvSwLeft], a
+    call FtPicCopy
     xor a
     ldh [rVBK], a
     ld a, [wRvPicBuf]
@@ -2038,17 +2037,139 @@ FtPicSwitch:
     ld [$2000], a
     ld a, 1                 ; (A nonzero: done, this VBlank's spent)
     ret
-.copy:                      ; HL: a source's address (HL past it after)
-    ld a, [hl+]
-    ldh [rHDMA2], a
-    ld a, [hl+]
-    ldh [rHDMA1], a
-    ld a, HIGH(FT_REGION_ROW)
-    ldh [rHDMA3], a
-    ld a, LOW(FT_REGION_ROW)
-    ldh [rHDMA4], a
-    ld a, FT_PIC_BYTES / 16 - 1
+
+; His rows, then their attributes (wRvSwLeft blocks to go, his picture's bank in), a DMA each while VBlank has room
+; for it, line 0's drawing 1448 dots on from line 151's start: one begun by line 151's end (24 blocks, 816 dots) or
+; 152's (12, 408) is done before it. Begun later, it would run into it (a crowd's refill amid his tiles, Mac's too,
+; can take VBlank that far), so the rest waits: FtPicRest.
+DEF FT_PIC_BLOCKS EQU FT_PIC_BYTES / 16
+DEF FT_PIC_PIECE EQU 12
+FtPicCopy:
+    ld a, [wRvSwLeft]
+    and a
+    ret z
+    ld b, FT_PIC_BLOCKS
+    call FtPicPiece
+    ld c, a
+    di                      ; (from the look at the line to the DMA's start: no interrupt, the crowd's refill)
+    ldh a, [rLCDC]          ; (the screen off: no lines drawn)
+    add a
+    jr nc, .go
+    ldh a, [rLY]            ; (line 153 -- LY 0 most of it -- or the frame's lines: no room)
+    sub 144
+    cp 153 - 144
+    jr nc, .no
+    cp 152 - 144
+    jr c, .go
+    ld a, c                 ; (line 152: FT_PIC_PIECE at most)
+    cp FT_PIC_PIECE + 1
+    jr c, .go
+    ld c, FT_PIC_PIECE
+.go:
+    ld a, c
+    dec a
     ldh [rHDMA5], a
+    ei
+    ld a, [wRvSwLeft]
+    sub c
+    ld [wRvSwLeft], a
+    jr FtPicCopy
+.no:
+    ei
+    ret
+
+; The next DMA set up, B blocks at most, to the copy's end (rVBK, source, destination): A its blocks.
+FtPicPiece:
+    ld a, [wRvSwLeft]
+    ld hl, wRvSwAttr        ; (the attributes: VRAM bank 1)
+    ld e, 1
+    cp FT_PIC_BLOCKS + 1
+    jr c, .in
+    sub FT_PIC_BLOCKS       ; (the rows: bank 0)
+    ld hl, wRvSwRows
+    ld e, 0
+.in:
+    ld d, a                 ; D: this copy's blocks to go
+    ld a, e
+    ldh [rVBK], a
+    ld a, d
+    cp b
+    jr nc, .some
+    ld b, a                 ; (fewer: those)
+.some:
+    ld a, FT_PIC_BLOCKS     ; DE: its offset, 16 bytes a block
+    sub d
+    ld e, a
+    ld d, 0
+REPT 4
+    sla e
+    rl d
+ENDR
+    ld a, [hl+]
+    add e
+    ld c, a
+    ld a, [hl]
+    adc d
+    ldh [rHDMA1], a
+    ld a, c
+    ldh [rHDMA2], a
+    ld hl, FT_REGION_ROW
+    add hl, de
+    ld a, h
+    ldh [rHDMA3], a
+    ld a, l
+    ldh [rHDMA4], a
+    ld a, b
+    ret
+
+; (VBlank's work done) his rows' rest, if VBlank ran out (FtPicCopy): in this frame's top lines, above his rows,
+; FT_PIC_HBL blocks a line, in its HBlank and the next line's OAM scan (166 dots at the least, a line of 10 sprites:
+; finding its start and the DMA's 34 dots a block in it), interrupts held from the look at the line to the DMA's start.
+DEF FT_PIC_HBL EQU 3
+FtPicRest:
+    ld a, [wRvSwLeft]
+    and a
+    ret z
+    ld a, [wRvSwBank]
+    ld [$2000], a
+    call FtPicCopy          ; (VBlank still: at once)
+.piece:
+    ld a, [wRvSwLeft]
+    and a
+    jr z, .done
+    ld b, FT_PIC_HBL
+    call FtPicPiece
+    ld c, a
+    dec a
+    ld b, a                 ; (B: its rHDMA5)
+.drawing:
+    ldh a, [rSTAT]
+    and 3
+    cp 3
+    jr nz, .drawing
+    di
+    ldh a, [rSTAT]          ; (still drawing, interrupts off: else one just ran past this line's HBlank)
+    and 3
+    cp 3
+    jr z, .end
+    ei
+    jr .drawing
+.end:
+    ldh a, [rSTAT]
+    and 3
+    jr nz, .end
+    ld a, b
+    ldh [rHDMA5], a
+    ei
+    ld a, [wRvSwLeft]
+    sub c
+    ld [wRvSwLeft], a
+    jr .piece
+.done:
+    xor a
+    ldh [rVBK], a
+    ld a, [wFtBankData]
+    ld [$2000], a
     ret
 
 ; The picture going up next VBlank (wRvPicLoad): its copies worked out now, so VBlank's time is all DMA.
@@ -2148,6 +2269,7 @@ FtPicsStart:
     ld a, 1
     ld [wRvPicSwitch], a
     call FtPicSwitch
+    call FtPicRest
     ld a, [wRvPicShown]
     ld [wRvPicHeads], a
     ld a, [wRvPicBuf]
@@ -3209,10 +3331,11 @@ ENDC
 DEF FT_LATE_LAST EQU 127       ; (his top rows' sprites built again: 10 to 26 lines, by their count -- an interrupt or two
                                ;  among them, his band worked out again first -- done by 145, VBlank's work due by 147)
 
-; A tile's 16 bytes HL -> DE, a line's quiet part at a time: 6 bytes once its drawing's done (30 cycles: the
-; line's HBlank and the next's OAM scan are 41 at the least, a line of 10 sprites; finding HBlank's start takes up
-; to 8), then 2 more while it's still HBlank (the OAM scan's 20 cycles still to come: 15 used), most lines' HBlank
-; being long. .bN: from its Nth byte, on the next line's.
+; A tile's 16 bytes HL -> DE, a line's quiet part at a time: 6 bytes once its drawing's done, then 2 more while it's
+; still HBlank (the OAM scan's 20 cycles still to come: 15 used), most lines' HBlank being long. The 6th is written
+; 38 cycles at the most after HBlank's start (finding it takes up to 7, the first byte, read ahead into B, 4, the
+; rest 5 each): the line's HBlank and the next's OAM scan are 40 at the least, a line of 10 sprites, its fine scroll
+; and the window. .bN: from its Nth byte, on the next line's.
 MACRO DMG_BYTES
     REPT \1
         ld a, [hl+]
@@ -3226,10 +3349,31 @@ MACRO DMG_MORE              ; \1: on the next line from here, if HBlank's over
     jp nz, \1
     DMG_BYTES 2
 ENDM
-.b0:
+MACRO DMG_HBLANK            ; HBlank's start, interrupts off (none may come between it and the bytes), its first byte
+    ld a, [hl+]             ; written: in line, its last look at the line straight into it
+    ld b, a
+.drawing\@:
     ei
-    call .hblank
-    DMG_BYTES 6
+    ldh a, [rSTAT]
+    and 3
+    cp 3
+    jr nz, .drawing\@
+    di
+    ldh a, [rSTAT]          ; (still drawing, interrupts off: an interrupt just before, the crowd's refill, may
+    and 3                   ; have run on past this line's HBlank; then the next line's)
+    cp 3
+    jr nz, .drawing\@
+.wait\@:
+    ldh a, [rSTAT]          ; (from drawing, 3, the next is HBlank, 0: bit 0 enough)
+    rra
+    jr c, .wait\@
+    ld a, b
+    ld [de], a
+    inc e
+ENDM
+.b0:
+    DMG_HBLANK
+    DMG_BYTES 5
     DMG_MORE .b6
     DMG_MORE .b8
     DMG_MORE .b10
@@ -3238,55 +3382,32 @@ ENDM
     ei
     ret
 .b6:
-    ei
-    call .hblank
-    DMG_BYTES 6
+    DMG_HBLANK
+    DMG_BYTES 5
     DMG_MORE .b12
     DMG_MORE .b14
     ei
     ret
 .b8:
-    ei
-    call .hblank
-    DMG_BYTES 6
+    DMG_HBLANK
+    DMG_BYTES 5
     DMG_MORE .b14
     ei
     ret
 .b10:
-    ei
-    call .hblank
-    DMG_BYTES 6
+    DMG_HBLANK
+    DMG_BYTES 5
     ei
     ret
 .b12:
-    ei
-    call .hblank
-    DMG_BYTES 4
+    DMG_HBLANK
+    DMG_BYTES 3
     ei
     ret
 .b14:
+    DMG_HBLANK
+    DMG_BYTES 1
     ei
-    call .hblank
-    DMG_BYTES 2
-    ei
-    ret
-.hblank:                    ; (returns at HBlank's start, interrupts off: none may come between it and the bytes)
-.drawing:
-    ldh a, [rSTAT]
-    and 3
-    cp 3
-    jr nz, .drawing
-    di
-    ldh a, [rSTAT]          ; (still drawing, interrupts off: an interrupt just before, the crowd's refill, may
-    and 3                   ; have run on past this line's HBlank; then the next line's)
-    cp 3
-    jr z, .wait
-    ei
-    jr .drawing
-.wait:
-    ldh a, [rSTAT]
-    and 3
-    jr nz, .wait
     ret
 ENDC
 
@@ -4181,19 +4302,77 @@ FtAnimate:
 IF DEF(FT_NES)
     ld a, [wRvState]        ; standing: where his own script has put him
     cp RV_FALL
-    jr nc, .scripted
+    jp nc, .scripted
     ld a, [wRvNesX]
     ld b, a
     ld a, [wRvNesY]         ; up as far as the HUD, down a little (his band moves with him)
     bit 7, a
     jr nz, .up
     cp FT_NES_DOWN_MAX + 1
-    jr c, .y
+    jp c, .y
     ld a, FT_NES_DOWN_MAX
-    jr .y
+    jp .y
 .up:
 IF DEF(FT_ROPE)
-    ld c, a                 ; as far up as the NES puts him (over the ropes and crowd: his top rows are sprites),
+    ld c, a
+    ld a, [wFtBankPics]     ; his NES pictures: held under the HUD by his stance (or a picture's and the one it
+    and a                   ; alternates with), not each picture's head -- moved down alike, so his feet stay where
+    jp z, .poseCap          ; the NES's are as his head bobs (a laugh, a hop): RivalPicRef, its top's line
+    ld hl, wRvPicShown      ; (the picture showing's, or the one going up at this VBlank's)
+    ld a, [wRvPicSwitch]
+    and a
+    jr z, .stancePic
+    ld hl, wRvPicLoad
+.stancePic:
+    ld a, [hl]
+    and $7F                 ; (none yet, $FF: kept in the table)
+    ld e, a
+    ld d, 0
+    ld a, [wRvPlaceY]
+    cpl
+    inc a
+    add c                   ; (the NES's own offset, the picture's place out)
+    ld hl, RivalPicRef
+    add hl, de
+    add [hl]
+    ld l, a                 ; L: that top there
+    ld a, [wNes + $90]      ; (his walk in before the bell: 16 more, over the HUD, as the NES's)
+    and $3F
+    ld a, LOW(-FT_HEAD_ROOM)
+    jr nz, .stanceLine
+    ld a, LOW(-FT_HEAD_ROOM - 16)
+.stanceLine:
+    sub l                   ; (how far below the line he must come: none if he's under it)
+    bit 7, a
+    jr nz, .stanceOk
+    add c
+    ld c, a
+.stanceOk:
+    ld hl, RivalPicRise     ; and no picture's top off the screen's
+    add hl, de
+    ld a, LOW(16 - FT_HEAD_Y0)
+    sub [hl]
+    ld e, a                 ; E: the highest his picture may sit
+    ld a, c
+    sub e
+    bit 7, a
+    jr z, .stanceOn
+    ld c, e
+.stanceOn:
+    ld a, c
+    bit 7, a
+    jr z, .stanceDown       ; (moved down past his place: no further than his band goes)
+    cp LOW(-FT_NES_UP_MAX)
+    jp nc, .y
+    ld a, LOW(-FT_NES_UP_MAX)
+    jp .y
+.stanceDown:
+    cp FT_NES_DOWN_MAX + 1
+    jp c, .y
+    ld a, FT_NES_DOWN_MAX
+    jp .y
+.poseCap:
+    ld a, c                 ; as far up as the NES puts him (over the ropes and crowd: his top rows are sprites),
     ld hl, wRvPicShown      ; (his new pose's limit only once its picture is up -- or going up at this VBlank: till
     ld a, [wRvPicSwitch]    ;  then the one showing's, kept)
     and a
@@ -7673,6 +7852,11 @@ IF DEF(FT_NES)
     ld l, a
     jp .done
 .cgbPics:
+IF DEF(FT_INKS)
+    pop hl                  ; (his inks first: in front of his top rows' sprites)
+    call FtInksUp
+    push hl
+ENDC
     ld a, [wRvPicHeadsBuf]  ; (its tiles' copy: the second, 64 on)
     rrca
     rrca
@@ -7875,6 +8059,133 @@ ASSERT HIGH(wFtHeadKey) == HIGH(wFtHeadKey + 4), "wFtHeadKey: in one page"
     ld [hl], a
     ret
 ENDC
+ENDC
+
+IF DEF(FT_INKS) && DEF(FT_ROPE)
+; Color: his picture's inks -- pixels his tiles can't show, a tile's in a sprite of its own in a palette of his that
+; can (as an eye's white his tile can't show is) -- for the picture the sprites are built for, in its tiles' copy,
+; his band's offsets this frame (as his top rows' sprites). Each list shows those in its lines: the upper, those whose
+; top is above FT_DMA_LINE; the lower, those whose bottom is past it and none past his band's end (the mat there).
+; HL = the next OAM entry; HL past them, the fight's data bank mapped. (Each list's lines are his and only his: the
+; lists go top row first.)
+FtInksUp:
+    ld d, 0                 ; (D: the first OAM y shown, E: the last)
+    ld e, FT_DMA_LINE + 16 - 1
+    jr FtInks
+FtInksDown:
+    ld d, FT_DMA_LINE + 8 + 1
+    ldh a, [hFtBandBottom]
+    add 8
+    ld e, a
+FtInks:
+    ld a, l
+    cp 160
+    ret nc                  ; (no room)
+    ld a, [wFtBankPics]     ; (his poses, not pictures: none)
+    and a
+    ret z
+    push hl
+    ldh a, [hFtBandY]       ; his area's top (OAM y): scrolled with his band
+    cpl
+    inc a
+    add FT_HEAD_Y0
+    ld c, a
+    ld a, e                 ; the first and last rows down from it shown
+    sub c
+    jr c, .none
+    ld [wFtInkLast], a
+    ld a, d
+    sub c
+    jr nc, .first
+    xor a
+.first:
+    ld d, a
+    ld a, [wFtBankPics]
+    ld [$2000], a
+    ld a, [wRvPicHeads]     ; (128 pictures at most)
+    add a
+    add LOW(FT_PIC_INKS)
+    ld l, a
+    adc HIGH(FT_PIC_INKS)
+    sub l
+    ld h, a
+    ld a, [hl+]
+    ld h, [hl]
+    ld l, a                 ; HL = his inks: count, then y, x in his area, tile, attributes (top row first)
+    ld a, [hl+]
+    and a
+    jr z, .none
+    ld e, a
+.skip:                      ; (those above the first row shown: passed)
+    ld a, [hl]
+    cp d
+    jr nc, .from
+    inc hl
+    inc hl
+    inc hl
+    inc hl
+    dec e
+    jr nz, .skip
+    jr .none
+.from:
+    ld a, e
+    ldh [hFtHeadN], a
+    ldh a, [hFtBandX]       ; his area's left (OAM x)
+    cpl
+    inc a
+    add FT_HEAD_X0
+    ld b, a
+    ld a, [wRvPicHeadsBuf]  ; (its tiles' copy: the second, 64 on)
+    rrca
+    rrca
+    ldh [hFtPlTile], a
+    pop de                  ; (DE: the list being built)
+.ink:
+    ld a, e
+    cp 160
+    jr nc, .end             ; (no room left)
+    ld a, [wFtInkLast]
+    cp [hl]
+    jr c, .end              ; (past the last row shown: the rest too)
+    ld a, [hl+]             ; y
+    add c
+    ld [de], a
+    ld a, [hl+]             ; x: off the right edge, no sprite spent on it
+    add b
+    cp 168
+    jr nc, .offX
+    inc e
+    ld [de], a
+    inc e
+    ldh a, [hFtPlTile]      ; tile
+    add [hl]
+    inc hl
+    ld [de], a
+    inc e
+    ld a, [hl+]             ; attributes
+    ld [de], a
+    inc e
+    jr .next
+.offX:
+    xor a                   ; (its y undone: past the list's end, the slot stays hidden)
+    ld [de], a
+    inc hl
+    inc hl
+.next:
+    ldh a, [hFtHeadN]
+    dec a
+    ldh [hFtHeadN], a
+    jr nz, .ink
+.end:
+    ld h, d
+    ld l, e
+    jr .bank
+.none:
+    pop hl
+.bank:
+    ld a, [wFtBankData]
+    ld [$2000], a
+    ret
 ENDC
 
 ;;FIGHT BANK {          ; (codegen: into each fight's data bank -- run with it mapped, called at no cost)
@@ -8709,7 +9020,11 @@ ENDC
 .clear:                     ; hide the rest
     ldh a, [hIsCGB]         ; (Color: built every time, as it was)
     and a
+IF DEF(FT_INKS) && DEF(FT_ROPE)
+    jr nz, .inks            ; (and his inks, the lower part's, behind the rest)
+ELSE
     jr nz, .refKeyed
+ENDC
     push hl                 ; (where the referee's ended, for next time in this list)
     ld a, h
     and 1
@@ -8783,6 +9098,11 @@ ENDC
     dec b
     jr nz, .hideSlot
     ret
+IF DEF(FT_INKS) && DEF(FT_ROPE)
+.inks:
+    call FtInksDown
+    jr .refKeyed
+ENDC
 .put:                       ; the next piece of the bubble: tile B at wFtSayX, then step right
     ld a, FT_SAY_Y + 16
     ld [hl+], a

@@ -2211,36 +2211,83 @@ def grey_inks(key, frames, pics, palettes):
     return pics
 
 
-INK_ROWS = 3                            # (a picture's tile rows whose inks show: his top three, the sprites' upper list's)
-
-
 def color_inks(key, frames, pics, palettes):
-    """Color: pixels touchups/KEY/ink/FRAME.txt draws in an NES color their tile's palette can't show (where the warp
-    left them dark): drawn over by sprites, as an eye's white is, in his palette that has it -- his top rows only.
-    Each picture's {"g2": [pixel, ...], ...}."""
+    """Color: each pixel whose NES color (his frame's; touchups/KEY/ink/FRAME.txt's where the warp left it dark) its
+    tile's palette can't show but one of his palettes can: drawn over by a sprite, as an eye's white his tile can't
+    show is, in that palette -- a tile's in the one that has most of them (project.py: a sprite per tile and palette;
+    kit_fight.asm: FtInks). Not under Great Tiger's gem (a sprite of its own), nor INK_NOT's colors, nor the tiles
+    INK_SKIP leaves as they are (no room for another sprite). Each picture's {"g2": [pixel, ...], ...}."""
     idir = TOUCHUPS / key / "ink"
+    drawn = {}
     for path in sorted(idir.glob("*.txt")) if idir.exists() else ():
         k = path.stem[:-1] + "|" if path.stem.endswith("m") else path.stem
         if k not in pics:
             print(f"  ink touch-up {k}: no picture {k}")
             continue
-        drawn, fr, v = read_touchup(path)[1], frames[k], pics[k]
-        ink = {}
-        for y, row in enumerate(drawn[:INK_ROWS * 8]):
+        drawn[k] = read_touchup(path)[1]
+    pals = [[tuple(c) for c in p] for p in palettes]
+    for k, v in sorted(pics.items()):
+        fr = drawn.get(k, frames[k])
+        gem = _jewel({(x, y): c for y, row in enumerate(fr) for x, c in enumerate(row) if c}) if NES_RIVALS[key].get("jewel") else None
+        whites, skip = set(v.get("whites") or ()), set(map(tuple, INK_SKIP.get(key, {}).get(k, ())))
+        want = {}                       # (per tile: its pixels' palettes that have their color, and which of each)
+        for y, row in enumerate(fr):
             for x, c in enumerate(row):
-                if c is None or fr[y][x] is None or tuple(c[:3]) == tuple(fr[y][x][:3]):
-                    continue
-                c5 = from8(c[:3])
                 i = y * RW + x
-                kind = v["cells"][(y // 8) * FIGHT_W + x // 8]
-                if palettes[KINDS.index(kind)][int(v["pixels"][i])] == c5:
+                if c is None or frames[k][y][x] is None or v["pixels"][i] == "0" or i in whites:
                     continue
-                at = [f"{KINDS[b]}{s}" for b in range(len(palettes)) for s in (1, 2, 3) if palettes[b][s] == c5]
+                c5 = tuple(from8(c[:3]))
+                if c5 in INK_NOT.get(key, ()):
+                    continue
+                if gem and abs(x - gem[0]) <= 3 and abs(y - gem[1]) <= 3 and c5 == tuple(from8(GEM[:3])):
+                    continue
+                cell = (y // 8) * FIGHT_W + x // 8
+                if pals[KINDS.index(v["cells"][cell])][int(v["pixels"][i])] == c5:
+                    continue
+                at = {b: s for b in range(len(pals)) for s in (3, 2, 1) if pals[b][s] == c5}
                 if at:
-                    ink.setdefault(at[0], []).append(i)
+                    want.setdefault(cell, []).append((i, at))
+        ink = {}
+        for cell, pp in sorted(want.items()):
+            most = lambda at: max(at, key=lambda b: (sum(b in a for _, a in pp), -b))
+            for i, at in pp:
+                b = most(at)
+                if (cell // FIGHT_W, cell % FIGHT_W, KINDS[b]) not in skip:
+                    ink.setdefault(f"{KINDS[b]}{at[b]}", []).append(i)
         if ink:
-            v["inks"] = ink
+            v["inks"] = {c: sorted(ii) for c, ii in sorted(ink.items())}
+        else:
+            v.pop("inks", None)
     return pics
+
+
+GEM = (236, 106, 100)                   # (Great Tiger's gem's color: _jewel's)
+INK_SKIP = {                            # inks left out: per rival, per picture, its tiles' (row, column, palette kind)
+    # -- no room on their lines for another sprite (the worst of Mac's, the referee's, the ropes' on each line in his
+    # fights -- the bot's, and Mac standing still -- his own there, and his inks before them, over 10), or in the upper
+    # list's 40 (his top rows' sprites, the side ropes' ends)
+    "joe": {"0C": [(5, 3, "s"), (6, 2, "s"), (6, 4, "s")], "0E": [(3, 1, "s"), (3, 2, "s"), (4, 1, "s"), (5, 3, "s"),
+            (6, 3, "s")], "18": [(6, 4, "s")], "32|": [(5, 6, "s")], "84": [(5, 3, "s"), (5, 5, "s"), (6, 5, "s")],
+            # (and those no picture of his can take and still go up in one VBlank with Mac's biggest -- his pose never
+            # held a frame for it: project.py's PIC_WITH_MAC, his fewest pixels left out; none for a picture past it
+            # already)
+            "00": [(3, 2, "s"), (4, 2, "s"), (5, 3, "s")], "02": [(3, 4, "s"), (4, 4, "s"), (5, 2, "s")],
+            "08": [(3, 2, "s"), (3, 4, "s"), (4, 2, "s"), (4, 4, "s")], "0A": [(5, 2, "s"), (5, 3, "s")],
+            "12": [(2, 5, "s"), (3, 3, "s"), (3, 5, "s")], "1A": [(2, 6, "s")], "1E": [(4, 5, "s")],
+            "22": [(4, 0, "s"), (4, 1, "s")], "22|": [(4, 5, "s")], "26": [(7, 0, "s")],
+            "3A": [(0, 4, "s"), (0, 5, "s"), (6, 2, "s")], "4E": [(3, 2, "s"), (4, 2, "s"), (5, 3, "s")],
+            "50": [(3, 2, "s"), (4, 2, "s"), (5, 3, "s")], "82": [(6, 3, "s")], "86": [(6, 3, "s")],
+            "C2": [(5, 2, "s"), (5, 3, "s")], "C4": [(6, 3, "s")], "C6": [(3, 5, "s")]},
+    "honda": {"44": [(6, 2, "g")]},
+    "hippo": {"16": [(6, 3, "h"), (6, 4, "h"), (7, 4, "g"), (8, 4, "h")], "26": [(8, 6, "h")],
+              "30": [(8, 5, "h"), (8, 6, "h")], "30|": [(8, 2, "h")], "3C": [(6, 3, "h"), (6, 4, "h"), (7, 3, "g"), (8, 3, "h")],
+              "3C|": [(6, 3, "h"), (6, 4, "h"), (7, 4, "g"), (8, 4, "h")], "CE": [(7, 4, "g")], "CE|": [(7, 3, "g")]},
+    "tiger": {"26": [(4, 2, "s")]},
+    "tyson": {"18": [(6, 2, "g"), (6, 3, "s"), (6, 4, "s")]},
+}
+INK_NOT = {                             # colors left as they are in all his pictures (Soda Popinski's eyes' light blue:
+    "soda": [(23, 23, 29)],             #  half his idle pictures have no room for it in the upper list, and his eyes
+}                                       #  blue in one, pink in the next would flicker)
 
 
 def keep_greys(old, old_pals, new, new_pals):

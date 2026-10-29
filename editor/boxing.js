@@ -95,7 +95,7 @@ export function boxingGame(pack) {
   const p = {
     name: pack.name,
     palettes: [
-      pal('HUD', [[1, 9, 24], [25, 26, 15], [19, 4, 4], [0, 0, 0]], [2, 0, 2, 3]),   // (the star and heart counts' cells: the boxes'
+      pal('HUD', [[1, 9, 24], [25, 26, 15], [19, 4, 4], [0, 0, 0]], [3, 0, 2, 3]),   // (the star and heart counts' cells: the boxes'
                                                             //  NES blue edge, the counts' yellow, the heart's red, black; the original: counts white)
       pal('Crowd', [[31, 31, 31], [18, 16, 24], [26, 6, 8], [0, 0, 0]]),    // (behind the crowd, and outside the ring, black: the NES's)
       pal('Mat', [matOf(R), [20, 22, 28], [8, 12, 24], [3, 3, 6]]),
@@ -702,7 +702,8 @@ export function boxingGame(pack) {
           round: { x: 13, y: 0 }, playerBar: { x: 1, y: 1 }, rivalBar: { x: 13, y: 1 } };
     if (nesRing) {
       const r = ringOf(rv), [white] = p.palettes[crowd].colors;
-      const wall = addPal(`${rv.short} wall`, [white, r.wall, [1, 9, 24], [0, 0, 0]]);   // (white text, the wall, the boxes' blue edge, black)
+      const wall = addPal(`${rv.short} wall`, [white, r.wall, [1, 9, 24], [0, 0, 0]], [0, 1, 3, 3]);   // (white text, the wall, the boxes'
+                                                            //  NES blue, black; the original: the blue boxes black, as the old)
       // The HUD as Punch-Out!!'s: boxes on the arena's wall (its grid: 8-pixel squares, black lines). Left: stars, hearts, your
       // bar; middle: points, the round; right: the clock, his bar.
       const boxes = [[0, 5], [7, 12], [14, 19]];
@@ -714,10 +715,10 @@ export function boxingGame(pack) {
         ring.pixels[y * M.W + x] = x % 8 === 0 || wallRows.includes(y) ? 3 : 1;   //  x 0 of each 8, every row, as the NES's)
       for (const [x0, x1] of boxes) {                       // the boxes: black, a 1px NES-blue edge, corners rounded 3px
         const [l, rgt] = { 0: [0, 50], 7: [54, 105], 14: [109, M.W - 1] }[x0];   // (edges clear of the bars' cells: the bars
-        const top = 4, bot = 23;                            //  inside; the middle 2px wider each side; 3px of wall between
+        const top = 6, bot = 23;                            //  inside; the middle 2px wider each side; 3px of wall between
                                                             //  them; up into the wall, room above the top row)
         const openL = l === 0, openR = rgt === M.W - 1;     // (at the screen's edge: straight off it, no edge there)
-        const blue = x0 > 0;                                // (the NES's: the star and hearts' black, a blue rim; the
+        const blue = x0 === 7;                              // (the star and hearts' and the clock's black, a blue rim; the
         fillRect(ring, l, top, rgt - l + 1, bot - top + 1, blue ? 2 : 3);   //  points' and clock's blue, a black outline)
         const edge = (x, y) => ring.pixels[y * M.W + x] = blue ? 3 : counts.includes(x >> 3) && (y >> 3) === 1 ? 0 : 2;
         for (let x = openL ? l : l + 3; x <= (openR ? rgt : rgt - 3); x++) { edge(x, top); edge(x, bot); }

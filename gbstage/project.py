@@ -348,12 +348,19 @@ def _dmg_greys(s, greys):
     def code(c):
         g = greys[pal[c]] if pal[c] < len(greys) else None
         return None if not g or g == [0, 1, 2, 3] else sum(((g[k] & 1) | (g[k] >> 1) << 1) << (2 * k) for k in range(4))
-    if s.get("fight"):                          # (a fight: only the HUD's counts, in their palette's greys -- the rest of
-        hud = s["fight"]["hud"]["stars"]        #  its top in the screen's one set of greys, the crowd's among them)
-        c = hud["y"] * CW + hud["x"]
-        cd = code(c) if c < len(pal) else None
-        own = {s["cell_tiles"][k] for k in range(len(pal)) if pal[k] == pal[c]} | set(s.get("fight_count_tiles") or [])
-        return [(tl, cd) for tl in sorted(own)] if cd is not None else []   # (and the static cells in that palette: the heart's)
+    if s.get("fight"):                          # (a fight: only the HUD's cells, in their palettes' greys -- the rest of
+        top = range(3 * CW)                     #  its screen in its one set of greys, the crowd's among them)
+        lut, hcells = s.get("fight_lut") or [], s.get("fight_hud_cells") or []
+        out, seen = [], set()
+        below = {s["cell_tiles"][k] for k in range(3 * CW, len(pal))}   # (a tile the rest shares keeps its greys)
+        for c in top:
+            cd = code(c) if c < len(pal) else None
+            if cd is None:
+                continue
+            own = {s["cell_tiles"][c]} | {t for i, hc in enumerate(hcells) if hc == c for t in lut[i * 11:(i + 1) * 11]}
+            for tl in sorted(own - below - seen):
+                out.append((tl, cd)); seen.add(tl)
+        return out
     if not any(code(c) is not None for c in range(len(cells))):
         return []
     owner = {}
@@ -2475,6 +2482,7 @@ def _mac_pics(mp, pal):
 
 PIC_BASE = 128                          # Color: where a picture's tiles go (bank 1, slots sprites reach too)
 PIC_ROOM = 64                           # tiles a picture may have (one VBlank copies them, with its map rows)
+PIC_WITH_MAC = 60 - MAC_DMG_ROOM        # (and with Mac's biggest, in one VBlank's room: kit_fight.asm's FT_PIC_WHOLE)
 
 
 def _fight_pics(scene):
@@ -2494,7 +2502,7 @@ def _fight_pics(scene):
     pose_of = {}                        # (a picture's head rows: as many as the pose it stands for on the original)
     for k, n in nes["frame_names"].items() if nes.get("frame_names") else ():
         pose_of[k] = n
-    out = {"order": order, "tiles": [], "maps": [], "attrs": [], "flips": [], "heads": []}
+    out = {"order": order, "tiles": [], "maps": [], "attrs": [], "flips": [], "heads": [], "inks": []}
     white = next(((g, j) for g in sorted(set(ft["palettes"].values())) for j in (1, 2, 3)
                   if min(scene["_palettes"][g][j]) >= 26), None)      # (his palette with a white, and its slot)
     for key in order:
@@ -2522,12 +2530,18 @@ def _fight_pics(scene):
                 inks.setdefault((c, ft["palettes"][ck[0]]), [0] * 64)[(i // pw % CELL) * CELL + i % CELL] = int(ck[1])
         inks = {c: tuple(t) for c, t in inks.items()}
         own = []
-        for k in head + canon + list(whites.values()) + list(inks.values()):   # (his top rows' first: copied first,
+        for k in head + canon + list(whites.values()):   # (his top rows' first: copied first, where sprites find them)
             if k not in own:
                 own.append(k)
         if len(own) > PIC_ROOM:
             raise ProjectError([f'Scene "{scene["name"]}": the rival\'s NES picture {key} has {len(own)} tiles; '
                                 f"a picture can have {PIC_ROOM}."])
+        room = PIC_ROOM if len(own) > PIC_WITH_MAC else PIC_WITH_MAC   # (an ink's tile only where it fits, most
+        kept = {}                       # pixels first: a picture that goes up in one VBlank with Mac's biggest, still so)
+        for c, t in sorted(inks.items(), key=lambda ct: (-sum(map(bool, ct[1])), ct[0])):
+            if t in own or len(own) < room:
+                own += [t] if t not in own else []
+                kept[c] = t
         local = {k: n for n, k in enumerate(own)}
         attrs = [ft["palettes"][kind] for kind in p["cells"]]
         out["tiles"].append(own)
@@ -2536,10 +2550,10 @@ def _fight_pics(scene):
         out["flips"].append(fl)
         out["heads"].append([(c // kit.REGION_W * 8, c % kit.REGION_W * 8, PIC_BASE + local[t], white[0], 2)
                              for c, t in sorted(whites.items())]       # (the whites first: in front, and drawn
-                            + [(c // kit.REGION_W * 8, c % kit.REGION_W * 8, PIC_BASE + local[t], g, 2)
-                               for (c, g), t in sorted(inks.items())]  # (then the inks, drawn so too)
                             + [(i // kit.REGION_W * 8, i % kit.REGION_W * 8, PIC_BASE + local[canon[i]], attrs[i], fl[i])
                                for i in range(rows * kit.REGION_W) if canon[i] != blank])   # wherever they are: f's 2)
+        out["inks"].append([(c // kit.REGION_W * 8, c % kit.REGION_W * 8, PIC_BASE + local[t], g)   # (the inks: sprites
+                            for (c, g), t in sorted(kept.items())])  # of their own, either list's, wherever they show)
     index = {k: n for n, k in enumerate(order)}
     by_pose = {}                        # (a frame never caught: the picture of the pose the original shows for it)
     for k in order:
